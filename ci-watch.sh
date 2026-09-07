@@ -145,9 +145,10 @@ populate_failure_details() {
   [[ -n "$row" ]] || return 0
 
   IFS=$'\t' read -r job_id DETAIL_JOB job_conclusion DETAIL_RUNNER_NAME DETAIL_RUNNER_GROUP DETAIL_RUNNER_LABELS DETAIL_STEP step_conclusion <<< "$row"
-  [[ "$DETAIL_RUNNER_NAME" == "-" ]] && DETAIL_RUNNER_NAME=""
-  [[ "$DETAIL_RUNNER_GROUP" == "-" ]] && DETAIL_RUNNER_GROUP=""
-  [[ "$DETAIL_STEP" == "-" ]] && DETAIL_STEP=""
+  if [[ "$DETAIL_RUNNER_NAME" == "-" ]]; then DETAIL_RUNNER_NAME=""; fi
+  if [[ "$DETAIL_RUNNER_GROUP" == "-" ]]; then DETAIL_RUNNER_GROUP=""; fi
+  if [[ "$DETAIL_STEP" == "-" ]]; then DETAIL_STEP=""; fi
+  return 0
 }
 
 query_active_jobs() {

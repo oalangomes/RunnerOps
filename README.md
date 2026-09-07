@@ -41,6 +41,7 @@ O produto é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Registrar runner | `runnerctl add .` |
 | Remover runner | `runnerctl remove <runner> --plan/--yes` |
 | Pacote oficial do runner | `runnerctl package detect/ensure` |
+| Aguardar resultado do CI | `runnerctl ci watch .` |
 | Agent Skills | `runnerctl skills list/install` |
 | Diagnóstico da plataforma | `runnerctl platform-doctor` |
 
@@ -207,6 +208,40 @@ runnerctl ensure .
 ```
 
 Evite `start all` no uso normal. O modelo recomendado é acordar apenas a capacidade necessária.
+
+### Aguardar o CI do commit atual
+
+Depois de publicar um push ou PR, o `runnerctl` pode aguardar os workflows associados ao SHA atual:
+
+```bash
+runnerctl ci watch .
+```
+
+Para agentes e harnesses, use a saída estruturada:
+
+```bash
+runnerctl ci watch . --json
+```
+
+O watcher correlaciona `owner/repo + SHA`, observa todos os workflow runs encontrados para o commit e não altera o lifecycle dos runners.
+
+Exit codes:
+
+- `0` — todos os workflows observados concluíram com sucesso, neutral ou skipped;
+- `1` — workflow concluído com falha;
+- `2` — falha de infraestrutura/acesso ao GitHub;
+- `3` — timeout, cancelamento ou resultado inconclusivo.
+
+Por padrão, a espera usa polling moderado e exige duas leituras terminais estáveis antes de declarar sucesso, reduzindo o risco de concluir antes de um segundo workflow aparecer.
+
+Opções principais:
+
+```bash
+runnerctl ci watch . --timeout 900 --interval 5
+runnerctl ci watch owner/repo --sha <commit-sha> --json
+```
+
+Falha de teste/build **não** é tratada como falha do runner e o watcher não para, reinicia nem remove serviços.
 
 ### Remoção segura
 

@@ -163,8 +163,9 @@ query_repo_runners() {
 
 csv_has_label() {
   local csv="$1" wanted="${2,,}" label
-  IFS=',' read -ra labels <<< "$csv"
-  for label in "${labels[@]}"; do
+  local -a parsed_labels=()
+  IFS=',' read -ra parsed_labels <<< "$csv"
+  for label in "${parsed_labels[@]}"; do
     [[ "${label,,}" == "$wanted" ]] && return 0
   done
   return 1
@@ -172,6 +173,7 @@ csv_has_label() {
 
 csv_labels_match() {
   local required="$1" offered="$2" label
+  local -a required_labels=()
   IFS=',' read -ra required_labels <<< "$required"
   for label in "${required_labels[@]}"; do
     [[ -n "$label" ]] || continue

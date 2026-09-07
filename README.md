@@ -280,6 +280,8 @@ templates/
 └── python-self-hosted.yml
 ```
 
+Os templates não exigem `x64` por padrão, então podem casar com runners Linux x64 ou arm64 que tenham as labels funcionais necessárias. Adicione uma label de arquitetura somente quando o job realmente depender dela.
+
 Adapte labels e política de fallback ao seu repositório. Não trate os templates como autorização para executar código não confiável em runners persistentes.
 
 ## Home lab / host dedicado

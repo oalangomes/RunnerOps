@@ -1,6 +1,6 @@
 ---
 name: manage-local-github-runners
-description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
+description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
 ---
 
 # Manage Local GitHub Runners
@@ -117,9 +117,9 @@ If a runner starts and immediately dies:
 runnerctl logs <runner>
 ```
 
-If GitHub reports that the registration was deleted, do not repeatedly restart it. Offer re-registration or removal.
+If GitHub reports that the registration was deleted, do not repeatedly restart it. Offer re-registration or explain that destructive removal is not yet exposed through the stable runnerctl surface.
 
-Destructive removal requires explicit user intent.
+Do not bypass runnerctl with internal removal commands merely to satisfy the request.
 
 ## Agent Skills
 

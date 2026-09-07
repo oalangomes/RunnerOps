@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   python:
-    runs-on: [self-hosted, linux, x64, python]
+    runs-on: [self-hosted, linux, python]
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies

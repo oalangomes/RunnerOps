@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          SELF_RUNNER='["self-hosted","linux","x64","local-runner"]'
+          SELF_RUNNER='["self-hosted","linux","local-runner"]'
           GITHUB_RUNNER='"ubuntu-latest"'
 
           select_runner() {
@@ -85,7 +85,7 @@ jobs:
 
             available="$(
               gh api "repos/$REPO/actions/runners" --paginate |
-                jq -r '[.runners[] | select(.status == "online") | select(.busy == false) | select([.labels[].name] | contains(["self-hosted","linux","x64","local-runner"]))] | length'
+                jq -r '[.runners[] | select(.status == "online") | select(.busy == false) | select([.labels[].name] | contains(["self-hosted","linux","local-runner"]))] | length'
             )"
 
             if [[ "$available" -gt 0 ]]; then

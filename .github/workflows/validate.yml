@@ -37,6 +37,7 @@ jobs:
         run: |
           ./runnerctl --help
           ./runnerctl platform-home
+          test "$(./runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
           ./runner-package.sh detect
           ./runner-package.sh --help
           XDG_CONFIG_HOME="$RUNNER_TEMP/config" RUNNERCTL_BIN_DIR="$RUNNER_TEMP/bin" ./install.sh

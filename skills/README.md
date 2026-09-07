@@ -82,11 +82,14 @@ The skills do not contain machine-specific runner inventory.
 They expect the runner platform to resolve its local state using:
 
 ```bash
-ACTIONS_RUNNERS_HOME=~/actions-runners
 RUNNERS_CONFIG=~/.config/actions-runners/runners.conf
 RUNNER_DATA_ROOT=~/.local/share/actions-runners/runners
+RUNNER_CACHE_ROOT=~/.cache/actions-runners
+RUNNER_STATE_ROOT=~/.local/state/actions-runners
 RUNNER_BOOT_POLICY=on-demand
 ```
+
+The skills depend only on the installed `runnerctl` command; they do not need to know where the platform repository was cloned.
 
 The skills never embed or persist GitHub runner registration tokens.
 

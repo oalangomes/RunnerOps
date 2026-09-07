@@ -1,4 +1,4 @@
-# GitHub Actions Local Runners
+# runnerctl
 
 Uma central Linux leve para operar múltiplos runners self-hosted do GitHub Actions com **systemd**, configuração local por máquina e execução **on-demand**.
 
@@ -47,13 +47,13 @@ O produto é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 ## Modelo
 
 ```text
-Repositório GitHub
+humano / agente
       │
       ▼
-registro local da máquina
+   runnerctl
       │
       ▼
-runners.sh / runner-services.sh
+scripts internos
       │
       ▼
 unidade systemd por runner
@@ -61,6 +61,8 @@ unidade systemd por runner
       ├── ocioso + boot desabilitado   ← padrão on-demand
       └── ativo                        ← quando um job/projeto precisa
 ```
+
+`runnerctl` é a interface pública estável. `runners.sh`, `runner-services.sh` e os demais scripts do checkout são detalhes de implementação e migração.
 
 ## Pré-requisitos
 
@@ -370,29 +372,15 @@ Um blueprint genérico para notebook, mini PC ou host Ubuntu dedicado está em:
 
 ## Validação
 
-```bash
-bash -n \
-  configure-runner.sh \
-  runners.sh \
-  runner-services.sh \
-  runner-runtime-env.sh \
-  init-machine-config.sh \
-  sync-local-git-excludes.sh \
-  install-agent-skills.sh \
-  runnerctl \
-  install.sh \
-  runner-package.sh \
-  setup-cockpit.sh \
-  cache.sh \
-  prewarm-cache.sh \
-  prewarm-actions.sh
+Para usuários, prefira a interface pública:
 
-./install-agent-skills.sh --tool all --dry-run
-./runners.sh list
-./runners.sh health all
+```bash
+runnerctl platform-doctor
+runnerctl list
+runnerctl health all
 ```
 
-O CI também valida sintaxe shell, defaults XDG, instalação do `runnerctl`, plano de remoção governada, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
+Para contribuidores, o CI valida sintaxe shell, defaults XDG, instalação do `runnerctl`, plano de remoção governada, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
 
 Além do CI, a release foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG.
 

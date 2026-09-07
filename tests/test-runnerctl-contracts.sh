@@ -241,9 +241,17 @@ test_install_and_xdg_from_arbitrary_checkout() {
 
   before_status="$(git -C "$ROOT" status --porcelain --untracked-files=all)"
 
+  mkdir -p "$bin"
+  cat > "$bin/runnerctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' 'runnerctl 0.1.0'
+EOF
+  chmod +x "$bin/runnerctl"
+  assert_eq "runnerctl 0.1.0" "$("$bin/runnerctl" --version)" "fixture deve simular CLI instalada antiga"
+
   XDG_CONFIG_HOME="$config" RUNNERCTL_BIN_DIR="$bin" "$platform/install.sh" >/dev/null
 
-  assert_eq "runnerctl $EXPECTED_RUNNERCTL_VERSION" "$("$bin/runnerctl" --version)" "binário instalado deve expor a versão esperada"
+  assert_eq "runnerctl $EXPECTED_RUNNERCTL_VERSION" "$("$bin/runnerctl" --version)" "reinstall deve substituir CLI antiga pela versão atual"
 
   installed_home="$(
     XDG_CONFIG_HOME="$config" \

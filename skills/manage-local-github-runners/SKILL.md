@@ -160,6 +160,27 @@ runnerctl remove <runner> --yes --keep-remote
 
 Never use `all` or `group:<group>` with removal. Never infer a destructive target from a repository name when multiple runner instances exist.
 
+## CI feedback
+
+Use the public watcher when the user asks to wait for or diagnose GitHub Actions associated with a published commit or PR:
+
+```bash
+runnerctl ci watch . --json
+runnerctl ci watch . --pr <number> --json
+runnerctl ci watch owner/repo --sha <sha> --json
+```
+
+Interpret exit codes strictly:
+
+- `0` — CI success;
+- `1` — CI/workflow failure;
+- `2` — GitHub access or runner/infrastructure failure;
+- `3` — timeout, cancellation or inconclusive result.
+
+A CI failure does not authorize restarting, removing or recreating a runner. Use the returned `workflow`, `job`, `step`, `run_attempt`, runner metadata and `diagnosis` to decide whether the problem is code, workflow or infrastructure.
+
+For a known PR, prefer `--pr <number>` so the watcher resolves the current server-side head SHA. On reruns, trust the reported `run_attempt` and do not reuse stale details from an older attempt.
+
 ## Agent Skills
 
 ```bash
@@ -189,3 +210,5 @@ Local runner:
 - Never enable the entire fleet at boot by default.
 - Never delete a runner merely because it is idle.
 - Never bypass `runnerctl` with internal scripts unless the task explicitly concerns platform development.
+- Never claim CI success from an inconclusive watcher result.
+- Never restart/remove a runner merely because a CI step failed.

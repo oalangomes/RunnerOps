@@ -325,9 +325,9 @@ runnerctl skills install claude
 runnerctl skills install agents
 ```
 
-A skill `start-project-runners-before-pr` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR.
+A skill `start-project-runners-before-pr` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR e, depois da publicação, consumir `runnerctl ci watch` para devolver o estado conclusivo do CI ao agente.
 
-A skill `manage-local-github-runners` cobre inventário, health, start/stop, diagnóstico, cadastro e remoção governada de runners.
+A skill `manage-local-github-runners` cobre inventário, health, start/stop, diagnóstico, cadastro, remoção governada e leitura estruturada do feedback de CI.
 
 Veja [skills/README.md](skills/README.md) para destinos e instalação local por projeto.
 

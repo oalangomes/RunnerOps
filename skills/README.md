@@ -10,10 +10,11 @@ Elas usam o formato portável `SKILL.md` de Agent Skills para que o mesmo fluxo 
 |---|---|
 | `start-project-runners-before-pr` | Antes da PR, garantir somente os runners do repositório atual; depois da publicação, consumir `runnerctl ci watch` quando a tarefa exigir aguardar o CI. |
 | `manage-local-github-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners, além de consumir feedback estruturado do CI por PR/SHA. |
+| `analyze-ci-workflow-performance` | Analisar DAG, critical path, repetição, cache, artifacts, triggers, fila e capacidade usando evidência STATIC / OBSERVED / ESTIMATED; read-only por padrão. |
 
 ## Instalação
 
-Instale ambas as skills nos principais destinos de usuário (Codex, Copilot e Claude):
+Instale as skills nos principais destinos de usuário (Codex, Copilot e Claude):
 
 ```bash
 runnerctl skills install all

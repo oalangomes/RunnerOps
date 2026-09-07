@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   static-validation:
@@ -92,3 +93,27 @@ jobs:
             exit 1
           fi
           test ! -d codex-skills
+
+
+  real-ci-watch-smoke:
+    name: Real GitHub API smoke
+    if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
+    needs: static-validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Watch previous master SHA through GitHub API
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.before }}
+        run: |
+          bash ./ci-watch.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$TARGET_SHA" \
+            --json \
+            --timeout 30 \
+            --interval 1 \
+            --settle-polls 1

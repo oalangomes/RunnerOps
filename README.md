@@ -43,10 +43,18 @@ git clone https://github.com/<owner>/actions-runners.git ~/actions-runners
 cd ~/actions-runners
 ```
 
-### 2. Initialize machine-local state
+### 2. Install the public CLI
 
 ```bash
-./init-machine-config.sh
+./install.sh
+```
+
+This installs `runnerctl` under `~/.local/bin` and stores the checkout location in XDG config, so agents and humans do not need to know where the repository was cloned.
+
+Then initialize machine-local state:
+
+```bash
+runnerctl init
 ```
 
 Isso cria, por padrão:
@@ -114,22 +122,30 @@ O runner não precisa ficar permanentemente ligado.
 
 ## Operação diária
 
-```bash
-./runners.sh list
-./runners.sh status all
-./runners.sh health all
+Use `runnerctl` as the stable public interface:
 
-./runners.sh start my-api
-./runners.sh stop my-api
-./runners.sh restart my-api
-./runners.sh logs my-api
+```bash
+runnerctl list
+runnerctl status all
+runnerctl health all
+
+runnerctl start my-api
+runnerctl stop my-api
+runnerctl restart my-api
+runnerctl logs my-api
 ```
 
 Por grupo:
 
 ```bash
-./runners.sh start group:my-team
-./runners.sh health group:my-team
+runnerctl start group:my-team
+runnerctl health group:my-team
+```
+
+Para o repositório atual:
+
+```bash
+runnerctl ensure .
 ```
 
 Evite `start all` no uso normal. O modelo recomendado é acordar somente a capacidade necessária.
@@ -139,13 +155,13 @@ Evite `start all` no uso normal. O modelo recomendado é acordar somente a capac
 On-demand é o default:
 
 ```bash
-./runner-services.sh on-demand my-api
+runnerctl on-demand my-api
 ```
 
 Se uma máquina ou runner realmente precisar ficar sempre disponível:
 
 ```bash
-./runner-services.sh autostart my-api
+runnerctl autostart my-api
 ```
 
 Em on-demand, `inactive + boot disabled` representa um runner saudável em idle.
@@ -166,16 +182,16 @@ skills/
 Instale nos três clientes principais:
 
 ```bash
-./install-agent-skills.sh --tool all
+runnerctl skills install all
 ```
 
 Ou escolha um:
 
 ```bash
-./install-agent-skills.sh --tool codex
-./install-agent-skills.sh --tool copilot
-./install-agent-skills.sh --tool claude
-./install-agent-skills.sh --tool agents
+runnerctl skills install codex
+runnerctl skills install copilot
+runnerctl skills install claude
+runnerctl skills install agents
 ```
 
 A skill `start-project-runners-before-pr` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR.
@@ -268,6 +284,8 @@ bash -n \
   init-machine-config.sh \
   sync-local-git-excludes.sh \
   install-agent-skills.sh \
+  runnerctl \
+  install.sh \
   setup-cockpit.sh \
   cache.sh \
   prewarm-cache.sh \

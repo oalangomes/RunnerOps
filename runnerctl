@@ -1,0 +1,368 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners"
+PLATFORM_HOME_FILE="$CONFIG_HOME/platform-home"
+
+die() {
+  echo "ERRO: $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+runnerctl — local GitHub Actions runner control plane
+
+Uso:
+  runnerctl init
+  runnerctl list
+  runnerctl groups
+  runnerctl status [runner|group:<group>|all]
+  runnerctl health [runner|group:<group>|all]
+  runnerctl doctor [runner|group:<group>|all]
+  runnerctl start <runner|group:<group>|all>
+  runnerctl stop <runner|group:<group>|all>
+  runnerctl restart <runner|group:<group>|all>
+  runnerctl logs <runner>
+  runnerctl plan [runner|group:<group>|all]
+  runnerctl migrate <runner|group:<group>|all>
+  runnerctl on-demand <runner|group:<group>|all>
+  runnerctl autostart <runner|group:<group>|all>
+  runnerctl ensure [owner/repo|.]
+  runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
+  runnerctl skills list
+  runnerctl skills install [codex|copilot|claude|agents|all]
+  runnerctl platform-home
+  runnerctl platform-doctor
+
+Notas:
+  - on-demand é a policy padrão.
+  - "ensure ." inicia somente os runners habilitados mapeados ao repositório atual.
+  - "add" usa GitHub CLI autenticado e nunca passa o registration token em argv.
+EOF
+}
+
+resolve_platform_home() {
+  local candidate=""
+
+  if [[ -n "${ACTIONS_RUNNERS_HOME:-}" ]]; then
+    candidate="$ACTIONS_RUNNERS_HOME"
+  elif [[ -f "$PLATFORM_HOME_FILE" ]]; then
+    candidate="$(head -n 1 "$PLATFORM_HOME_FILE" | tr -d '\r\n')"
+  elif [[ -x "$SCRIPT_DIR/runners.sh" ]]; then
+    candidate="$SCRIPT_DIR"
+  elif [[ -x "$HOME/actions-runners/runners.sh" ]]; then
+    candidate="$HOME/actions-runners"
+  fi
+
+  [[ -n "$candidate" ]] || die "platform home não encontrado; rode ./install.sh no checkout ou defina ACTIONS_RUNNERS_HOME"
+  candidate="$(realpath -m "$candidate")"
+  [[ -x "$candidate/runners.sh" ]] || die "platform home inválido: $candidate"
+  [[ -x "$candidate/runner-services.sh" ]] || die "runner-services.sh ausente em: $candidate"
+
+  printf '%s\n' "$candidate"
+}
+
+PLATFORM_HOME="$(resolve_platform_home)"
+export ACTIONS_RUNNERS_HOME="$PLATFORM_HOME"
+# shellcheck source=/dev/null
+source "$PLATFORM_HOME/runner-runtime-env.sh"
+
+normalize_repo() {
+  local value="${1:-}"
+  value="${value%.git}"
+  value="${value#git@github.com:}"
+  value="${value#ssh://git@github.com/}"
+  value="${value#https://github.com/}"
+  value="${value#http://github.com/}"
+  printf '%s\n' "${value,,}"
+}
+
+current_repo() {
+  local repo=""
+
+  if command -v gh >/dev/null 2>&1; then
+    repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$repo" ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    repo="$(git remote get-url origin 2>/dev/null || true)"
+  fi
+
+  repo="$(normalize_repo "$repo")"
+  [[ "$repo" == */* ]] || return 1
+  printf '%s\n' "$repo"
+}
+
+resolve_repo() {
+  local requested="${1:-.}"
+  local repo
+
+  if [[ -z "$requested" || "$requested" == "." ]]; then
+    repo="$(current_repo || true)"
+  else
+    repo="$(normalize_repo "$requested")"
+  fi
+
+  [[ "$repo" == */* ]] || die "não foi possível resolver owner/repo"
+  printf '%s\n' "$repo"
+}
+
+repo_slug() {
+  local repo="$1"
+  printf '%s\n' "${repo##*/}" | tr '[:upper:]' '[:lower:]'
+}
+
+runners_for_repo() {
+  local repo="$1"
+  [[ -f "$RUNNERS_CONFIG" ]] || die "registry não encontrado: $RUNNERS_CONFIG"
+
+  awk -F'|' -v wanted="$repo" '
+    /^[[:space:]]*#/ || NF < 5 { next }
+    {
+      name=$1
+      mapped=$4
+      enabled=$5
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", mapped)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", enabled)
+      if (tolower(mapped) == tolower(wanted) && tolower(enabled) != "false") {
+        print name
+      }
+    }
+  ' "$RUNNERS_CONFIG"
+}
+
+ensure_repo() {
+  local repo="$1"
+  local runner
+  local -a runners=()
+
+  mapfile -t runners < <(runners_for_repo "$repo")
+  [[ "${#runners[@]}" -gt 0 ]] || die "nenhum runner habilitado mapeado para $repo"
+
+  echo "Repo: $repo"
+  for runner in "${runners[@]}"; do
+    "$PLATFORM_HOME/runners.sh" start "$runner"
+  done
+
+  for runner in "${runners[@]}"; do
+    "$PLATFORM_HOME/runners.sh" status "$runner"
+    "$PLATFORM_HOME/runners.sh" health "$runner"
+  done
+}
+
+infer_profile_from_dir() {
+  local dir="$1"
+
+  if [[ -f "$dir/pubspec.yaml" ]]; then
+    echo flutter
+  elif [[ -f "$dir/package.json" ]]; then
+    echo node
+  elif [[ -f "$dir/pyproject.toml" || -f "$dir/requirements.txt" || -f "$dir/poetry.lock" ]]; then
+    echo python
+  elif [[ -f "$dir/pom.xml" || -f "$dir/build.gradle" || -f "$dir/build.gradle.kts" ]]; then
+    echo java
+  elif [[ -f "$dir/go.mod" ]]; then
+    echo go
+  elif find "$dir" -maxdepth 2 \( -name '*.sln' -o -name '*.csproj' \) -print -quit 2>/dev/null | grep -q .; then
+    echo dotnet
+  else
+    echo generic
+  fi
+}
+
+add_runner() {
+  local repo_arg="."
+  local profile="auto"
+  local group="auto"
+  local labels=""
+  local name=""
+  local repo slug source_dir token output runner_name
+  local -a args=()
+
+  if [[ $# -gt 0 && "$1" != --* ]]; then
+    repo_arg="$1"
+    shift
+  fi
+
+  while (($#)); do
+    case "$1" in
+      --profile)
+        profile="${2:-}"
+        shift 2
+        ;;
+      --group)
+        group="${2:-}"
+        shift 2
+        ;;
+      --labels)
+        labels="${2:-}"
+        shift 2
+        ;;
+      --name)
+        name="${2:-}"
+        shift 2
+        ;;
+      *)
+        die "opção desconhecida em add: $1"
+        ;;
+    esac
+  done
+
+  repo="$(resolve_repo "$repo_arg")"
+  slug="$(repo_slug "$repo")"
+
+  command -v gh >/dev/null 2>&1 || die "GitHub CLI (gh) é obrigatório para runnerctl add"
+  gh auth status >/dev/null 2>&1 || die "GitHub CLI não está autenticado"
+  gh repo view "$repo" --json nameWithOwner,viewerPermission >/dev/null
+
+  source_dir="$(pwd)"
+  if [[ "$profile" == "auto" ]]; then
+    if [[ "$repo_arg" == "." || -z "$repo_arg" ]]; then
+      profile="$(infer_profile_from_dir "$source_dir")"
+    else
+      local current=""
+      current="$(current_repo || true)"
+      if [[ "$current" == "$repo" ]]; then
+        profile="$(infer_profile_from_dir "$source_dir")"
+      else
+        profile="generic"
+      fi
+    fi
+  fi
+
+  if [[ -z "$labels" ]]; then
+    if [[ "$profile" == "generic" ]]; then
+      labels="$slug,local-runner"
+    else
+      labels="$profile,$slug,local-runner"
+    fi
+  fi
+
+  args=(--repo-url "https://github.com/$repo" --token-stdin --profile "$profile" --group "$group" --labels "$labels")
+  [[ -n "$name" ]] && args+=(--name "$name")
+
+  echo "Registrando runner para $repo"
+  echo "Profile: $profile"
+  echo "Group: $group"
+  echo "Labels: $labels"
+
+  token="$(gh api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
+  [[ -n "$token" ]] || die "GitHub não retornou registration token"
+
+  if ! output="$(printf '%s\n' "$token" | "$PLATFORM_HOME/configure-runner.sh" "${args[@]}" 2>&1)"; then
+    unset token
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+  unset token
+
+  printf '%s\n' "$output"
+  runner_name="$(printf '%s\n' "$output" | awk -F': ' '/^Nome local: /{print $2}' | tail -n 1)"
+  [[ -n "$runner_name" ]] || die "runner foi configurado, mas o nome local não pôde ser resolvido"
+
+  "$PLATFORM_HOME/runner-services.sh" migrate "$runner_name"
+  "$PLATFORM_HOME/runners.sh" doctor "$runner_name"
+  "$PLATFORM_HOME/runners.sh" health "$runner_name"
+
+  echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
+}
+
+platform_doctor() {
+  local rc=0
+  echo "platform_home=$PLATFORM_HOME"
+  echo "runners_config=$RUNNERS_CONFIG"
+  echo "runner_data_root=$RUNNER_DATA_ROOT"
+  echo "boot_policy=$RUNNER_BOOT_POLICY"
+
+  for cmd in bash git tar sha256sum systemctl; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+      echo "[OK] command=$cmd"
+    else
+      echo "[MISSING] command=$cmd"
+      rc=1
+    fi
+  done
+
+  if command -v gh >/dev/null 2>&1; then
+    if gh auth status >/dev/null 2>&1; then
+      echo "[OK] gh=authenticated"
+    else
+      echo "[WARN] gh=installed-not-authenticated"
+    fi
+  else
+    echo "[WARN] gh=missing add=unavailable"
+  fi
+
+  if [[ -d /run/systemd/system ]]; then
+    echo "[OK] systemd=active"
+  else
+    echo "[MISSING] systemd=inactive"
+    rc=1
+  fi
+
+  [[ -f "$RUNNERS_CONFIG" ]] && echo "[OK] registry=present" || echo "[WARN] registry=missing run='runnerctl init'"
+  return "$rc"
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  help|-h|--help)
+    usage
+    ;;
+  platform-home)
+    printf '%s\n' "$PLATFORM_HOME"
+    ;;
+  platform-doctor)
+    platform_doctor
+    ;;
+  init)
+    exec "$PLATFORM_HOME/init-machine-config.sh" "$@"
+    ;;
+  list|groups)
+    exec "$PLATFORM_HOME/runners.sh" "$cmd" "$@"
+    ;;
+  status|health|doctor)
+    target="${1:-all}"
+    exec "$PLATFORM_HOME/runners.sh" "$cmd" "$target"
+    ;;
+  start|stop|restart|logs)
+    [[ $# -ge 1 ]] || die "$cmd exige runner, group:<group> ou all"
+    exec "$PLATFORM_HOME/runners.sh" "$cmd" "$@"
+    ;;
+  plan|migrate|on-demand|autostart)
+    target="${1:-all}"
+    exec "$PLATFORM_HOME/runner-services.sh" "$cmd" "$target"
+    ;;
+  ensure)
+    repo="$(resolve_repo "${1:-.}")"
+    ensure_repo "$repo"
+    ;;
+  add)
+    add_runner "$@"
+    ;;
+  skills)
+    sub="${1:-list}"
+    shift || true
+    case "$sub" in
+      list)
+        exec "$PLATFORM_HOME/install-agent-skills.sh" --list
+        ;;
+      install)
+        tool="${1:-all}"
+        exec "$PLATFORM_HOME/install-agent-skills.sh" --tool "$tool"
+        ;;
+      *)
+        die "skills aceita list ou install"
+        ;;
+    esac
+    ;;
+  *)
+    die "comando desconhecido: $cmd"
+    ;;
+esac

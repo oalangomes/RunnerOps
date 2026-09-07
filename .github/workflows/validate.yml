@@ -19,7 +19,15 @@ jobs:
       - name: Validate shell syntax
         shell: bash
         run: |
-          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh
+          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh
+
+      - name: Validate runnerctl
+        shell: bash
+        run: |
+          ./runnerctl --help
+          ./runnerctl platform-home
+          XDG_CONFIG_HOME="$RUNNER_TEMP/config" RUNNERCTL_BIN_DIR="$RUNNER_TEMP/bin" ./install.sh
+          XDG_CONFIG_HOME="$RUNNER_TEMP/config" "$RUNNER_TEMP/bin/runnerctl" platform-home
 
       - name: Validate portable Agent Skills
         run: |

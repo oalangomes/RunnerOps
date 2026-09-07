@@ -1,277 +1,138 @@
 ---
 name: manage-local-github-runners
-description: Manage the user's local GitHub Actions self-hosted runner platform from an AI coding agent. Use when the user asks to inspect, start, stop, restart, diagnose, validate, register, create, remove, or configure local runners for user-owned GitHub repositories, or asks whether a project's runner is healthy/available. Prefer the current repository when no target is specified. Support machine-local runner registries and on-demand systemd operation. Never expose registration tokens or perform destructive removal without explicit user intent.
+description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
 ---
 
 # Manage Local GitHub Runners
 
-Operate the user's shared local GitHub Actions runner installation safely and project-first.
+Use `runnerctl` as the stable public interface.
 
-This skill is for **local runner administration**, not for editing GitHub Actions workflows unless the user explicitly asks for workflow changes.
+Do not discover or call `runners.sh`, `runner-services.sh`, `configure-runner.sh`, `svc.sh` or `systemctl` directly.
 
-## Platform location
-
-Resolve the central installation in this order:
-
-1. `$ACTIONS_RUNNERS_HOME`
-2. `~/actions-runners`
+## Platform check
 
 ```bash
-RUNNERS_HOME="${ACTIONS_RUNNERS_HOME:-$HOME/actions-runners}"
+command -v runnerctl
+runnerctl platform-doctor
 ```
 
-If `$RUNNERS_HOME/.env.local` exists, load it before resolving the registry:
+If `runnerctl` is missing, report that the platform CLI must be installed from the actions-runners checkout with `./install.sh`.
+
+## Inventory and health
 
 ```bash
-if [[ -f "$RUNNERS_HOME/.env.local" ]]; then
-  set -a
-  source "$RUNNERS_HOME/.env.local"
-  set +a
-fi
-
-RUNNERS_CONFIG="${RUNNERS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners/runners.conf}"
-RUNNER_BOOT_POLICY="${RUNNER_BOOT_POLICY:-on-demand}"
+runnerctl list
+runnerctl groups
+runnerctl status all
+runnerctl health all
 ```
 
-Do not assume runner definitions are versioned. Treat `RUNNERS_CONFIG` as machine-local state.
-
-## Default operating model
-
-The preferred policy is:
-
-```text
-systemd authority
-+ boot disabled
-+ runner started on demand
-+ only runners needed by a project are started
-```
-
-Do not run `start all` unless the user explicitly requests the entire fleet.
-
-When the user asks to work with "the runner" and a current Git repository exists, scope actions to runners mapped to that repository.
-
-## Resolve the current repository
-
-Use:
+For one runner:
 
 ```bash
-remote="$(git remote get-url origin 2>/dev/null || true)"
-repo="$remote"
-repo="${repo%.git}"
-repo="${repo#git@github.com:}"
-repo="${repo#ssh://git@github.com/}"
-repo="${repo#https://github.com/}"
-repo="${repo#http://github.com/}"
-repo="${repo,,}"
+runnerctl status <runner>
+runnerctl health <runner>
+runnerctl doctor <runner>
+runnerctl logs <runner>
 ```
 
-A valid resolved repo must look like `owner/name`.
+Under on-demand policy:
 
-If no current repository can be resolved and the user did not name one, ask which repository to manage.
+- active + boot disabled = healthy and available;
+- inactive + boot disabled = healthy idle capacity;
+- failed = unhealthy.
 
-## Resolve runners mapped to a repository
+## Current repository
 
-Read `RUNNERS_CONFIG` rather than hard-coding runner names.
+To ensure only the current project's runners are active:
 
 ```bash
-mapfile -t project_runners < <(
-  awk -F'|' -v wanted="$repo" '
-    /^[[:space:]]*#/ || NF < 5 { next }
-    {
-      name=$1
-      mapped=$4
-      enabled=$5
-
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", mapped)
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", enabled)
-
-      if (tolower(mapped) == tolower(wanted) && tolower(enabled) != "false") {
-        print name
-      }
-    }
-  ' "$RUNNERS_CONFIG"
-)
+runnerctl ensure .
 ```
 
-Never infer that a group covers a repository if the registry says otherwise.
+Do not use `runnerctl start all` unless the user explicitly asks for the whole fleet.
 
-## Common operations
-
-For inventory:
+## Start/stop
 
 ```bash
-"$RUNNERS_HOME/runners.sh" list
-"$RUNNERS_HOME/runners.sh" groups
-"$RUNNERS_HOME/runner-services.sh" plan all
+runnerctl start <runner>
+runnerctl stop <runner>
+runnerctl restart <runner>
 ```
 
-For a named runner:
+Groups are supported:
 
 ```bash
-"$RUNNERS_HOME/runners.sh" status "$runner"
-"$RUNNERS_HOME/runners.sh" health "$runner"
-"$RUNNERS_HOME/runners.sh" doctor "$runner"
+runnerctl start group:my-team
+runnerctl health group:my-team
 ```
 
-Interpret on-demand systemd correctly:
+## Boot policy
 
-- `active` + boot disabled: healthy and currently available;
-- `inactive` + boot disabled: healthy idle runner;
-- `failed`: unhealthy;
-- registration-deleted evidence in logs: stale remote registration, not a systemd failure.
-
-Do not call an on-demand idle runner broken merely because it is inactive.
-
-### Start the current project's runners
+Prefer on-demand for local development runners:
 
 ```bash
-for runner in "${project_runners[@]}"; do
-  "$RUNNERS_HOME/runners.sh" start "$runner"
-done
+runnerctl on-demand <runner>
 ```
 
-Then validate status and health for each runner.
-
-### Stop the current project's runners
+Use autostart only when the user explicitly wants always-on capacity:
 
 ```bash
-for runner in "${project_runners[@]}"; do
-  "$RUNNERS_HOME/runners.sh" stop "$runner"
-done
+runnerctl autostart <runner>
 ```
 
-Stopping an on-demand runner is normal.
+## Register a new runner
 
-### Switch boot policy
-
-When supported:
+For the current repository:
 
 ```bash
-"$RUNNERS_HOME/runner-services.sh" on-demand "$runner"
-"$RUNNERS_HOME/runner-services.sh" autostart "$runner"
+runnerctl add .
 ```
 
-Prefer `on-demand` for local runners unless the user explicitly wants always-on.
-
-## Register a runner for a user-owned repository
-
-Use this when the user asks to create/cadastrar/adicionar a local runner for a user-owned GitHub project.
-
-### Resolve and validate the repository
-
-Accept either the current Git repository or explicit `owner/repo`.
+Or an explicit repository:
 
 ```bash
-gh repo view "$repo" --json nameWithOwner,viewerPermission
+runnerctl add owner/repo
 ```
 
-For automatic registration, require enough permission to manage Actions runners.
-
-### Infer profile
-
-Inspect files and workflows:
-
-- `pyproject.toml`, `requirements.txt`, `poetry.lock` -> `python`
-- `pubspec.yaml` -> `flutter`
-- `package.json` -> `node`
-- `pom.xml`, `build.gradle*` -> `java`
-- `go.mod` -> `go`
-- `*.csproj`, `*.sln` -> `dotnet`
-- otherwise -> `generic`
-
-When multiple stacks exist, choose the profile required by Actions workflows.
-
-### Build labels
-
-Always include `local-runner`, plus useful stack/project labels. Do not add the final instance name manually; `configure-runner.sh` adds it.
-
-### Obtain a short-lived registration token
-
-Prefer authenticated GitHub CLI:
+Optional overrides:
 
 ```bash
-token="$(gh api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
+runnerctl add . \
+  --profile python \
+  --group backend \
+  --labels python,backend,local-runner \
+  --name backend-runner
 ```
 
-Never print, persist, or return the token.
+`runnerctl add` uses authenticated GitHub CLI to request a short-lived registration token and passes it through stdin to the internal registration script. Never ask the user to paste or expose a token when this flow is available.
 
-If unauthorized, ask the user for the normal GitHub registration line instead of inventing credentials.
+After registration it installs the systemd service and validates doctor/health. With the default on-demand policy, the service should end idle and boot-disabled after validation.
 
-### Configure
+## Diagnose stale registration
+
+If a runner starts and immediately dies:
 
 ```bash
-github_line="./config.sh --url https://github.com/$repo --token $token"
-
-"$RUNNERS_HOME/configure-runner.sh" \
-  --github-line "$github_line" \
-  --labels "$labels" \
-  --profile "$profile" \
-  --group "$group"
-
-unset token github_line
+runnerctl logs <runner>
 ```
 
-Capture the final runner name from output.
+If GitHub reports that the registration was deleted, do not repeatedly restart it. Offer re-registration or removal.
 
-Do not manually edit the registry when `configure-runner.sh` can update it.
+Destructive removal requires explicit user intent.
 
-### Install service and validate
+## Agent Skills
 
 ```bash
-"$RUNNERS_HOME/runner-services.sh" migrate "$runner_name"
-"$RUNNERS_HOME/runners.sh" doctor "$runner_name"
-"$RUNNERS_HOME/runners.sh" health "$runner_name"
-"$RUNNERS_HOME/runner-services.sh" plan "$runner_name"
+runnerctl skills list
+runnerctl skills install codex
+runnerctl skills install copilot
+runnerctl skills install claude
 ```
-
-Under on-demand policy, desired state is service installed, boot disabled, idle until needed.
-
-If the installed platform predates on-demand support, report that instead of using hidden systemd workarounds.
-
-Optionally start to prove the GitHub session, then stop again if the user wants idle state.
-
-## Diagnose failures
-
-If a runner dies after start:
-
-```bash
-"$RUNNERS_HOME/runners.sh" logs "$runner" | tail -80
-```
-
-If logs contain:
-
-```text
-The runner registration has been deleted from the server
-```
-
-classify as stale GitHub registration. Do not repeatedly restart it.
-
-Offer re-register or remove. Removal requires explicit user intent.
-
-For duplicate sessions, confirm no other process/service is using the same runner directory or registration before killing anything.
-
-For toolchain/cache issues:
-
-```bash
-"$RUNNERS_HOME/cache.sh" profiles
-"$RUNNERS_HOME/cache.sh" doctor --profile "$profile"
-```
-
-## Remove a runner
-
-Only on explicit remove/delete intent:
-
-1. show resolved name, repo and path;
-2. stop it;
-3. uninstall via `runner-services.sh uninstall`;
-4. remove its registry entry only after confirming the target;
-5. remove local directory only if full local removal was requested;
-6. do not delete another runner for the same repo.
 
 ## Reporting
 
-Keep routine output compact:
+Keep routine reports compact:
 
 ```text
 Local runner:
@@ -279,19 +140,13 @@ Local runner:
 - runner: project
 - policy: on-demand
 - state: active | idle | failed
-- boot: disabled
 - registration: healthy | stale
 ```
 
-For new registration also report name, GitHub runner name, profile, labels without secrets, registry path, and systemd state.
-
 ## Prohibitions
 
-- Never expose runner registration tokens.
-- Never commit the machine-local runner registry.
-- Never use `start all` unless explicitly requested.
-- Never enable all runners at boot by default.
-- Never reconfigure an existing runner without explicit intent.
-- Never delete a runner because it is merely inactive under on-demand policy.
-- Never edit unrelated workflows while managing local runners.
-- Never claim GitHub registration health solely from a local process being alive.
+- Never expose registration tokens.
+- Never start all runners unless explicitly requested.
+- Never enable the entire fleet at boot by default.
+- Never delete a runner merely because it is idle.
+- Never bypass `runnerctl` with internal scripts unless the task explicitly concerns platform development.

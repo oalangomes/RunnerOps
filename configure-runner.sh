@@ -6,6 +6,8 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BASE_DIR/runner-runtime-env.sh"
 RUNNER_ROOT="$RUNNER_DATA_ROOT"
 GITHUB_LINE=""
+REPO_URL_INPUT=""
+TOKEN_STDIN=0
 NAME=""
 LABELS="local-runner"
 RUNNER_TAR="actions-runner-linux-x64-2.335.1.tar.gz"
@@ -20,9 +22,12 @@ usage() {
   cat <<'USAGE'
 Uso:
   ./configure-runner.sh --github-line "<./config.sh --url ... --token ...>" [opcoes]
+  ./configure-runner.sh --repo-url URL --token-stdin [opcoes]
 
 Opcoes:
   --github-line VALUE   linha copiada do GitHub com --url e --token
+  --repo-url VALUE      URL do repositorio; usar junto com --token-stdin
+  --token-stdin         le o registration token de stdin, sem expo-lo em argv
   --name VALUE          nome base local do runner/pasta
   --labels VALUE        labels base do runner; o identificador final da instancia e adicionado automaticamente
   --profile VALUE       perfil tecnico: auto, generic, node, python, flutter, android, java, dotnet, go
@@ -233,6 +238,14 @@ while (($#)); do
       GITHUB_LINE="${2:-}"
       shift 2
       ;;
+    --repo-url)
+      REPO_URL_INPUT="${2:-}"
+      shift 2
+      ;;
+    --token-stdin)
+      TOKEN_STDIN=1
+      shift
+      ;;
     --name)
       NAME="${2:-}"
       shift 2
@@ -287,22 +300,29 @@ while (($#)); do
   esac
 done
 
-[[ -n "$GITHUB_LINE" ]] || die "--github-line e obrigatorio"
 validate_profile "$PROFILE"
 ENABLED="$(normalize_bool "$ENABLED")"
 
-step "Lendo linha copiada do GitHub"
+TOKEN=""
+if [[ -n "$GITHUB_LINE" ]]; then
+  step "Lendo linha copiada do GitHub"
 
-clean_line="${GITHUB_LINE#"${GITHUB_LINE%%[![:space:]]*}"}"
-clean_line="${clean_line#./config.sh }"
-clean_line="${clean_line#config.sh }"
+  clean_line="${GITHUB_LINE#"${GITHUB_LINE%%[![:space:]]*}"}"
+  clean_line="${clean_line#./config.sh }"
+  clean_line="${clean_line#config.sh }"
 
-read -r -a parts <<< "$clean_line"
-REPO_URL="$(get_arg_value --url "${parts[@]}" || true)"
-TOKEN="$(get_arg_value --token "${parts[@]}" || true)"
+  read -r -a parts <<< "$clean_line"
+  REPO_URL="$(get_arg_value --url "${parts[@]}" || true)"
+  TOKEN="$(get_arg_value --token "${parts[@]}" || true)"
+else
+  [[ -n "$REPO_URL_INPUT" ]] || die "use --github-line ou --repo-url"
+  [[ "$TOKEN_STDIN" -eq 1 ]] || die "--repo-url exige --token-stdin"
+  REPO_URL="$REPO_URL_INPUT"
+  IFS= read -r TOKEN || true
+fi
 
-[[ -n "$REPO_URL" ]] || die "nao encontrei --url na linha informada"
-[[ -n "$TOKEN" ]] || die "nao encontrei --token na linha informada"
+[[ -n "$REPO_URL" ]] || die "URL do repositorio ausente"
+[[ -n "$TOKEN" ]] || die "registration token ausente"
 
 [[ -n "$NAME" ]] || NAME="$(repo_name "$REPO_URL")"
 REQUESTED_NAME="$(normalize_slug "$NAME")"

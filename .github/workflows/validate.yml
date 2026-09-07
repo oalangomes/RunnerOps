@@ -43,6 +43,30 @@ jobs:
           XDG_CONFIG_HOME="$RUNNER_TEMP/config" RUNNERCTL_BIN_DIR="$RUNNER_TEMP/bin" ./install.sh
           XDG_CONFIG_HOME="$RUNNER_TEMP/config" "$RUNNER_TEMP/bin/runnerctl" platform-home
 
+      - name: Validate governed removal plan
+        shell: bash
+        run: |
+          fixture="$RUNNER_TEMP/remove-fixture"
+          registry="$RUNNER_TEMP/remove-runners.conf"
+          mkdir -p "$fixture"
+          printf '%s\n' '{"agentId":123456,"agentName":"ci-remove"}' > "$fixture/.runner"
+          printf '%s\n' 'actions.runner.example.ci-remove.service' > "$fixture/.service"
+          printf '%s\n' '# name|path|profile|repo|enabled|group' > "$registry"
+          printf 'ci-remove|%s|generic|example/example|true|example\n' "$fixture" >> "$registry"
+          before="$(sha256sum "$registry" | awk '{print $1}')"
+          RUNNERS_CONFIG="$registry" ./runnerctl remove ci-remove --plan | tee "$RUNNER_TEMP/remove-plan.txt"
+          grep -F -- '- runner: ci-remove' "$RUNNER_TEMP/remove-plan.txt"
+          grep -F -- '- repo: example/example' "$RUNNER_TEMP/remove-plan.txt"
+          grep -F -- '- systemd unit: actions.runner.example.ci-remove.service' "$RUNNER_TEMP/remove-plan.txt"
+          grep -F -- '- GitHub registration: REMOVE' "$RUNNER_TEMP/remove-plan.txt"
+          grep -F -- '- local directory: KEEP' "$RUNNER_TEMP/remove-plan.txt"
+          after="$(sha256sum "$registry" | awk '{print $1}')"
+          test "$before" = "$after"
+          if RUNNERS_CONFIG="$registry" ./runnerctl remove all --plan; then
+            echo "remove all should be rejected" >&2
+            exit 1
+          fi
+
       - name: Validate portable Agent Skills
         run: |
           ./install-agent-skills.sh --list

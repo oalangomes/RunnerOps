@@ -1,6 +1,6 @@
 ---
 name: manage-local-github-runners
-description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
+description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
 ---
 
 # Manage Local GitHub Runners
@@ -117,9 +117,48 @@ If a runner starts and immediately dies:
 runnerctl logs <runner>
 ```
 
-If GitHub reports that the registration was deleted, do not repeatedly restart it. Offer re-registration or explain that destructive removal is not yet exposed through the stable runnerctl surface.
+If GitHub reports that the registration was deleted, do not repeatedly restart it.
 
-Do not bypass runnerctl with internal removal commands merely to satisfy the request.
+## Remove a runner
+
+Removal is intentionally single-runner and confirmation-gated.
+
+Always preview first:
+
+```bash
+runnerctl remove <runner> --plan
+```
+
+Verify that the plan names the exact runner, repository, path and systemd unit the user intends to remove.
+
+If the user explicitly requested removal and the target is unambiguous:
+
+```bash
+runnerctl remove <runner> --yes
+```
+
+Default removal:
+
+- stops the exact runner;
+- uninstalls its local systemd unit;
+- validates the remote GitHub runner id/name before deletion;
+- removes the remote registration when it still exists;
+- removes only that registry entry;
+- preserves the local runner directory.
+
+Delete the local directory only when the user explicitly requests that too:
+
+```bash
+runnerctl remove <runner> --yes --delete-dir
+```
+
+For a local detach that intentionally preserves the GitHub registration:
+
+```bash
+runnerctl remove <runner> --yes --keep-remote
+```
+
+Never use `all` or `group:<group>` with removal. Never infer a destructive target from a repository name when multiple runner instances exist.
 
 ## Agent Skills
 

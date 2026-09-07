@@ -34,6 +34,7 @@ Uso:
   runnerctl ensure [owner/repo|.]
   runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
                  [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64]
+  runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
   runnerctl package detect
   runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
   runnerctl skills list
@@ -44,7 +45,7 @@ Uso:
 Notas:
   - on-demand é a policy padrão.
   - "ensure ." inicia somente os runners habilitados mapeados ao repositório atual.
-  - "add" usa GitHub CLI autenticado e nunca passa o registration token em argv.
+  - "add" usa GitHub CLI autenticado, não persiste o registration token e o envia ao helper interno por stdin; o config.sh oficial recebe o token somente durante o registro.
 EOF
 }
 
@@ -295,6 +296,261 @@ add_runner() {
   echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
 }
 
+trim_value() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+runner_record() {
+  local runner="$1"
+  [[ -f "$RUNNERS_CONFIG" ]] || die "registry não encontrado: $RUNNERS_CONFIG"
+
+  awk -F'|' -v wanted="$runner" '
+    /^[[:space:]]*#/ || NF < 5 { next }
+    {
+      name=$1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name == wanted) print
+    }
+  ' "$RUNNERS_CONFIG"
+}
+
+runner_metadata_value() {
+  local file="$1" key="$2"
+  [[ -f "$file" ]] || return 1
+
+  case "$key" in
+    agentId)
+      grep -oE '"agentId"[[:space:]]*:[[:space:]]*[0-9]+' "$file" 2>/dev/null |
+        head -n 1 |
+        grep -oE '[0-9]+$'
+      ;;
+    agentName)
+      grep -oE '"agentName"[[:space:]]*:[[:space:]]*"[^"]*"' "$file" 2>/dev/null |
+        head -n 1 |
+        sed -E 's/^.*"agentName"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\1/'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+runner_local_unit() {
+  local path="$1"
+  local unit working_dir
+
+  if [[ -f "$path/.service" ]]; then
+    unit="$(tr -d '[:space:]' < "$path/.service")"
+    [[ -n "$unit" ]] && {
+      printf '%s\n' "$unit"
+      return 0
+    }
+  fi
+
+  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+    while read -r unit; do
+      [[ -n "$unit" ]] || continue
+      working_dir="$(systemctl show "$unit" --property=WorkingDirectory --value 2>/dev/null || true)"
+      if [[ "$working_dir" == "$path" ]]; then
+        printf '%s\n' "$unit"
+        return 0
+      fi
+    done < <(
+      systemctl list-unit-files 'actions.runner.*.service' --no-legend --no-pager 2>/dev/null |
+        awk '{print $1}'
+    )
+  fi
+
+  printf '%s\n' "unknown"
+}
+
+remove_registry_entry() {
+  local runner="$1"
+  local tmp
+
+  tmp="$(mktemp)"
+  awk -F'|' -v wanted="$runner" '
+    /^[[:space:]]*#/ { print; next }
+    {
+      name=$1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+      if (name != wanted) print
+    }
+  ' "$RUNNERS_CONFIG" > "$tmp"
+  chmod --reference="$RUNNERS_CONFIG" "$tmp" 2>/dev/null || chmod 600 "$tmp"
+  mv "$tmp" "$RUNNERS_CONFIG"
+}
+
+validate_runner_delete_path() {
+  local path="$1"
+  local safe_path data_root_real platform_home_real home_real
+
+  safe_path="$(realpath -m "$path")"
+  data_root_real="$(realpath -m "$RUNNER_DATA_ROOT")"
+  platform_home_real="$(realpath -m "$PLATFORM_HOME")"
+  home_real="$(realpath -m "$HOME")"
+
+  [[ "$safe_path" != "/" ]] || die "recusando apagar /"
+  [[ "$safe_path" != "$home_real" ]] || die "recusando apagar HOME"
+  [[ "$safe_path" != "$platform_home_real" ]] || die "recusando apagar platform home"
+  [[ "$safe_path" != "$data_root_real" ]] || die "recusando apagar RUNNER_DATA_ROOT"
+  [[ -f "$safe_path/.runner" || -x "$safe_path/config.sh" ]] ||
+    die "recusando apagar diretório sem marcador de GitHub Runner: $safe_path"
+
+  printf '%s\n' "$safe_path"
+}
+
+remove_runner() {
+  local runner=""
+  local plan_only=0
+  local yes=0
+  local keep_remote=0
+  local delete_dir=0
+  local record count path profile repo enabled group rest unit
+  local runner_file remote_id remote_name remote_row="" remote_status=""
+  local safe_delete_path=""
+
+  [[ $# -ge 1 ]] || die "remove exige o nome exato de um runner"
+  runner="$1"
+  shift
+
+  [[ "$runner" != "all" && "$runner" != group:* ]] ||
+    die "remove aceita somente um runner exato; all/group não são permitidos"
+
+  while (($#)); do
+    case "$1" in
+      --plan)
+        plan_only=1
+        shift
+        ;;
+      --yes)
+        yes=1
+        shift
+        ;;
+      --keep-remote)
+        keep_remote=1
+        shift
+        ;;
+      --delete-dir)
+        delete_dir=1
+        shift
+        ;;
+      *)
+        die "opção desconhecida em remove: $1"
+        ;;
+    esac
+  done
+
+  [[ "$delete_dir" -eq 0 || "$keep_remote" -eq 0 ]] ||
+    die "--delete-dir não pode ser combinado com --keep-remote"
+
+  record="$(runner_record "$runner")"
+  count="$(printf '%s\n' "$record" | awk 'NF { count++ } END { print count+0 }')"
+  [[ "$count" -eq 1 ]] ||
+    die "esperava exatamente 1 entrada para '$runner' no registry; encontrei $count"
+
+  IFS='|' read -r _name path profile repo enabled group rest <<< "$record"
+  path="$(trim_value "$path")"
+  repo="$(normalize_repo "$(trim_value "$repo")")"
+  profile="$(trim_value "$profile")"
+  group="$(trim_value "$group")"
+  enabled="$(trim_value "$enabled")"
+
+  [[ -n "$path" ]] || die "$runner: path ausente no registry"
+  path="$(realpath -m "$path")"
+  runner_file="$path/.runner"
+  unit="$(runner_local_unit "$path")"
+
+  remote_id="$(runner_metadata_value "$runner_file" agentId || true)"
+  remote_name="$(runner_metadata_value "$runner_file" agentName || true)"
+
+  if [[ "$delete_dir" -eq 1 ]]; then
+    safe_delete_path="$(validate_runner_delete_path "$path")"
+  fi
+
+  echo "Removal plan:"
+  echo "- runner: $runner"
+  echo "- repo: ${repo:-unknown}"
+  echo "- path: $path"
+  echo "- profile: ${profile:-generic}"
+  echo "- group: ${group:-unknown}"
+  echo "- systemd unit: $unit"
+  echo "- local service: STOP + UNINSTALL"
+  if [[ "$keep_remote" -eq 1 ]]; then
+    echo "- GitHub registration: KEEP"
+  else
+    echo "- GitHub registration: REMOVE"
+    echo "- remote runner: ${remote_name:-unknown}"
+    echo "- remote id: ${remote_id:-unknown}"
+  fi
+  echo "- registry entry: REMOVE"
+  if [[ "$delete_dir" -eq 1 ]]; then
+    echo "- local directory: DELETE ($safe_delete_path)"
+  else
+    echo "- local directory: KEEP"
+  fi
+
+  if [[ "$plan_only" -eq 1 ]]; then
+    return 0
+  fi
+
+  if [[ "$yes" -ne 1 ]]; then
+    echo
+    echo "Nenhuma alteração aplicada."
+    echo "Revise o plano e rode novamente com --yes."
+    return 0
+  fi
+
+  if [[ "$keep_remote" -eq 0 ]]; then
+    [[ "$repo" == */* ]] ||
+      die "$runner: repo inválido para remoção remota; use --keep-remote para detach local"
+    [[ "$remote_id" =~ ^[0-9]+$ ]] ||
+      die "$runner: agentId não encontrado em $runner_file; use --keep-remote para detach local"
+    [[ -n "$remote_name" ]] ||
+      die "$runner: agentName não encontrado em $runner_file; use --keep-remote para detach local"
+
+    command -v gh >/dev/null 2>&1 || die "gh é obrigatório para remoção remota"
+    gh auth status >/dev/null 2>&1 || die "GitHub CLI não está autenticado"
+
+    remote_row="$(
+      gh api "repos/$repo/actions/runners" --paginate \
+        --jq ".runners[] | select(.id == $remote_id) | [.id, .name, .status] | @tsv"
+    )"
+
+    if [[ -n "$remote_row" ]]; then
+      IFS=$'\t' read -r _remote_id checked_name remote_status <<< "$remote_row"
+      [[ "$checked_name" == "$remote_name" ]] ||
+        die "proteção acionada: remote id $remote_id pertence a '$checked_name', esperado '$remote_name'"
+      echo "[CHECK] GitHub runner=$checked_name id=$remote_id status=$remote_status"
+    else
+      echo "[INFO] registration remota já não existe: repo=$repo id=$remote_id"
+    fi
+  fi
+
+  "$PLATFORM_HOME/runners.sh" stop "$runner"
+  "$PLATFORM_HOME/runner-services.sh" uninstall "$runner"
+
+  if [[ "$keep_remote" -eq 0 && -n "$remote_row" ]]; then
+    gh api --method DELETE "repos/$repo/actions/runners/$remote_id"
+    echo "[OK] registration remota removida: $repo/$remote_name ($remote_id)"
+  fi
+
+  remove_registry_entry "$runner"
+  echo "[OK] registry removido: $runner"
+
+  if [[ "$delete_dir" -eq 1 ]]; then
+    rm -rf -- "$safe_delete_path"
+    echo "[OK] diretório local removido: $safe_delete_path"
+  else
+    echo "[KEEP] diretório local preservado: $path"
+  fi
+
+  echo "[OK] runner removido da plataforma local: $runner"
+}
+
 platform_doctor() {
   local rc=0
   echo "platform_home=$PLATFORM_HOME"
@@ -399,6 +655,9 @@ case "$cmd" in
     ;;
   add)
     add_runner "$@"
+    ;;
+  remove)
+    remove_runner "$@"
     ;;
   skills)
     sub="${1:-list}"

@@ -9,23 +9,23 @@ They use the portable `SKILL.md` Agent Skills format so the workflow itself does
 | Skill | Purpose |
 |---|---|
 | `start-project-runners-before-pr` | Before publishing a PR, start and validate only the local runners mapped to the current repository. |
-| `manage-local-github-runners` | Inventory, start/stop, diagnose, register and validate local GitHub Actions runners for personal repositories. |
+| `manage-local-github-runners` | Inventory, start/stop, diagnose, register, remove and validate local GitHub Actions runners. |
 
 ## Install
 
 Install both skills for the primary user-level targets (Codex, Copilot and Claude):
 
 ```bash
-./install-agent-skills.sh --tool all
+runnerctl skills install all
 ```
 
 Or choose one tool:
 
 ```bash
-./install-agent-skills.sh --tool codex
-./install-agent-skills.sh --tool copilot
-./install-agent-skills.sh --tool claude
-./install-agent-skills.sh --tool agents
+runnerctl skills install codex
+runnerctl skills install copilot
+runnerctl skills install claude
+runnerctl skills install agents
 ```
 
 Install only one skill:

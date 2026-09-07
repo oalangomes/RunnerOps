@@ -130,7 +130,7 @@ resolve_pr_sha() {
 
 query_runs() {
   gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-    --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // ""), .html_url, (.run_attempt // 1)] | @tsv'
+    --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // "-"), .html_url, (.run_attempt // 1)] | @tsv'
 }
 
 query_failure_details() {
@@ -366,6 +366,7 @@ while true; do
 
   while IFS=$'\t' read -r run_id workflow status conclusion url attempt; do
     [[ -n "${run_id:-}" ]] || continue
+    [[ "$conclusion" == "-" ]] && conclusion=""
     run_count=$((run_count + 1))
     terminal_signature+="${run_id}:${attempt}:${status}:${conclusion}|"
 

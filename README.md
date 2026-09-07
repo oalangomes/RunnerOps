@@ -239,9 +239,14 @@ Opções principais:
 ```bash
 runnerctl ci watch . --timeout 900 --interval 5
 runnerctl ci watch owner/repo --sha <commit-sha> --json
+runnerctl ci watch . --pr 123 --json
 ```
 
 Falha de teste/build **não** é tratada como falha do runner e o watcher não para, reinicia nem remove serviços.
+
+Quando `--pr NUMERO` é usado, o watcher resolve o `head.sha` atual da PR antes de buscar os workflows. `--sha` e `--pr` são mutuamente exclusivos para evitar correlação ambígua.
+
+Em reruns, o `run_attempt` faz parte da correlação. Detalhes de jobs são consultados no endpoint do attempt exato, evitando reutilizar step/job de uma tentativa anterior.
 
 Quando um workflow falha, o payload estruturado também tenta identificar `job`, `step`, runner, grupo e labels associados à falha.
 

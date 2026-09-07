@@ -152,7 +152,7 @@ query_active_jobs() {
   gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
     --jq '.jobs[]
       | select(.status == "queued" or .status == "in_progress")
-      | [.id, .name, .status, (.runner_name // ""), (.runner_group_name // ""), ((.labels // []) | join(","))]
+      | [.id, .name, .status, (.runner_name // "-"), (.runner_group_name // "-"), ((.labels // []) | join(","))]
       | @tsv'
 }
 
@@ -193,6 +193,8 @@ diagnose_waiting_self_hosted() {
       csv_has_label "$labels" "self-hosted" || continue
 
       DETAIL_JOB="$job_name"
+      [[ "$runner_name" == "-" ]] && runner_name=""
+      [[ "$runner_group" == "-" ]] && runner_group=""
       DETAIL_RUNNER_NAME="$runner_name"
       DETAIL_RUNNER_GROUP="$runner_group"
       DETAIL_RUNNER_LABELS="$labels"

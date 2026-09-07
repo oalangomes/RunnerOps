@@ -583,10 +583,10 @@ ci_watch() {
     args+=(--sha "$sha")
   fi
 
-  [[ -x "$PLATFORM_HOME/ci-watch.sh" ]] ||
-    die "ci-watch.sh ausente ou não executável em: $PLATFORM_HOME"
+  [[ -f "$PLATFORM_HOME/ci-watch.sh" ]] ||
+    die "ci-watch.sh ausente em: $PLATFORM_HOME"
 
-  exec "$PLATFORM_HOME/ci-watch.sh" --repo "$repo" "${args[@]}" "$@"
+  exec bash "$PLATFORM_HOME/ci-watch.sh" --repo "$repo" "${args[@]}" "$@"
 }
 
 platform_doctor() {

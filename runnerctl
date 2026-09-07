@@ -37,7 +37,7 @@ Uso:
   runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
   runnerctl package detect
   runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
-  runnerctl ci watch [owner/repo|.] [--sha SHA] [--json] [--timeout SEGUNDOS] [--interval SEGUNDOS]
+  runnerctl ci watch [owner/repo|.] [--sha SHA | --pr NUMERO] [--json] [--timeout SEGUNDOS] [--interval SEGUNDOS]
   runnerctl skills list
   runnerctl skills install [codex|copilot|claude|agents|all]
   runnerctl platform-home
@@ -555,7 +555,7 @@ remove_runner() {
 ci_watch() {
   local repo_arg="."
   local repo current sha=""
-  local has_sha=0
+  local has_ref=0
   local arg
   local -a args=()
 
@@ -567,19 +567,19 @@ ci_watch() {
   repo="$(resolve_repo "$repo_arg")"
 
   for arg in "$@"; do
-    if [[ "$arg" == "--sha" ]]; then
-      has_sha=1
+    if [[ "$arg" == "--sha" || "$arg" == "--pr" ]]; then
+      has_ref=1
       break
     fi
   done
 
-  if [[ "$has_sha" -eq 0 ]]; then
+  if [[ "$has_ref" -eq 0 ]]; then
     current="$(current_repo || true)"
     [[ "$current" == "$repo" ]] ||
-      die "ci watch exige --sha quando o alvo não é o repositório Git atual"
+      die "ci watch exige --sha ou --pr quando o alvo não é o repositório Git atual"
     sha="$(git rev-parse HEAD 2>/dev/null || true)"
     [[ "$sha" =~ ^[0-9A-Fa-f]{7,64}$ ]] ||
-      die "não foi possível resolver o SHA atual; informe --sha"
+      die "não foi possível resolver o SHA atual; informe --sha ou --pr"
     args+=(--sha "$sha")
   fi
 

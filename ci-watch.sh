@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO=""
 SHA=""
+PR_NUMBER=""
 JSON_OUTPUT=0
 TIMEOUT_SECONDS=600
 INTERVAL_SECONDS=5
@@ -14,12 +15,13 @@ DETAIL_RUNNER_NAME=""
 DETAIL_RUNNER_GROUP=""
 DETAIL_RUNNER_LABELS=""
 DETAIL_DIAGNOSIS=""
+DETAIL_RUN_ATTEMPT=""
 
 usage() {
   cat <<'EOF'
 Uso:
-  ./ci-watch.sh --repo owner/repo --sha SHA [--json] [--timeout SEGUNDOS]
-                [--interval SEGUNDOS] [--settle-polls N]
+  ./ci-watch.sh --repo owner/repo (--sha SHA | --pr NUMERO) [--json]
+                [--timeout SEGUNDOS] [--interval SEGUNDOS] [--settle-polls N]
 
 Exit codes:
   0  CI concluído com sucesso
@@ -52,17 +54,19 @@ reset_details() {
   DETAIL_RUNNER_GROUP=""
   DETAIL_RUNNER_LABELS=""
   DETAIL_DIAGNOSIS=""
+  DETAIL_RUN_ATTEMPT=""
 }
 
 emit_json() {
   local status="$1" kind="$2" conclusion="$3" workflow="$4"
   local run_id="$5" url="$6" run_count="$7" message="$8"
 
-  printf '{"status":"%s","kind":"%s","repo":"%s","sha":"%s","conclusion":"%s","workflow":"%s","job":"%s","step":"%s","runner_name":"%s","runner_group":"%s","runner_labels":"%s","diagnosis":"%s","run_id":%s,"url":"%s","run_count":%s,"message":"%s"}\n' \
+  printf '{"status":"%s","kind":"%s","repo":"%s","sha":"%s","pr_number":%s,"conclusion":"%s","workflow":"%s","job":"%s","step":"%s","runner_name":"%s","runner_group":"%s","runner_labels":"%s","diagnosis":"%s","run_id":%s,"run_attempt":%s,"url":"%s","run_count":%s,"message":"%s"}\n' \
     "$(json_escape "$status")" \
     "$(json_escape "$kind")" \
     "$(json_escape "$REPO")" \
     "$(json_escape "$SHA")" \
+    "${PR_NUMBER:-null}" \
     "$(json_escape "$conclusion")" \
     "$(json_escape "$workflow")" \
     "$(json_escape "$DETAIL_JOB")" \
@@ -72,6 +76,7 @@ emit_json() {
     "$(json_escape "$DETAIL_RUNNER_LABELS")" \
     "$(json_escape "$DETAIL_DIAGNOSIS")" \
     "${run_id:-null}" \
+    "${DETAIL_RUN_ATTEMPT:-null}" \
     "$(json_escape "$url")" \
     "${run_count:-0}" \
     "$(json_escape "$message")"
@@ -88,7 +93,7 @@ emit_result() {
 
   case "$status" in
     success)
-      echo "[OK] CI success repo=$REPO sha=$SHA runs=$run_count"
+      echo "[OK] CI success repo=$REPO sha=$SHA${PR_NUMBER:+ pr=$PR_NUMBER} runs=$run_count"
       ;;
     failure)
       echo "[FAIL] kind=$kind workflow=$workflow conclusion=$conclusion repo=$REPO sha=$SHA run_id=$run_id"
@@ -119,14 +124,18 @@ is_non_negative_integer() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
+resolve_pr_sha() {
+  gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha'
+}
+
 query_runs() {
   gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
     --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // ""), .html_url, (.run_attempt // 1)] | @tsv'
 }
 
 query_failure_details() {
-  local run_id="$1"
-  gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+  local run_id="$1" attempt="$2"
+  gh api "repos/$REPO/actions/runs/$run_id/attempts/$attempt/jobs?per_page=100" \
     --jq '.jobs[]
       | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")
       | . as $job
@@ -137,23 +146,24 @@ query_failure_details() {
 }
 
 populate_failure_details() {
-  local run_id="$1"
+  local run_id="$1" attempt="$2"
   local row job_id job_conclusion step_conclusion
 
   reset_details
-  row="$(query_failure_details "$run_id" 2>/dev/null || true)"
+  row="$(query_failure_details "$run_id" "$attempt" 2>/dev/null || true)"
   [[ -n "$row" ]] || return 0
 
   IFS=$'\t' read -r job_id DETAIL_JOB job_conclusion DETAIL_RUNNER_NAME DETAIL_RUNNER_GROUP DETAIL_RUNNER_LABELS DETAIL_STEP step_conclusion <<< "$row"
   if [[ "$DETAIL_RUNNER_NAME" == "-" ]]; then DETAIL_RUNNER_NAME=""; fi
   if [[ "$DETAIL_RUNNER_GROUP" == "-" ]]; then DETAIL_RUNNER_GROUP=""; fi
   if [[ "$DETAIL_STEP" == "-" ]]; then DETAIL_STEP=""; fi
+  DETAIL_RUN_ATTEMPT="$attempt"
   return 0
 }
 
 query_active_jobs() {
-  local run_id="$1"
-  gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+  local run_id="$1" attempt="$2"
+  gh api "repos/$REPO/actions/runs/$run_id/attempts/$attempt/jobs?per_page=100" \
     --jq '.jobs[]
       | select(.status == "queued" or .status == "in_progress")
       | [.id, .name, .status, (.runner_name // "-"), (.runner_group_name // "-"), ((.labels // []) | join(","))]
@@ -187,13 +197,15 @@ csv_labels_match() {
 }
 
 diagnose_waiting_self_hosted() {
-  local run_id job_id job_name job_status runner_name runner_group labels
+  local run_ref run_id attempt job_id job_name job_status runner_name runner_group labels
   local runners runner_id candidate_name candidate_status candidate_busy candidate_labels
   local matching_online=0 matching_idle=0 matching_busy=0
 
   reset_details
 
-  for run_id in "$@"; do
+  for run_ref in "$@"; do
+    run_id="${run_ref%%:*}"
+    attempt="${run_ref##*:}"
     while IFS=$'\t' read -r job_id job_name job_status runner_name runner_group labels; do
       [[ -n "${job_id:-}" ]] || continue
       csv_has_label "$labels" "self-hosted" || continue
@@ -204,6 +216,7 @@ diagnose_waiting_self_hosted() {
       DETAIL_RUNNER_NAME="$runner_name"
       DETAIL_RUNNER_GROUP="$runner_group"
       DETAIL_RUNNER_LABELS="$labels"
+      DETAIL_RUN_ATTEMPT="$attempt"
 
       if [[ "$job_status" == "in_progress" ]]; then
         DETAIL_DIAGNOSIS="self_hosted_job_in_progress"
@@ -243,7 +256,7 @@ diagnose_waiting_self_hosted() {
 
       DETAIL_DIAGNOSIS="matching_self_hosted_runner_online"
       return 1
-    done < <(query_active_jobs "$run_id" 2>/dev/null || true)
+    done < <(query_active_jobs "$run_id" "$attempt" 2>/dev/null || true)
   done
 
   reset_details
@@ -258,6 +271,10 @@ while (($#)); do
       ;;
     --sha)
       SHA="${2:-}"
+      shift 2
+      ;;
+    --pr)
+      PR_NUMBER="${2:-}"
       shift 2
       ;;
     --json)
@@ -287,7 +304,14 @@ while (($#)); do
 done
 
 [[ "$REPO" == */* ]] || die_usage "--repo owner/repo é obrigatório"
-[[ "$SHA" =~ ^[0-9A-Fa-f]{7,64}$ ]] || die_usage "--sha válido é obrigatório"
+[[ -z "$SHA" || -z "$PR_NUMBER" ]] || die_usage "--sha e --pr são mutuamente exclusivos"
+[[ -n "$SHA" || -n "$PR_NUMBER" ]] || die_usage "informe --sha SHA ou --pr NUMERO"
+if [[ -n "$SHA" ]]; then
+  [[ "$SHA" =~ ^[0-9A-Fa-f]{7,64}$ ]] || die_usage "--sha válido é obrigatório"
+fi
+if [[ -n "$PR_NUMBER" ]]; then
+  [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || die_usage "--pr deve ser inteiro positivo"
+fi
 is_non_negative_integer "$TIMEOUT_SECONDS" || die_usage "--timeout deve ser inteiro >= 0"
 is_non_negative_integer "$INTERVAL_SECONDS" || die_usage "--interval deve ser inteiro >= 0"
 is_non_negative_integer "$SETTLE_POLLS" || die_usage "--settle-polls deve ser inteiro >= 1"
@@ -301,6 +325,17 @@ fi
 if ! gh auth status >/dev/null 2>&1; then
   emit_result error infra "" "" "" "" 0 "GitHub CLI não autenticado"
   exit 2
+fi
+
+if [[ -n "$PR_NUMBER" ]]; then
+  if ! SHA="$(resolve_pr_sha 2>/dev/null)"; then
+    emit_result error infra "" "" "" "" 0 "falha ao resolver head SHA da PR #$PR_NUMBER"
+    exit 2
+  fi
+  [[ "$SHA" =~ ^[0-9A-Fa-f]{7,64}$ ]] || {
+    emit_result error infra "" "" "" "" 0 "GitHub não retornou head SHA válido para PR #$PR_NUMBER"
+    exit 2
+  }
 fi
 
 started_at="$(date +%s)"
@@ -321,9 +356,11 @@ while true; do
   failure_workflow=""
   failure_run_id=""
   failure_url=""
+  failure_attempt=""
   cancelled_workflow=""
   cancelled_run_id=""
   cancelled_url=""
+  cancelled_attempt=""
   terminal_signature=""
   active_run_ids=()
 
@@ -334,7 +371,7 @@ while true; do
 
     if [[ "$status" != "completed" ]]; then
       active_count=$((active_count + 1))
-      active_run_ids+=("$run_id")
+      active_run_ids+=("$run_id:$attempt")
       continue
     fi
 
@@ -347,6 +384,7 @@ while true; do
           failure_workflow="$workflow"
           failure_run_id="$run_id"
           failure_url="$url"
+          failure_attempt="$attempt"
         fi
         ;;
       cancelled)
@@ -354,6 +392,7 @@ while true; do
           cancelled_workflow="$workflow"
           cancelled_run_id="$run_id"
           cancelled_url="$url"
+          cancelled_attempt="$attempt"
         fi
         ;;
       *)
@@ -363,7 +402,7 @@ while true; do
   done <<< "$rows"
 
   if [[ -n "$failure_run_id" ]]; then
-    populate_failure_details "$failure_run_id"
+    populate_failure_details "$failure_run_id" "$failure_attempt"
     if [[ "$failure_conclusion" == "startup_failure" ]]; then
       DETAIL_DIAGNOSIS="workflow_startup_failure"
       emit_result failure infra "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow não conseguiu iniciar"
@@ -375,6 +414,7 @@ while true; do
 
   if [[ "$run_count" -gt 0 && "$active_count" -eq 0 ]]; then
     if [[ -n "$cancelled_run_id" ]]; then
+      DETAIL_RUN_ATTEMPT="$cancelled_attempt"
       emit_result cancelled inconclusive cancelled "$cancelled_workflow" "$cancelled_run_id" "$cancelled_url" "$run_count" "workflow cancelado"
       exit 3
     fi

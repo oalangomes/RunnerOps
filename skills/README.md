@@ -1,25 +1,25 @@
-# Portable Agent Skills
+# Agent Skills portáveis
 
-These are the canonical self-hosted runner skills for this repository.
+Estas são as skills canônicas para operação de runners self-hosted deste repositório.
 
-They use the portable `SKILL.md` Agent Skills format so the workflow itself does not need a separate implementation for each coding agent.
+Elas usam o formato portável `SKILL.md` de Agent Skills para que o mesmo fluxo não precise de uma implementação diferente para cada coding agent.
 
-## Included skills
+## Skills incluídas
 
-| Skill | Purpose |
+| Skill | Finalidade |
 |---|---|
-| `start-project-runners-before-pr` | Before publishing a PR, start and validate only the local runners mapped to the current repository. |
-| `manage-local-github-runners` | Inventory, start/stop, diagnose, register, remove and validate local GitHub Actions runners. |
+| `start-project-runners-before-pr` | Antes de publicar uma PR, iniciar e validar somente os runners locais mapeados para o repositório atual. |
+| `manage-local-github-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners locais do GitHub Actions. |
 
-## Install
+## Instalação
 
-Install both skills for the primary user-level targets (Codex, Copilot and Claude):
+Instale ambas as skills nos principais destinos de usuário (Codex, Copilot e Claude):
 
 ```bash
 runnerctl skills install all
 ```
 
-Or choose one tool:
+Ou escolha uma ferramenta:
 
 ```bash
 runnerctl skills install codex
@@ -28,7 +28,7 @@ runnerctl skills install claude
 runnerctl skills install agents
 ```
 
-Install only one skill:
+Instale somente uma skill:
 
 ```bash
 ./install-agent-skills.sh \
@@ -36,26 +36,26 @@ Install only one skill:
   --skill manage-local-github-runners
 ```
 
-Preview without writing:
+Visualize o que seria feito sem gravar:
 
 ```bash
 ./install-agent-skills.sh --tool all --dry-run
 ```
 
-## User-level destinations
+## Destinos no nível do usuário
 
-| Target | Destination |
+| Destino | Caminho |
 |---|---|
 | Codex | `~/.codex/skills/<skill>/SKILL.md` |
 | GitHub Copilot CLI | `~/.copilot/skills/<skill>/SKILL.md` |
 | Claude Code | `~/.claude/skills/<skill>/SKILL.md` |
-| Generic Agent Skills | `~/.agents/skills/<skill>/SKILL.md` |
+| Agent Skills genéricas | `~/.agents/skills/<skill>/SKILL.md` |
 
-The generic `~/.agents/skills` target is useful for tools that support the shared Agent Skills convention. It is installed only when `--tool agents` is requested, avoiding duplicate discovery in clients that also scan their own tool-specific directory.
+O destino genérico `~/.agents/skills` é útil para ferramentas compatíveis com a convenção compartilhada de Agent Skills. Ele só é instalado quando `--tool agents` é solicitado, evitando descoberta duplicada em clientes que também examinam seu próprio diretório específico.
 
-## Project-local install
+## Instalação local por projeto
 
-To install into another repository instead of your home directory:
+Para instalar dentro de outro repositório em vez do diretório home:
 
 ```bash
 ./install-agent-skills.sh \
@@ -64,22 +64,22 @@ To install into another repository instead of your home directory:
   --project-dir ~/projects/example
 ```
 
-`--tool all` is intentionally rejected with `--scope project`, because some agents discover more than one project-level skills directory. Choose one explicit project target to avoid duplicate skill discovery.
+`--tool all` é rejeitado de propósito com `--scope project`, pois alguns agentes descobrem mais de um diretório de skills no nível do projeto. Escolha um destino explícito para evitar descoberta duplicada.
 
-Project destinations:
+Destinos por projeto:
 
-| Target | Destination |
+| Destino | Caminho |
 |---|---|
 | Codex | `<repo>/.codex/skills` |
 | GitHub Copilot | `<repo>/.github/skills` |
 | Claude Code | `<repo>/.claude/skills` |
-| Generic Agent Skills | `<repo>/.agents/skills` |
+| Agent Skills genéricas | `<repo>/.agents/skills` |
 
-## Configuration contract
+## Contrato de configuração
 
-The skills do not contain machine-specific runner inventory.
+As skills não contêm inventário de runners específico da máquina.
 
-They expect the runner platform to resolve its local state using:
+Elas esperam que a plataforma resolva seu estado local usando:
 
 ```bash
 RUNNERS_CONFIG=~/.config/actions-runners/runners.conf
@@ -89,14 +89,12 @@ RUNNER_STATE_ROOT=~/.local/state/actions-runners
 RUNNER_BOOT_POLICY=on-demand
 ```
 
-The skills depend only on the installed `runnerctl` command; they do not need to know where the platform repository was cloned.
+As skills dependem apenas do comando instalado `runnerctl`; elas não precisam conhecer o diretório onde a plataforma foi clonada.
 
-The skills never embed or persist GitHub runner registration tokens.
+As skills nunca embutem nem persistem registration tokens do GitHub Runner.
 
-## Compatibility
+## Compatibilidade
 
-The previous provider-specific `codex-skills/` tree has been removed. Canonical Agent Skills live only under `skills/` and should be installed through `install-agent-skills.sh`.
+As Agent Skills canônicas vivem somente em `skills/` e devem ser instaladas por `runnerctl skills install ...` ou `install-agent-skills.sh`.
 
-Existing copies already installed under a client-specific home directory continue to be local files; reinstall to receive current provider-neutral versions.
-
-Provider-specific adapters should only be introduced when a tool requires behavior that cannot be expressed through the shared `SKILL.md`.
+Adaptadores específicos de provedor só devem ser introduzidos quando uma ferramenta exigir comportamento que não possa ser expresso pelo `SKILL.md` compartilhado.

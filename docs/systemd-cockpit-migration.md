@@ -1,72 +1,72 @@
 # systemd + Cockpit
 
-## Current model
+## Modelo atual
 
-The recommended lifecycle is:
+O ciclo de vida recomendado é:
 
 ```text
-runner registration
+registro do runner
       ↓
 svc.sh
       ↓
-systemd unit
+unit systemd
       ↓
 journalctl
       ↓
-optional Cockpit UI
+interface opcional do Cockpit
 ```
 
-`runners.sh` is systemd-first. The default boot policy is `on-demand`: services are installed but disabled at boot until a project or operator starts them.
+`runnerctl` é a interface pública recomendada. Internamente, a plataforma é orientada por systemd. A política de boot padrão é `on-demand`: os serviços ficam instalados, mas desabilitados no boot até que um projeto ou operador precise iniciá-los.
 
-Legacy PID/process management remains only for compatibility during migration.
+O gerenciamento legado por PID/processo permanece apenas por compatibilidade durante a migração.
 
-## Prerequisites
+## Pré-requisitos
 
 ```bash
 systemctl --version
 test -d /run/systemd/system
 ```
 
-On WSL, enable systemd in `/etc/wsl.conf` when necessary:
+No WSL, habilite systemd em `/etc/wsl.conf` quando necessário:
 
 ```ini
 [boot]
 systemd=true
 ```
 
-Then run `wsl --shutdown` from PowerShell and reopen the distro.
+Depois execute `wsl --shutdown` no PowerShell e reabra a distribuição.
 
-## Inspect before changing anything
-
-```bash
-./runner-services.sh doctor all
-./runner-services.sh list
-./runner-services.sh plan all
-```
-
-## Migrate one runner
+## Inspecione antes de alterar
 
 ```bash
-./runner-services.sh migrate my-api
+runnerctl doctor all
+runnerctl list
+runnerctl plan all
 ```
 
-The migration:
-
-1. stops the legacy process when present;
-2. installs the official `svc.sh` systemd service;
-3. applies the cache environment drop-in;
-4. starts the service long enough to prove the GitHub session;
-5. under `on-demand`, stops it again and leaves boot disabled.
-
-Inspect:
+## Migre um runner
 
 ```bash
-./runner-services.sh status my-api
-./runner-services.sh logs my-api
-./runners.sh health my-api
+runnerctl migrate my-api
 ```
 
-Expected on-demand idle state:
+A migração:
+
+1. interrompe o processo legado quando ele existir;
+2. instala o serviço systemd oficial via `svc.sh`;
+3. aplica o drop-in de ambiente de cache;
+4. inicia o serviço tempo suficiente para comprovar a sessão com o GitHub;
+5. sob `on-demand`, interrompe novamente e deixa o boot desabilitado.
+
+Inspecione:
+
+```bash
+runnerctl status my-api
+runnerctl logs my-api
+runnerctl health my-api
+```
+
+Estado ocioso esperado em on-demand:
 
 ```text
 state=inactive
@@ -74,69 +74,78 @@ boot=disabled
 policy=on-demand
 ```
 
-## Groups
+## Grupos
 
-Groups come from the machine-local registry. If an old entry omits the group column, the fallback is the repository slug.
-
-```bash
-./runner-services.sh migrate group:my-team
-./runner-services.sh status group:my-team
-```
-
-Avoid large migrations before reviewing `plan`.
-
-## Switch boot policy
+Os grupos vêm do registro local da máquina. Se uma entrada antiga não tiver a coluna de grupo, o fallback é o slug do repositório.
 
 ```bash
-./runner-services.sh on-demand my-api
-./runner-services.sh autostart my-api
+runnerctl migrate group:my-team
+runnerctl status group:my-team
 ```
 
-Use autostart only when a runner must remain available after host boot.
+Evite migrações grandes antes de revisar o `plan`.
+
+## Alterar política de boot
+
+```bash
+runnerctl on-demand my-api
+runnerctl autostart my-api
+```
+
+Use autostart apenas quando um runner realmente precisar permanecer disponível após o boot do host.
 
 ## Cockpit
 
-Install optionally:
+Instale opcionalmente:
 
 ```bash
 ./setup-cockpit.sh install
 ```
 
-Cockpit provides standard host/service administration for:
+O Cockpit fornece administração padrão do host e dos serviços para:
 
-- systemd units;
-- journal logs;
-- CPU and memory;
-- disk and processes.
+- units systemd;
+- logs do journal;
+- CPU e memória;
+- disco e processos.
 
-Do not expose the administrative port directly to the public internet. Prefer VPN/private networking and normal Linux user permissions.
+Não exponha a porta administrativa diretamente à internet pública. Prefira VPN/rede privada e permissões normais de usuário Linux.
 
-## Cache environment
+## Ambiente de cache
 
-`runner-services.sh` snapshots cache variables into:
+`runner-services.sh` materializa as variáveis de cache em:
 
 ```text
 ${XDG_STATE_HOME:-~/.local/state}/actions-runners/service-env/<runner>.env
 ```
 
-and creates a systemd drop-in under:
+e cria um drop-in systemd em:
 
 ```text
 /etc/systemd/system/<unit>.d/10-actions-runners-cache.conf
 ```
 
-These are machine-local artifacts and are not versioned.
+Esses artefatos são locais da máquina e não são versionados.
 
-## Rollback
+## Rollback de migração
+
+Para remover somente a integração systemd durante uma migração avançada:
 
 ```bash
 ./runner-services.sh uninstall my-api
 ```
 
-`uninstall` removes the systemd integration but preserves the GitHub registration and runner directory.
+Esse comando interno preserva o registro no GitHub e o diretório do runner.
 
-The legacy lifecycle can still be used during migration, but new installations should remain systemd-first.
+Para remoção governada da plataforma, prefira a interface pública:
 
-## Future scale
+```bash
+runnerctl remove my-api --plan
+runnerctl remove my-api --yes
+```
 
-If a dedicated Linux host eventually needs ephemeral or scale-to-zero runners, evaluate a dedicated runner manager/virtualization layer. Kubernetes is not required merely to operate a small local runner fleet.
+O ciclo de vida legado ainda pode ser usado durante migrações, mas novas instalações devem permanecer orientadas por systemd.
+
+## Escala futura
+
+Se um host Linux dedicado eventualmente precisar de runners efêmeros ou scale-to-zero, avalie um gerenciador de runners ou uma camada de virtualização dedicada. Kubernetes não é necessário apenas para operar uma pequena frota local de runners.

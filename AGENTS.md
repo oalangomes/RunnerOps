@@ -1,39 +1,39 @@
-# Contributor and agent guidance
+# Orientações para contribuidores e agentes
 
-This repository manages local GitHub Actions self-hosted runners.
+Este repositório gerencia runners locais self-hosted do GitHub Actions.
 
-## Architectural invariants
+## Invariantes arquiteturais
 
-- The Git repository contains platform code, not machine inventory.
-- Machine-specific configuration/data/cache/state belong under `RUNNERS_CONFIG`, `RUNNER_DATA_ROOT`, `RUNNER_CACHE_ROOT` and `RUNNER_STATE_ROOT`; normal operation must not write into the Git checkout.
-- Never commit registration tokens, machine-local registry contents or runner credentials.
-- systemd is the lifecycle authority for migrated runners.
-- `RUNNER_BOOT_POLICY=on-demand` is the default and an inactive/boot-disabled runner may be healthy idle capacity.
-- `runnerctl` is the stable public CLI; internal scripts are implementation details.
-- Prefer provider-neutral Agent Skills under `skills/<name>/SKILL.md`.
-- Do not introduce provider-specific copies unless a client cannot express the behavior through the shared skill.
+- O repositório Git contém o código da plataforma, não o inventário da máquina.
+- Configuração, dados, cache e estado específicos da máquina pertencem a `RUNNERS_CONFIG`, `RUNNER_DATA_ROOT`, `RUNNER_CACHE_ROOT` e `RUNNER_STATE_ROOT`; a operação normal não deve gravar no checkout Git.
+- Nunca faça commit de registration tokens, conteúdo do registry local da máquina ou credenciais de runners.
+- systemd é a autoridade de ciclo de vida para runners migrados.
+- `RUNNER_BOOT_POLICY=on-demand` é o padrão, e um runner inativo/com boot desabilitado pode representar capacidade ociosa saudável.
+- `runnerctl` é a CLI pública e estável; scripts internos são detalhes de implementação.
+- Prefira Agent Skills neutras de provedor em `skills/<nome>/SKILL.md`.
+- Não introduza cópias específicas de provedor, a menos que um cliente não consiga expressar o comportamento pela skill compartilhada.
 
-## Change discipline
+## Disciplina de mudança
 
-- Keep public examples generic; do not add maintainer usernames, hostnames or project names.
-- Prefer repository slug as the default group; project-specific grouping belongs in machine-local configuration.
-- Do not expand the legacy PID lifecycle. New operational features should use systemd/journal/Cockpit.
-- Preserve existing runner registrations and local directories unless a change explicitly targets migration/removal.
+- Mantenha exemplos públicos genéricos; não adicione nomes de usuário, hostnames ou projetos do mantenedor.
+- Prefira o slug do repositório como grupo padrão; agrupamentos específicos de projeto pertencem à configuração local da máquina.
+- Não expanda o ciclo de vida legado baseado em PID. Novas capacidades operacionais devem usar systemd/journal/Cockpit.
+- Preserve registrations existentes e diretórios locais de runners, a menos que a mudança trate explicitamente de migração ou remoção.
 
-## Validation
+## Validação
 
-For shell changes:
+Para mudanças em shell:
 
 ```bash
 bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh \
   init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh runnerctl install.sh runner-package.sh
 ```
 
-For Agent Skills:
+Para Agent Skills:
 
 ```bash
 ./install-agent-skills.sh --list
 ./install-agent-skills.sh --tool all --dry-run
 ```
 
-Optional local code-navigation tools may be used when installed, but they are not prerequisites for contributing to this repository.
+Ferramentas locais opcionais de navegação de código podem ser usadas quando instaladas, mas não são pré-requisitos para contribuir com este repositório.

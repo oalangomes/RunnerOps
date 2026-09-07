@@ -14,6 +14,5 @@ actions-runner-*.tar.gz
 .env.local
 .local-runners/
 
-# Local development artifacts
-graphify-out/
+# Local Agent Skills installation
 .codex/skills/

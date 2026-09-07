@@ -51,7 +51,7 @@ require_text "These are read-only GET requests." "skill deve declarar boundary r
 require_text "Report the sample size." "skill deve exigir tamanho da amostra"
 
 require_text "runnerctl ci watch . --pr <number> --json" "skill deve integrar estado conclusivo por PR"
-require_text "Do not use `runnerctl ci watch` as a substitute for historical duration or queue-time analysis." "skill deve separar watch atual de histórico"
+require_text 'Do not use `runnerctl ci watch` as a substitute for historical duration or queue-time analysis.' "skill deve separar watch atual de histórico"
 require_text "A CI failure is not automatically a runner failure." "skill deve preservar CI failure != runner failure"
 
 require_text "Only edit workflow files after the user explicitly asks" "aplicação deve exigir pedido explícito"

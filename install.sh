@@ -13,6 +13,7 @@ chmod 600 "$CONFIG_HOME/platform-home"
 install -m 0755 "$BASE_DIR/runnerctl" "$TARGET"
 
 echo "[OK] runnerctl instalado em: $TARGET"
+echo "[OK] version: $($TARGET --version)"
 echo "[OK] platform home: $BASE_DIR"
 echo "[OK] config: $CONFIG_HOME/platform-home"
 

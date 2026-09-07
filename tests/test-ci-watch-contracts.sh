@@ -80,7 +80,7 @@ if [[ "$request" == *"/actions/runs?"* ]]; then
       count=$((count + 1))
       printf '%s\n' "$count" > "$TEST_GH_STATE"
       if [[ "$count" -eq 1 ]]; then
-        printf '701\tCI\tin_progress\t\thttps://github.com/example/project/actions/runs/701\t2\n'
+        printf '701\tCI\tin_progress\t-\thttps://github.com/example/project/actions/runs/701\t2\n'
       else
         printf '701\tCI\tcompleted\tsuccess\thttps://github.com/example/project/actions/runs/701\t2\n'
       fi
@@ -98,10 +98,10 @@ if [[ "$request" == *"/actions/runs?"* ]]; then
       printf '301\tCI\tcompleted\tcancelled\thttps://github.com/example/project/actions/runs/301\t1\n'
       ;;
     self-hosted-offline)
-      printf '501\tCI\tqueued\t\thttps://github.com/example/project/actions/runs/501\t1\n'
+      printf '501\tCI\tqueued\t-\thttps://github.com/example/project/actions/runs/501\t1\n'
       ;;
     self-hosted-busy)
-      printf '601\tCI\tqueued\t\thttps://github.com/example/project/actions/runs/601\t1\n'
+      printf '601\tCI\tqueued\t-\thttps://github.com/example/project/actions/runs/601\t1\n'
       ;;
     no-runs)
       ;;

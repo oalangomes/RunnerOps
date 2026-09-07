@@ -307,6 +307,8 @@ skills/
 │   └── SKILL.md
 ├── manage-local-github-runners/
 │   └── SKILL.md
+├── analyze-ci-workflow-performance/
+│   └── SKILL.md
 └── README.md
 ```
 
@@ -328,6 +330,8 @@ runnerctl skills install agents
 A skill `start-project-runners-before-pr` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR e, depois da publicação, consumir `runnerctl ci watch` para devolver o estado conclusivo do CI ao agente.
 
 A skill `manage-local-github-runners` cobre inventário, health, start/stop, diagnóstico, cadastro, remoção governada e leitura estruturada do feedback de CI.
+
+A skill `analyze-ci-workflow-performance` faz análise read-only de arquitetura/performance do GitHub Actions, separando evidência `STATIC`, `OBSERVED` e `ESTIMATED` e evitando recomendar otimizações sem prova.
 
 Veja [skills/README.md](skills/README.md) para destinos e instalação local por projeto.
 

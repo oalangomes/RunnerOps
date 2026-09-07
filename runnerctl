@@ -32,6 +32,9 @@ Uso:
   runnerctl autostart <runner|group:<group>|all>
   runnerctl ensure [owner/repo|.]
   runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
+                 [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64]
+  runnerctl package detect
+  runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
   runnerctl skills list
   runnerctl skills install [codex|copilot|claude|agents|all]
   runnerctl platform-home
@@ -82,6 +85,19 @@ normalize_repo() {
 
 current_repo() {
   local repo=""
+
+  if [[ -x "$PLATFORM_HOME/runner-package.sh" ]]; then
+    package_platform="$("$PLATFORM_HOME/runner-package.sh" detect 2>/dev/null || true)"
+    if [[ -n "$package_platform" ]]; then
+      echo "[OK] runner_package_platform=$package_platform"
+    else
+      echo "[MISSING] runner_package_platform=unsupported"
+      rc=1
+    fi
+  else
+    echo "[MISSING] runner-package.sh"
+    rc=1
+  fi
 
   if command -v gh >/dev/null 2>&1; then
     repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
@@ -180,6 +196,8 @@ add_runner() {
   local group="auto"
   local labels=""
   local name=""
+  local runner_version="latest"
+  local runner_arch="auto"
   local repo slug source_dir token output runner_name
   local -a args=()
 
@@ -204,6 +222,14 @@ add_runner() {
         ;;
       --name)
         name="${2:-}"
+        shift 2
+        ;;
+      --runner-version)
+        runner_version="${2:-}"
+        shift 2
+        ;;
+      --runner-arch)
+        runner_arch="${2:-}"
         shift 2
         ;;
       *)
@@ -242,13 +268,23 @@ add_runner() {
     fi
   fi
 
-  args=(--repo-url "https://github.com/$repo" --token-stdin --profile "$profile" --group "$group" --labels "$labels")
+  args=(
+    --repo-url "https://github.com/$repo"
+    --token-stdin
+    --profile "$profile"
+    --group "$group"
+    --labels "$labels"
+    --runner-version "$runner_version"
+    --runner-arch "$runner_arch"
+  )
   [[ -n "$name" ]] && args+=(--name "$name")
 
   echo "Registrando runner para $repo"
   echo "Profile: $profile"
   echo "Group: $group"
   echo "Labels: $labels"
+  echo "Runner version: $runner_version"
+  echo "Runner arch: $runner_arch"
 
   token="$(gh api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
   [[ -n "$token" ]] || die "GitHub não retornou registration token"
@@ -342,6 +378,18 @@ case "$cmd" in
   ensure)
     repo="$(resolve_repo "${1:-.}")"
     ensure_repo "$repo"
+    ;;
+  package)
+    sub="${1:-detect}"
+    shift || true
+    case "$sub" in
+      detect|ensure)
+        exec "$PLATFORM_HOME/runner-package.sh" "$sub" "$@"
+        ;;
+      *)
+        die "package aceita detect ou ensure"
+        ;;
+    esac
     ;;
   add)
     add_runner "$@"

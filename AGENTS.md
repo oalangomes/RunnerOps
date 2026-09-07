@@ -26,7 +26,7 @@ For shell changes:
 
 ```bash
 bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh \
-  init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh runnerctl install.sh
+  init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh runnerctl install.sh runner-package.sh
 ```
 
 For Agent Skills:

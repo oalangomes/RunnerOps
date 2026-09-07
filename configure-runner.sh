@@ -10,8 +10,10 @@ REPO_URL_INPUT=""
 TOKEN_STDIN=0
 NAME=""
 LABELS="local-runner"
-RUNNER_TAR="actions-runner-linux-x64-2.335.1.tar.gz"
-EXPECTED_SHA256="4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf"
+RUNNER_TAR=""
+EXPECTED_SHA256=""
+RUNNER_VERSION="${RUNNER_VERSION:-latest}"
+RUNNER_ARCH="${RUNNER_ARCH:-auto}"
 WORK_FOLDER="_work"
 PROFILE="auto"
 GROUP="auto"
@@ -35,8 +37,10 @@ Opcoes:
   --enabled VALUE       true/false no runners.conf
   --base-dir VALUE      diretorio da instalacao/arquivos da plataforma
   --runner-root VALUE    diretorio local onde novas instancias de runner serao criadas
-  --runner-tar VALUE    arquivo .tar.gz do GitHub Actions Runner
-  --expected-sha256 V   checksum esperado do tarball
+  --runner-tar VALUE    override offline para arquivo .tar.gz do GitHub Actions Runner
+  --expected-sha256 V   checksum obrigatório quando --runner-tar for usado
+  --runner-version V    versão do runner (default: latest)
+  --runner-arch V       auto, x64 ou arm64 (default: auto)
   --work-folder VALUE   pasta de work do runner
   --replace             recria runner existente e usa --replace no config.sh
   -h, --help            mostra ajuda
@@ -282,6 +286,14 @@ while (($#)); do
       EXPECTED_SHA256="${2:-}"
       shift 2
       ;;
+    --runner-version)
+      RUNNER_VERSION="${2:-}"
+      shift 2
+      ;;
+    --runner-arch)
+      RUNNER_ARCH="${2:-}"
+      shift 2
+      ;;
     --work-folder)
       WORK_FOLDER="${2:-}"
       shift 2
@@ -341,8 +353,21 @@ fi
 
 BASE_DIR="$(realpath -m "$BASE_DIR")"
 RUNNER_ROOT="$(realpath -m "$RUNNER_ROOT")"
-TAR_PATH="$BASE_DIR/$RUNNER_TAR"
 CONFIG_PATH="$(realpath -m "$RUNNERS_CONFIG")"
+
+if [[ -n "$RUNNER_TAR" ]]; then
+  [[ -n "$EXPECTED_SHA256" ]] || die "--runner-tar exige --expected-sha256"
+  if [[ "$RUNNER_TAR" == /* ]]; then
+    TAR_PATH="$RUNNER_TAR"
+  else
+    TAR_PATH="$BASE_DIR/$RUNNER_TAR"
+  fi
+  PACKAGE_MODE="offline"
+else
+  [[ -x "$BASE_DIR/runner-package.sh" ]] || die "runner-package.sh ausente ou não executável"
+  TAR_PATH="$("$BASE_DIR/runner-package.sh" ensure --version "$RUNNER_VERSION" --arch "$RUNNER_ARCH")"
+  PACKAGE_MODE="managed"
+fi
 
 if [[ "$REPLACE" -eq 0 ]]; then
   NAME="$(next_available_runner_name "$CONFIG_PATH" "$RUNNER_ROOT" "$REQUESTED_NAME")"
@@ -376,14 +401,19 @@ echo "Pasta: $RUNNER_DIR"
 echo "Runner root: $RUNNER_ROOT"
 echo "Registry: $CONFIG_PATH"
 echo "Tarball: $TAR_PATH"
+echo "Package mode: $PACKAGE_MODE"
 echo "Token: ****"
 
-step "Validando tarball Linux"
+step "Validando pacote do runner"
 
 [[ -f "$TAR_PATH" ]] || die "tarball nao encontrado em: $TAR_PATH"
-actual_sha="$(sha256sum "$TAR_PATH" | awk '{print $1}')"
-[[ "${actual_sha,,}" == "${EXPECTED_SHA256,,}" ]] || die "checksum diferente. esperado: $EXPECTED_SHA256 | obtido: $actual_sha"
-echo "Checksum OK"
+if [[ "$PACKAGE_MODE" == "offline" ]]; then
+  actual_sha="$(sha256sum "$TAR_PATH" | awk '{print $1}')"
+  [[ "${actual_sha,,}" == "${EXPECTED_SHA256,,}" ]] || die "checksum diferente. esperado: $EXPECTED_SHA256 | obtido: $actual_sha"
+  echo "Checksum OK"
+else
+  echo "Pacote oficial ja verificado por runner-package.sh"
+fi
 
 step "Criando pasta do runner"
 

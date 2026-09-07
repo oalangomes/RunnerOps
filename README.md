@@ -78,39 +78,46 @@ A lista real de runners **não é versionada**.
 
 ### 3. Register a runner
 
-No repositório GitHub de destino, gere um registration token em:
-
-```text
-Settings → Actions → Runners → New self-hosted runner → Linux → x64
-```
-
-Depois use a linha fornecida pelo GitHub:
+Authenticate GitHub CLI once:
 
 ```bash
-./configure-runner.sh \
-  --github-line "./config.sh --url https://github.com/example/my-api --token TOKEN" \
-  --labels "python,my-api,local-runner" \
-  --profile python
+gh auth status
 ```
 
-Por padrão:
-
-- o nome local é derivado do repositório;
-- nomes existentes são auto-incrementados (`my-api`, `my-api-2`, ...);
-- o identificador final vira uma label automática;
-- o grupo é o slug do repositório;
-- um grupo diferente pode ser informado com `--group my-team`;
-- novas instâncias nascem em `RUNNER_DATA_ROOT`.
-
-Não versione nem publique registration tokens.
-
-### 4. Install the systemd service
+Inside the target repository:
 
 ```bash
-./runner-services.sh migrate my-api
+runnerctl add .
 ```
 
-Com a policy padrão `on-demand`, a migração prova que a sessão do GitHub funciona e termina em:
+The command:
+
+- resolves the current `owner/repo`;
+- infers a technical profile from project files;
+- requests a short-lived registration token through `gh`;
+- detects Linux architecture (`x64` or `arm64`);
+- resolves the latest official `actions/runner` release;
+- downloads it to XDG cache;
+- verifies the SHA-256 digest published by GitHub;
+- registers the runner;
+- installs the systemd service;
+- validates doctor/health.
+
+Overrides remain available when needed:
+
+```bash
+runnerctl add . \
+  --profile python \
+  --group backend \
+  --runner-version latest \
+  --runner-arch auto
+```
+
+For offline/manual package control, `configure-runner.sh --runner-tar ... --expected-sha256 ...` remains available as an internal/advanced escape hatch.
+
+### 4. On-demand result
+
+With the default `on-demand` policy, registration/migration proves the GitHub session and finishes with:
 
 ```text
 state=idle
@@ -227,7 +234,9 @@ O grupo é explícito quando informado. Em registros antigos sem a sexta coluna,
 
 `_work` continua sendo workspace descartável.
 
-Caches duráveis ficam em `.runner-cache/` e podem ser inspecionados com:
+Runner release packages are cached under `${XDG_CACHE_HOME:-~/.cache}/actions-runners/packages`.
+
+Stack/tool caches ainda usam o cache da plataforma atual e podem ser inspecionados com:
 
 ```bash
 ./cache.sh profiles
@@ -286,6 +295,7 @@ bash -n \
   install-agent-skills.sh \
   runnerctl \
   install.sh \
+  runner-package.sh \
   setup-cockpit.sh \
   cache.sh \
   prewarm-cache.sh \

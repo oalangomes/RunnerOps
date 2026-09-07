@@ -64,7 +64,8 @@ require_absent "gh api --method DELETE" "skill não pode executar mutação DELE
 require_absent "gh workflow run" "skill não pode disparar workflow por padrão"
 require_absent "gh run rerun" "skill não pode rerodar workflow por padrão"
 
-if ! "$ROOT/install-agent-skills.sh" --list | grep -Fxq "analyze-ci-workflow-performance"; then
+skills_list="$("$ROOT/install-agent-skills.sh" --list)"
+if ! grep -Fxq "analyze-ci-workflow-performance" <<< "$skills_list"; then
   fail "installer deve descobrir a nova skill automaticamente"
 fi
 

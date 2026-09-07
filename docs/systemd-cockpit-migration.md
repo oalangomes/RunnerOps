@@ -1,239 +1,142 @@
-# Migração dos runners para systemd + Cockpit
+# systemd + Cockpit
 
-## Objetivo
+## Current model
 
-A primeira evolução da central de runners não troca os runners nem os toolchains atuais.
-
-A mudança é somente de **lifecycle operacional**:
+The recommended lifecycle is:
 
 ```text
-antes
-runners.sh
-  -> PID files
-  -> ps/awk
-  -> run.sh
-  -> logs próprios
-  -> dashboard.py
-
-depois
-runner-services.sh
-  -> svc.sh oficial do GitHub Runner
-  -> systemd
-  -> journalctl
-  -> Cockpit (UI)
+runner registration
+      ↓
+svc.sh
+      ↓
+systemd unit
+      ↓
+journalctl
+      ↓
+optional Cockpit UI
 ```
 
-O `runners.conf`, as pastas de runner, labels, perfis e caches continuam sendo usados.
+`runners.sh` is systemd-first. The default boot policy is `on-demand`: services are installed but disabled at boot until a project or operator starts them.
 
-O dashboard antigo permanece disponível durante a migração.
+Legacy PID/process management remains only for compatibility during migration.
 
-## Por que systemd
-
-O GitHub Actions Runner gera `svc.sh` depois que o runner é registrado. Em Linux com systemd, esse é o mecanismo oficial para instalar o runner como serviço.
-
-Benefícios:
-
-- inicialização automática no boot;
-- restart e stop previsíveis;
-- uma unit por runner;
-- eliminação gradual de PID files próprios;
-- logs via journal;
-- operação via CLI padrão (`systemctl`) ou UI (Cockpit).
-
-## Pré-requisitos
-
-Verifique:
+## Prerequisites
 
 ```bash
 systemctl --version
 test -d /run/systemd/system
 ```
 
-No WSL, se systemd ainda não estiver habilitado, crie/ajuste:
+On WSL, enable systemd in `/etc/wsl.conf` when necessary:
 
 ```ini
-# /etc/wsl.conf
 [boot]
 systemd=true
 ```
 
-Depois, no PowerShell:
+Then run `wsl --shutdown` from PowerShell and reopen the distro.
 
-```powershell
-wsl --shutdown
-```
-
-Abra a distro novamente.
-
-## Validar antes de migrar
+## Inspect before changing anything
 
 ```bash
-cd /home/alangomes/actions-runners
-
-chmod +x runner-services.sh setup-cockpit.sh
-
 ./runner-services.sh doctor all
 ./runner-services.sh list
+./runner-services.sh plan all
 ```
 
-`list` mostra runners ainda em modo `legacy` e runners já instalados como serviço.
-
-## Migrar um único runner primeiro
-
-Não migre todos de uma vez.
-
-Comece por uma instância de menor risco, por exemplo:
+## Migrate one runner
 
 ```bash
-./runner-services.sh migrate agentsorchnext-2
+./runner-services.sh migrate my-api
 ```
 
-A operação:
+The migration:
 
-1. pede ao `runners.sh` atual para parar a instância;
-2. executa o `svc.sh install` oficial;
-3. cria um drop-in systemd com o ambiente de cache atual;
-4. habilita a unit no boot;
-5. inicia a unit;
-6. confirma que ela ficou `active`.
+1. stops the legacy process when present;
+2. installs the official `svc.sh` systemd service;
+3. applies the cache environment drop-in;
+4. starts the service long enough to prove the GitHub session;
+5. under `on-demand`, stops it again and leaves boot disabled.
 
-Status:
+Inspect:
 
 ```bash
-./runner-services.sh status agentsorchnext-2
+./runner-services.sh status my-api
+./runner-services.sh logs my-api
+./runners.sh health my-api
 ```
 
-Logs:
+Expected on-demand idle state:
+
+```text
+state=inactive
+boot=disabled
+policy=on-demand
+```
+
+## Groups
+
+Groups come from the machine-local registry. If an old entry omits the group column, the fallback is the repository slug.
 
 ```bash
-./runner-services.sh logs agentsorchnext-2
+./runner-services.sh migrate group:my-team
+./runner-services.sh status group:my-team
 ```
 
-O nome real da unit também fica no arquivo:
+Avoid large migrations before reviewing `plan`.
+
+## Switch boot policy
 
 ```bash
-cat /home/alangomes/actions-runners/agentsorchnext-2/.service
+./runner-services.sh on-demand my-api
+./runner-services.sh autostart my-api
 ```
 
-E pode ser operado diretamente:
-
-```bash
-sudo systemctl status "$(cat agentsorchnext-2/.service)"
-sudo journalctl -u "$(cat agentsorchnext-2/.service)" -f
-```
-
-## Migrar por grupo
-
-Depois que uma instância estiver comprovada:
-
-```bash
-./runner-services.sh migrate group:agentsorch
-./runner-services.sh status group:agentsorch
-```
-
-Depois:
-
-```bash
-./runner-services.sh migrate group:neurotrack
-```
-
-Evite `migrate all` na primeira execução.
+Use autostart only when a runner must remain available after host boot.
 
 ## Cockpit
 
-Cockpit substitui a necessidade de manter uma UI própria para:
-
-- start/stop/restart de serviços;
-- inspeção de units;
-- journal/logs;
-- CPU;
-- memória;
-- disco;
-- processos;
-- visão geral do host.
-
-Instalação opcional:
+Install optionally:
 
 ```bash
 ./setup-cockpit.sh install
 ```
 
-Acesso local:
+Cockpit provides standard host/service administration for:
 
-```text
-https://127.0.0.1:9090
-```
+- systemd units;
+- journal logs;
+- CPU and memory;
+- disk and processes.
 
-O certificado inicial pode ser autoassinado.
+Do not expose the administrative port directly to the public internet. Prefer VPN/private networking and normal Linux user permissions.
 
-### Segurança
+## Cache environment
 
-Não publique a porta 9090 diretamente na internet.
-
-Para acesso remoto, prefira uma rede privada/VPN (por exemplo Tailscale/WireGuard) e firewall.
-
-O Cockpit usa as permissões do usuário Linux e systemd/Polkit. Não crie uma conta administrativa exclusiva sem necessidade.
-
-## Cache
-
-A central já possui `runner-cache-env.sh`.
-
-Na instalação do serviço, `runner-services.sh` gera um snapshot de variáveis de cache em:
+`runner-services.sh` snapshots cache variables into:
 
 ```text
 .runner-service-env/<runner>.env
 ```
 
-e instala um drop-in da unit:
+and creates a systemd drop-in under:
 
 ```text
 /etc/systemd/system/<unit>.d/10-actions-runners-cache.conf
 ```
 
-Esse diretório local não deve ser versionado.
-
-Se mudar o perfil/cache, execute novamente:
-
-```bash
-./runner-services.sh install <runner>
-sudo systemctl restart "$(cat <runner>/.service)"
-```
+These are machine-local artifacts and are not versioned.
 
 ## Rollback
 
-Para voltar uma instância ao gerenciamento legado:
-
 ```bash
-./runner-services.sh uninstall agentsorchnext-2
-./runners.sh start agentsorchnext-2
+./runner-services.sh uninstall my-api
 ```
 
-`uninstall` remove somente a integração com systemd. Ele não remove o registro do runner no GitHub nem a pasta local.
+`uninstall` removes the systemd integration but preserves the GitHub registration and runner directory.
 
-## Estratégia recomendada
+The legacy lifecycle can still be used during migration, but new installations should remain systemd-first.
 
-### P0
+## Future scale
 
-- systemd para lifecycle;
-- journalctl para logs;
-- Cockpit para UI;
-- scripts antigos preservados.
-
-### P1
-
-Depois de todos os runners estáveis em systemd:
-
-- fazer `runners.sh` delegar start/stop/restart/status ao systemd;
-- retirar PID files e process hunting;
-- reduzir `dashboard.py` ou aposentá-lo.
-
-### P2
-
-Quando a central migrar para um host Ubuntu dedicado e houver necessidade real de runners efêmeros/scale-to-zero:
-
-- avaliar GARM + Incus/LXD;
-- não introduzir Kubernetes somente para runners.
-
-## O que não muda
-
-Workflows continuam usando as labels atuais. Nenhum repositório consumidor precisa mudar apenas por causa desta migração.
+If a dedicated Linux host eventually needs ephemeral or scale-to-zero runners, evaluate a dedicated runner manager/virtualization layer. Kubernetes is not required merely to operate a small local runner fleet.

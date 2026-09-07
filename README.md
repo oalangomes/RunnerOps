@@ -1,410 +1,175 @@
 # GitHub Actions Local Runners
 
-Central Linux para operar múltiplos GitHub Actions self-hosted runners com:
+Uma central Linux leve para operar múltiplos GitHub Actions self-hosted runners com **systemd**, configuração local por máquina e execução **on-demand**.
+
+O repositório contém a plataforma de gerenciamento. O inventário real de runners, caminhos locais e credenciais ficam fora do Git.
+
+## O que este projeto oferece
 
 - múltiplos runners por repositório;
-- grupos operacionais por domínio;
+- lifecycle systemd-first;
+- policy on-demand por padrão;
+- registry local por máquina;
 - cache persistente fora de `_work`;
-- start, stop, restart, health e doctor;
-- proteção contra processos duplicados;
-- painel local com métricas e recomendações;
-- skills operacionais para Codex.
+- operação por runner, grupo ou frota;
+- health, doctor, logs e planejamento de migração;
+- Cockpit opcional para UI do host;
+- Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
 
-## Estrutura
-
-O checkout Git contém a **plataforma**, não o inventário da máquina:
+## Modelo
 
 ```text
-~/actions-runners/
-├── configure-runner.sh
-├── runners.sh
-├── runner-services.sh
-├── runner-runtime-env.sh
-├── init-machine-config.sh
-├── .env.example
-├── runners.conf.example
-├── codex-skills/
-└── docs/
+GitHub repository
+      │
+      ▼
+machine-local registry
+      │
+      ▼
+runners.sh / runner-services.sh
+      │
+      ▼
+systemd unit per runner
+      │
+      ├── idle + boot disabled   ← default on-demand
+      └── active                ← when a job/project needs it
 ```
 
-Estado específico da máquina fica fora do conteúdo versionado:
+## Quick start
+
+### 1. Clone
+
+```bash
+git clone https://github.com/<owner>/actions-runners.git ~/actions-runners
+cd ~/actions-runners
+```
+
+### 2. Initialize machine-local state
+
+```bash
+./init-machine-config.sh
+```
+
+Isso cria, por padrão:
 
 ```text
 ~/.config/actions-runners/runners.conf
-~/.local/share/actions-runners/runners/<runner>/
+~/.local/share/actions-runners/runners/
 ~/actions-runners/.env.local
 ```
 
-Runners antigos podem continuar nos paths atuais; o registry guarda o caminho real de cada instância.
+O `.env.local` aponta para o estado desta máquina:
 
-## Configurar um runner
+```bash
+ACTIONS_RUNNERS_HOME="$HOME/actions-runners"
+RUNNERS_CONFIG="$HOME/.config/actions-runners/runners.conf"
+RUNNER_DATA_ROOT="$HOME/.local/share/actions-runners/runners"
+RUNNER_BOOT_POLICY="on-demand"
+```
 
-No repositório de destino:
+A lista real de runners **não é versionada**.
+
+### 3. Register a runner
+
+No repositório GitHub de destino, gere um registration token em:
 
 ```text
 Settings → Actions → Runners → New self-hosted runner → Linux → x64
 ```
 
-Copie a linha com URL e token e execute:
+Depois use a linha fornecida pelo GitHub:
 
 ```bash
-cd /home/alangomes/actions-runners
-
 ./configure-runner.sh \
-  --github-line "./config.sh --url https://github.com/oalangomes/agentsorch --token TOKEN" \
-  --labels "python,agentsorch,alan-runner" \
+  --github-line "./config.sh --url https://github.com/example/my-api --token TOKEN" \
+  --labels "python,my-api,local-runner" \
   --profile python
 ```
 
-Em `--labels`, informe somente labels funcionais e de capacidade. Não informe o nome final da instância; essa label é acrescentada automaticamente pelo script.
+Por padrão:
 
-O grupo é inferido automaticamente:
+- o nome local é derivado do repositório;
+- nomes existentes são auto-incrementados (`my-api`, `my-api-2`, ...);
+- o identificador final vira uma label automática;
+- o grupo é o slug do repositório;
+- um grupo diferente pode ser informado com `--group my-team`;
+- novas instâncias nascem em `RUNNER_DATA_ROOT`.
 
-| Repo/nome | Grupo |
-|---|---|
-| contém `agentsorch` | `agentsorch` |
-| contém `neurotrack` | `neurotrack` |
-| contém `ea-fc` ou `sheffield` | `ea-fc` |
-| contém `roboapostas` ou `apostas` | `roboapostas` |
+Não versione nem publique registration tokens.
 
-Também pode ser informado explicitamente:
+### 4. Install the systemd service
 
 ```bash
-./configure-runner.sh \
-  --github-line "./config.sh --url https://github.com/oalangomes/NeuroTrack_MS --token TOKEN" \
-  --labels "node,neurotrack-ms,alan-runner" \
-  --profile node \
-  --group neurotrack
+./runner-services.sh migrate my-api
 ```
 
-## Múltiplos runners do mesmo repo
-
-A primeira execução cria:
+Com a policy padrão `on-demand`, a migração prova que a sessão do GitHub funciona e termina em:
 
 ```text
-agentsorch/
-AlanGomes-PC-agentsorch
+state=idle
+boot=disabled
+policy=on-demand
 ```
 
-A segunda execução, usando um token novo, cria automaticamente:
+O runner não precisa ficar permanentemente ligado.
 
-```text
-agentsorch-2/
-AlanGomes-PC-agentsorch-2
-```
-
-A terceira cria `agentsorch-3`, e assim por diante.
-
-Sem `--replace`, runners existentes são preservados. Use `--replace` somente para recriar explicitamente o mesmo runner.
-
-### Label automática da instância
-
-O nome final resolvido pelo script é sempre adicionado automaticamente como label do GitHub Runner.
-
-Exemplo de entrada:
+## Operação diária
 
 ```bash
---labels "node,neurotrack-ms,alan-runner"
-```
-
-Se o próximo nome livre for `neurotrack_ms-2`, o registro enviado ao GitHub usa:
-
-```text
-node,neurotrack-ms,alan-runner,neurotrack_ms-2
-```
-
-Você não precisa e não deve repetir `neurotrack_ms-2` em `--labels`. O mesmo vale para `agentsorch-2`, `agentsorch-3` e qualquer outro identificador final.
-
-## Configuração local por máquina
-
-O inventário real não deve ser tratado como configuração de produto. Env define **onde** ficam os dados e qual a política de boot; o arquivo local define **quais** runners existem.
-
-Inicialize uma máquina existente com:
-
-```bash
-bash ./init-machine-config.sh
-```
-
-Isso copia com segurança o registry atual para:
-
-```text
-~/.config/actions-runners/runners.conf
-```
-
-e cria `.env.local` semelhante a:
-
-```bash
-ACTIONS_RUNNERS_HOME="/home/me/actions-runners"
-RUNNERS_CONFIG="/home/me/.config/actions-runners/runners.conf"
-RUNNER_DATA_ROOT="/home/me/.local/share/actions-runners/runners"
-RUNNER_BOOT_POLICY="on-demand"
-```
-
-O formato do registry continua:
-
-```properties
-# name|path|profile|repo|enabled|group
-my-api|/home/me/.local/share/actions-runners/runners/my-api|python|me/my-api|true|my-api
-```
-
-Novas instâncias são criadas em `RUNNER_DATA_ROOT`, portanto cadastrar um projeto novo não altera mais o `.gitignore` do repositório.
-
-O `runners.conf` real não é versionado. O repositório mantém apenas `runners.conf.example`; cada máquina usa o path apontado por `RUNNERS_CONFIG`.
-
-## Operar runners individuais
-
-```bash
-./runners.sh start agentsorch
-./runners.sh stop agentsorch-2
-./runners.sh restart neurotrack_ms
-./runners.sh status agentsorch
-./runners.sh doctor agentsorch
-./runners.sh health agentsorch
-./runners.sh logs agentsorch
-```
-
-## Operação recomendada: systemd on-demand + Cockpit
-
-O lifecycle usa o mecanismo oficial do GitHub Runner (`svc.sh` + `systemd`), preservando labels, toolchains e caches.
-
-A política padrão é `RUNNER_BOOT_POLICY=on-demand`: a unit fica instalada, mas **disabled no boot**. O runner sobe somente quando a CLI/skill precisa dele.
-
-Comece validando sem alterar nada:
-
-```bash
-./runner-services.sh doctor all
-./runner-services.sh list
-```
-
-Migre somente uma instância primeiro:
-
-```bash
-./runner-services.sh migrate agentsorchnext-2
-./runner-services.sh status agentsorchnext-2
-./runner-services.sh logs agentsorchnext-2
-```
-
-Com policy on-demand, `migrate` instala a unit, prova que a sessão consegue permanecer ativa e volta para idle/boot disabled.
-
-Para alterar policy explicitamente:
-
-```bash
-./runner-services.sh on-demand all
-./runner-services.sh autostart agentsorchnext-2
-```
-
-Cockpit é opcional e fornece UI para serviços, logs e métricas do host:
-
-```bash
-./setup-cockpit.sh install
-```
-
-Guia completo:
-
-```text
-docs/systemd-cockpit-migration.md
-```
-
-`runners.sh` passa a ser **systemd-first**: quando a pasta do runner possui `.service`, start/stop/restart/status/logs delegam para `systemctl`/`journalctl`. Runners ainda não migrados continuam usando o backend legado durante a transição.
-
-Exemplo:
-
-```bash
-./runners.sh status all
-./runners.sh restart group:agentsorch
-./runners.sh logs agentsorchnext-2
-```
-
-O output informa `backend=systemd` ou `backend=legacy` para deixar explícito quem controla cada instância.
-
-## Dashboard legado em Docker
-
-> Status: compatibilidade temporária. Para administração do host e runners systemd, prefira Cockpit + `runners.sh`. O dashboard próprio será aposentado depois que todos os runners forem migrados.
-
-O painel legado pode ser executado isoladamente em Docker, mantendo acesso ao mesmo
-arquivo de configuração, logs, cache e processos dos runners:
-
-Para iniciar o backend no host e o front Docker com um único comando:
-
-```bash
-./start-dashboard-docker.sh
-```
-
-O script reutiliza o backend se ele já estiver ativo. Depois da configuração
-inicial da ponte WSL abaixo, não é necessário executar comandos separados.
-
-No Docker Desktop sobre WSL, configure uma vez a ponte da porta do Windows para
-a distro WSL, executando o PowerShell como administrador:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup-dashboard-portproxy.ps1
-```
-
-Essa ponte continua configurada entre reinicializações, mas deve ser atualizada
-se o IP da distro WSL mudar.
-
-Em outro terminal, suba o front em Docker:
-
-```bash
-docker compose up -d --build
-```
-
-Acesse `http://127.0.0.1:8765`. Para acompanhar o serviço:
-
-```bash
-docker compose logs -f runners-dashboard
-```
-
-O front Docker encaminha a API para o backend do host na porta `8766`; o painel
-fica disponível na porta `8765`.
-
-## Operar por grupos
-
-Listar grupos e capacidade:
-
-```bash
-./runners.sh groups
-```
-
-Subir todos os runners do NeuroTrack:
-
-```bash
-./runners.sh start group:neurotrack
-```
-
-Outros exemplos:
-
-```bash
-./runners.sh restart group:agentsorch
-./runners.sh stop group:ea-fc
-./runners.sh health group:roboapostas
-./runners.sh status group:neurotrack
-```
-
-Operar tudo continua disponível para manutenção explícita:
-
-```bash
+./runners.sh list
 ./runners.sh status all
 ./runners.sh health all
-./runners.sh stop all
+
+./runners.sh start my-api
+./runners.sh stop my-api
+./runners.sh restart my-api
+./runners.sh logs my-api
 ```
 
-Em uso normal, evite `start all`: skills e CLI devem iniciar somente os runners associados ao projeto atual.
-
-## Cache persistente
-
-O `_work` continua sendo workspace descartável do runner.
-
-Caches duráveis ficam em:
-
-```text
-.runner-cache/
-├── tools/
-│   └── tool-cache/
-├── shared/
-└── stacks/
-    ├── flutter/
-    ├── node/
-    ├── python/
-    ├── java/
-    ├── go/
-    └── dotnet/
-```
-
-Comandos:
+Por grupo:
 
 ```bash
-./cache.sh profiles
-./cache.sh status --profile python
-./cache.sh status --profile node
-./cache.sh status --profile flutter
-./cache.sh clean all --profile python --older-than 30 --dry-run
+./runners.sh start group:my-team
+./runners.sh health group:my-team
 ```
 
-Prewarm:
+Evite `start all` no uso normal. O modelo recomendado é acordar somente a capacidade necessária.
+
+## On-demand e autostart
+
+On-demand é o default:
 
 ```bash
-./prewarm-cache.sh python
-./prewarm-cache.sh node
-./prewarm-cache.sh flutter
-./prewarm-cache.sh all
+./runner-services.sh on-demand my-api
 ```
 
-## Painel próprio legado
-
-Este painel continua disponível apenas durante a migração. Novas capacidades administrativas devem preferir Cockpit/systemd em vez de expandir `dashboard.py`.
-
-Subir:
+Se uma máquina ou runner realmente precisar ficar sempre disponível:
 
 ```bash
-./dashboard.py
+./runner-services.sh autostart my-api
 ```
 
-Abrir:
+Em on-demand, `inactive + boot disabled` representa um runner saudável em idle.
 
-```text
-http://127.0.0.1:8765
-```
+## Agent Skills
 
-O painel mostra:
-
-- runners agrupados por domínio;
-- start, restart e stop por grupo;
-- filtro de runners por grupo;
-- hostname, uptime, CPUs, load, RAM e disco;
-- score de saúde da central;
-- processos detectados mesmo quando o PID file está stale;
-- alertas de processo duplicado, runner parado, cache grande, RAM e disco;
-- recomendações automáticas de capacidade e paralelismo;
-- logs de execução e diagnóstico;
-- cache por stack.
-
-Por padrão, o painel escuta apenas em `127.0.0.1`. Para acesso pela rede privada:
-
-```bash
-RUNNERS_DASHBOARD_HOST=0.0.0.0 ./dashboard.py
-```
-
-Proteja esse acesso com firewall ou VPN privada.
-
-## Proteção contra runner duplicado no backend legado
-
-Para runners systemd, o lifecycle é responsabilidade da unit e essa detecção manual não é usada. Para runners ainda em modo legado, `runners.sh` procura processos ligados à pasta:
-
-```text
-run.sh
-Runner.Listener
-Runner.Worker
-```
-
-Ele evita iniciar outra instância na mesma pasta, encerra o grupo de processos no stop/restart e arquiva `_diag/pages` antes de subir novamente.
-
-Comandos úteis:
-
-```bash
-./runners.sh health all
-./runners.sh restart agentsorch
-```
-
-## Agent Skills — Codex, Copilot, Claude e outros
-
-As automações reutilizáveis ficam em `skills/` no formato portátil `SKILL.md`.
+As skills canônicas vivem em:
 
 ```text
 skills/
 ├── start-project-runners-before-pr/
 │   └── SKILL.md
-└── manage-local-github-runners/
-    └── SKILL.md
+├── manage-local-github-runners/
+│   └── SKILL.md
+└── README.md
 ```
 
-Instale globalmente em todos os alvos suportados:
+Instale nos três clientes principais:
 
 ```bash
 ./install-agent-skills.sh --tool all
 ```
 
-Ou apenas em uma ferramenta:
+Ou escolha um:
 
 ```bash
 ./install-agent-skills.sh --tool codex
@@ -413,13 +178,68 @@ Ou apenas em uma ferramenta:
 ./install-agent-skills.sh --tool agents
 ```
 
-Também é possível instalar dentro de outro projeto com `--scope project`.
+A skill `start-project-runners-before-pr` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR.
 
-Veja `skills/README.md` para a matriz de destinos e exemplos completos.
+A skill `manage-local-github-runners` cobre inventário, health, start/stop, diagnóstico e cadastro de runners para repositórios pessoais.
 
-O diretório `codex-skills/` permanece apenas para documentação/compatibilidade histórica; novas skills devem ser provider-neutral e nascer em `skills/`.
+Veja [skills/README.md](skills/README.md) para destinos e instalação project-local.
 
-## Templates de workflow
+## Configuração por máquina
+
+Arquivo de exemplo versionado:
+
+```text
+runners.conf.example
+```
+
+Registry real:
+
+```text
+~/.config/actions-runners/runners.conf
+```
+
+Formato:
+
+```properties
+# name|path|profile|repo|enabled|group
+my-api|/home/me/.local/share/actions-runners/runners/my-api|python|example/my-api|true|my-team
+```
+
+O grupo é explícito quando informado. Em registros antigos sem a sexta coluna, o fallback é o slug do repositório.
+
+## Cache persistente
+
+`_work` continua sendo workspace descartável.
+
+Caches duráveis ficam em `.runner-cache/` e podem ser inspecionados com:
+
+```bash
+./cache.sh profiles
+./cache.sh status --profile python
+./cache.sh status --profile node
+./cache.sh status --profile flutter
+```
+
+Prewarm:
+
+```bash
+./prewarm-cache.sh python
+./prewarm-actions.sh my-api
+```
+
+## Cockpit
+
+Cockpit é opcional e recomendado quando você quer uma UI para serviços, journal, CPU, RAM, disco e processos:
+
+```bash
+./setup-cockpit.sh install
+```
+
+Não exponha a porta administrativa diretamente à internet. Para acesso remoto, prefira VPN/rede privada.
+
+Mais detalhes em [docs/systemd-cockpit-migration.md](docs/systemd-cockpit-migration.md).
+
+## Workflows de exemplo
 
 ```text
 templates/
@@ -429,42 +249,32 @@ templates/
 └── python-self-hosted.yml
 ```
 
-Contrato esperado:
+Adapte labels e política de fallback ao seu repositório. Não trate os templates como autorização para executar código não confiável em runners persistentes.
 
-| Label | Comportamento |
-|---|---|
-| `Self --force` | força self-hosted |
-| `Self` | tenta self-hosted e usa fallback quando permitido |
-| `Self --skip` | usa GitHub-hosted |
-| sem label | self-hosted por padrão |
+## Home lab / host dedicado
 
-## Central Ubuntu em notebook
+Um blueprint genérico para notebook, mini PC ou host Ubuntu dedicado está em:
 
-O blueprint para transformar um notebook em central de runners e laboratório doméstico está em:
-
-```text
-docs/notebook-central-blueprint.md
-```
-
-A separação recomendada é:
-
-```text
-host Ubuntu
-├── GitHub runners como serviços do host
-├── Docker Compose para ambientes de teste
-├── volumes persistentes e backups
-├── acesso privado por VPN
-└── PC gamer usado sob demanda para builds pesados
-```
+[docs/notebook-central-blueprint.md](docs/notebook-central-blueprint.md)
 
 ## Validação
 
 ```bash
-bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh init-machine-config.sh setup-cockpit.sh cache.sh prewarm-cache.sh
-python3 -m py_compile dashboard.py
+bash -n \
+  configure-runner.sh \
+  runners.sh \
+  runner-services.sh \
+  runner-runtime-env.sh \
+  init-machine-config.sh \
+  sync-local-git-excludes.sh \
+  install-agent-skills.sh \
+  setup-cockpit.sh \
+  cache.sh \
+  prewarm-cache.sh \
+  prewarm-actions.sh
+
+./install-agent-skills.sh --tool all --dry-run
 ./runners.sh list
-./runners.sh groups
-./runners.sh doctor all
 ./runners.sh health all
 ```
 
@@ -472,8 +282,21 @@ python3 -m py_compile dashboard.py
 
 - não execute PR externo não confiável em runner persistente;
 - não rode runners como root;
-- use labels específicas por repo e stack;
+- use labels específicas por repositório e capacidade;
 - mantenha permissões mínimas no `GITHUB_TOKEN`;
-- não exponha MongoDB, Redis, dashboard ou APIs diretamente à internet;
-- mantenha ambientes de teste em containers separados dos processos dos runners;
-- faça backup de volumes e arquivos de configuração, não de `_work`.
+- mantenha registration tokens fora de logs, commits e documentação;
+- não exponha Docker socket, bancos ou painéis administrativos à internet;
+- use containers ou usuários isolados para código não confiável;
+- faça backup de configuração e caches importantes, não de `_work`.
+
+## Documentação
+
+- [Agent Skills](skills/README.md)
+- [systemd + Cockpit](docs/systemd-cockpit-migration.md)
+- [Home lab blueprint](docs/notebook-central-blueprint.md)
+
+## Estado do projeto
+
+A direção atual é **systemd-first + on-demand + machine-local configuration**.
+
+Compatibilidade com lifecycle legado ainda existe apenas para migração; novas instalações devem usar systemd.

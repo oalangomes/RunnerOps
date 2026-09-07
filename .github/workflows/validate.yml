@@ -19,15 +19,21 @@ jobs:
       - name: Validate shell syntax
         shell: bash
         run: |
-          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             install-agent-skills.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh             start-dashboard.sh             start-dashboard-docker.sh
+          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh
 
       - name: Validate portable Agent Skills
         run: |
           ./install-agent-skills.sh --list
           ./install-agent-skills.sh --tool all --dry-run
 
-      - name: Validate dashboard Python
-        run: python3 -m py_compile dashboard.py
-
-      - name: Validate Docker Compose
-        run: docker compose config --quiet
+      - name: Validate public portability
+        shell: bash
+        run: |
+          if grep -R -nE '/home/alangomes|oalangomes/|AlanGomes-PC|agentsorch|neurotrack|roboapostas|sheffield' \
+            --exclude-dir=.git \
+            --exclude='*.lock' \
+            --exclude='validate.yml' .; then
+            echo "Found maintainer-specific assumptions in tracked content." >&2
+            exit 1
+          fi
+          test ! -d codex-skills

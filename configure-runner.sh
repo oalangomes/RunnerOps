@@ -26,7 +26,7 @@ Opcoes:
   --name VALUE          nome base local do runner/pasta
   --labels VALUE        labels base do runner; o identificador final da instancia e adicionado automaticamente
   --profile VALUE       perfil tecnico: auto, generic, node, python, flutter, android, java, dotnet, go
-  --group VALUE         grupo operacional: auto, neurotrack, agentsorch, ea-fc, roboapostas ou outro slug
+  --group VALUE         grupo operacional; auto usa o slug do repositorio
   --enabled VALUE       true/false no runners.conf
   --base-dir VALUE      diretorio da instalacao/arquivos da plataforma
   --runner-root VALUE    diretorio local onde novas instancias de runner serao criadas
@@ -38,10 +38,10 @@ Opcoes:
 
 Exemplo:
   ./configure-runner.sh \
-    --github-line "./config.sh --url https://github.com/oalangomes/agentsorch --token TOKEN" \
-    --labels "python,agentsorch,local-runner"
+    --github-line "./config.sh --url https://github.com/example/my-api --token TOKEN" \
+    --labels "python,my-api,local-runner"
 
-Se agentsorch ja existir, uma nova execucao sem --replace cria agentsorch-2 e adiciona a label agentsorch-2.
+Se my-api ja existir, uma nova execucao sem --replace cria my-api-2 e adiciona a label my-api-2.
 USAGE
 }
 
@@ -160,15 +160,14 @@ infer_profile() {
 }
 
 infer_group() {
-  local value="${1,,},${2,,}"
+  local name="$1"
+  local repo="${2:-}"
 
-  case "$value" in
-    *agentsorch*) echo "agentsorch" ;;
-    *neurotrack*|*docsneurotrack*) echo "neurotrack" ;;
-    *ea-fc*|*sheffield*) echo "ea-fc" ;;
-    *roboapostas*|*robo-apostas*|*apostas*) echo "roboapostas" ;;
-    *) normalize_slug "$1" ;;
-  esac
+  if [[ -n "$repo" ]]; then
+    normalize_slug "${repo##*/}"
+  else
+    normalize_slug "$name"
+  fi
 }
 
 validate_profile() {
@@ -226,27 +225,6 @@ update_runners_conf() {
   awk -F '|' -v runner_name="$runner_name" '$1 != runner_name' "$config_path" > "$tmp"
   printf '%s|%s|%s|%s|%s|%s\n' "$runner_name" "$runner_dir" "$profile" "$repo" "$enabled" "$group" >> "$tmp"
   mv "$tmp" "$config_path"
-}
-
-append_gitignore_entry() {
-  local gitignore_path="$1"
-  local entry="$2"
-
-  if ! grep -Fxq "$entry" "$gitignore_path"; then
-    printf '%s\n' "$entry" >> "$gitignore_path"
-  fi
-}
-
-update_gitignore() {
-  local gitignore_path="$1"
-  local requested_name="$2"
-  local runner_name="$3"
-
-  [[ -f "$gitignore_path" ]] || touch "$gitignore_path"
-
-  append_gitignore_entry "$gitignore_path" "/$runner_name/"
-  append_gitignore_entry "$gitignore_path" "/$requested_name/"
-  append_gitignore_entry "$gitignore_path" "/$requested_name-[0-9]*/"
 }
 
 while (($#)); do
@@ -351,7 +329,7 @@ if [[ "$REPLACE" -eq 0 ]]; then
 fi
 
 # A label exclusiva da instancia acompanha exatamente o identificador/pasta final.
-# Ex.: neurotrack_ms-2 recebe automaticamente a label neurotrack_ms-2.
+# Ex.: my-api-2 recebe automaticamente a label my-api-2.
 INSTANCE_LABEL="$NAME"
 LABELS="$(append_csv_label "$LABELS" "$INSTANCE_LABEL")"
 

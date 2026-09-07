@@ -33,10 +33,10 @@ Acoes:
 Exemplos:
   ./runner-services.sh list
   ./runner-services.sh plan all
-  ./runner-services.sh migrate agentsorchnext-2
-  ./runner-services.sh migrate group:agentsorch
+  ./runner-services.sh migrate my-api
+  ./runner-services.sh migrate group:my-team
   ./runner-services.sh on-demand all
-  ./runner-services.sh autostart agentsorchnext-2
+  ./runner-services.sh autostart my-api
   ./runner-services.sh status all
 USAGE
 }
@@ -63,14 +63,14 @@ normalize_slug() {
 }
 
 infer_group() {
-  local value="${1,,},${2,,}"
-  case "$value" in
-    *agentsorch*) echo agentsorch ;;
-    *neurotrack*|*docsneurotrack*) echo neurotrack ;;
-    *ea-fc*|*sheffield*) echo ea-fc ;;
-    *roboapostas*|*robo-apostas*|*apostas*) echo roboapostas ;;
-    *) normalize_slug "${2##*/}" ;;
-  esac
+  local name="$1"
+  local repo="${2:-}"
+
+  if [[ -n "$repo" ]]; then
+    normalize_slug "${repo##*/}"
+  else
+    normalize_slug "$name"
+  fi
 }
 
 require_systemd() {

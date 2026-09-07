@@ -92,6 +92,8 @@ The skills never embed or persist GitHub runner registration tokens.
 
 ## Compatibility
 
-The previous `codex-skills/` directory is legacy documentation. New Agent Skills should be added under `skills/` and installed through `install-agent-skills.sh`.
+The previous provider-specific `codex-skills/` tree has been removed. Canonical Agent Skills live only under `skills/` and should be installed through `install-agent-skills.sh`.
+
+Existing copies already installed under a client-specific home directory continue to be local files; reinstall to receive current provider-neutral versions.
 
 Provider-specific adapters should only be introduced when a tool requires behavior that cannot be expressed through the shared `SKILL.md`.

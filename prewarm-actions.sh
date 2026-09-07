@@ -29,8 +29,8 @@ Opcoes:
   --force                   baixa e extrai novamente mesmo se ja existir
 
 Exemplos:
-  ./prewarm-actions.sh group:neurotrack
-  ./prewarm-actions.sh neurotrack_ms --action actions/setup-node@v6
+  ./prewarm-actions.sh group:my-team
+  ./prewarm-actions.sh my-api --action actions/setup-node@v6
   ./prewarm-actions.sh all --only actions/checkout@v7 --only actions/setup-node@v6
 EOF
 }
@@ -57,17 +57,14 @@ normalize_slug() {
 }
 
 infer_group() {
-  local name="${1,,}"
-  local repo="${2,,}"
-  local value="$name,$repo"
+  local name="$1"
+  local repo="${2:-}"
 
-  case "$value" in
-    *agentsorch*) echo "agentsorch" ;;
-    *neurotrack*|*docsneurotrack*) echo "neurotrack" ;;
-    *ea-fc*|*sheffield*) echo "ea-fc" ;;
-    *roboapostas*|*robo-apostas*|*apostas*) echo "roboapostas" ;;
-    *) normalize_slug "${repo##*/}" ;;
-  esac
+  if [[ -n "$repo" ]]; then
+    normalize_slug "${repo##*/}"
+  else
+    normalize_slug "$name"
+  fi
 }
 
 read_config() {

@@ -1,337 +1,185 @@
-# Blueprint — notebook como central doméstica
+# Home lab blueprint for self-hosted runners
 
-## Decisão
-
-Transformar o notebook Samsung em uma central Ubuntu é uma boa arquitetura para o estágio atual, desde que ele seja tratado como:
+A notebook, mini PC or small Ubuntu host can work well as a private CI/lab node when treated as:
 
 ```text
-laboratório privado + CI local + ambiente de testes
+private CI + development lab + test environments
 ```
 
-Não como produção pública com disponibilidade garantida.
+not as a public production service with guaranteed availability.
 
-O PC gamer fica reservado para:
-
-- builds Flutter/Android pesados;
-- testes que demandem mais CPU/RAM;
-- execução manual;
-- workloads com GPU;
-- picos de paralelismo.
-
-## Visão
+## Suggested topology
 
 ```text
-GitHub / Codex / AgentsOrch
-          │
-          ▼
-Notebook Ubuntu — central sempre ligada
-├── runners: agentsorch
-├── runners: neurotrack
-├── runners: ea-fc
-├── runners: roboapostas
-├── painel de runners
+GitHub
+  │
+  ▼
+Ubuntu host
+├── systemd-managed GitHub runners
+├── actions-runners management CLI
 ├── Docker Engine + Compose
-│   ├── NeuroTrack API
-│   ├── NeuroTrack Web
-│   ├── MongoDB
-│   ├── Redis
-│   └── serviços auxiliares
-├── volumes persistentes
-├── backup
-└── VPN privada / SSH
-          │
-          ├── APK NeuroTrack consome API privada
-          └── PC gamer entra sob demanda para jobs heavy
+├── private VPN / SSH
+├── persistent volumes
+└── backups
+      │
+      └── optional heavy workstation/GPU node on demand
 ```
 
-## Divisão de responsabilidades
+## Host responsibilities
 
-### Host Ubuntu
+Run directly on the host:
 
-Rodar diretamente no host:
-
-- SSH;
-- VPN privada;
+- SSH / private VPN;
 - GitHub Actions runners;
-- `runners.sh` e `dashboard.py`;
+- systemd and journal;
+- `runners.sh` / `runner-services.sh`;
 - Docker Engine;
-- monitoramento do host;
-- backups;
-- systemd.
+- host monitoring and backups.
 
-### Containers
+Application-specific APIs, databases, queues and test stacks should normally live in containers instead of polluting the runner host.
 
-Rodar em Docker Compose:
+## Data layout
 
-- APIs;
-- frontends web;
-- MongoDB;
-- Redis;
-- filas;
-- serviços de teste;
-- mocks;
-- ferramentas de observabilidade.
-
-Evite instalar dependências específicas de cada aplicação diretamente no host quando elas puderem ficar no container.
-
-## Estrutura de diretórios
+One possible layout:
 
 ```text
-/home/alangomes/actions-runners/
-├── agentsorch/
-├── agentsorch-2/
-├── neurotrack_ms/
-├── neurotrack_web/
-└── .runner-cache/
+~/.config/actions-runners/
+└── runners.conf
+
+~/.local/share/actions-runners/
+└── runners/
+    ├── my-api/
+    └── my-web/
 
 /srv/stacks/
-├── neurotrack/
-│   ├── compose.yaml
-│   ├── compose.test.yaml
-│   └── .env
-├── agentsorch/
-├── ea-fc/
-└── roboapostas/
+├── project-a/
+└── project-b/
 
 /srv/data/
-├── neurotrack-mongo/
-├── neurotrack-redis/
+├── databases/
 ├── backups/
 └── logs/
 ```
 
-## Grupos de runners
+The platform checkout can stay under `~/actions-runners`; runner instances do not need to live inside it.
 
-### Notebook central
+## Groups and capabilities
 
-```text
-agentsorch
-neurotrack
-ea-fc
-roboapostas
-```
+Use groups to represent operational ownership or a pool, and labels to represent capabilities.
 
-Labels sugeridas:
+Examples:
 
 ```text
-self-hosted,linux,x64,central,notebook,python,agentsorch
-self-hosted,linux,x64,central,notebook,node,neurotrack
+groups:
+  backend
+  frontend
+  mobile
+
+labels:
+  python
+  node
+  flutter
+  android
+  gpu
+  heavy
 ```
 
-### PC gamer
+Do not encode one maintainer's project taxonomy into platform code; keep those choices in the local registry.
 
-```text
-heavy
-flutter
-android
-gpu
-```
+## Capacity
 
-Labels sugeridas:
+Runner count is not the same as host capacity.
 
-```text
-self-hosted,linux,x64,pc-gamer,heavy,flutter,android
-```
+Start with a small number of concurrent runners and observe:
 
-Jobs comuns ficam no notebook. Jobs pesados exigem labels do PC gamer.
+- CPU load;
+- RAM and swap;
+- SSD I/O;
+- temperature;
+- queue time;
+- job duration.
 
-## Concorrência
+Increase concurrency only when measurements support it.
 
-Não confunda quantidade de runners com capacidade real.
+## Test environments
 
-Comece com:
-
-```text
-2 runners concorrentes no notebook
-```
-
-Depois observe:
-
-- load médio;
-- RAM;
-- temperatura;
-- tempo de fila;
-- I/O do SSD;
-- duração dos testes.
-
-Aumente para três ou quatro apenas se o hardware aguentar sem swap excessivo e sem thermal throttling.
-
-## NeuroTrack como ambiente de testes
-
-Stack sugerida:
+A private runner host can also run integration environments through Docker Compose:
 
 ```text
 reverse proxy
-├── /api  → NeuroTrack_MS
-└── /     → NeuroTrack_Web
-
-NeuroTrack_MS
-├── MongoDB
-├── Redis
-└── serviços auxiliares
+├── API
+├── web
+└── supporting services
+    ├── database
+    └── cache/queue
 ```
 
-O APK pode usar uma base URL privada, por exemplo:
+Expose only the minimum required surface. Databases and internal services should usually stay on private Docker networks.
+
+## Remote access
+
+Prefer:
 
 ```text
-https://neurotrack-central.<rede-privada>/api
+private VPN
+  → SSH
+  → Cockpit / test APIs
 ```
 
-Mantenha MongoDB e Redis acessíveis apenas pela rede Docker. Exponha somente a API ou o reverse proxy.
-
-## Deploy de teste
-
-Fluxo recomendado:
-
-```text
-PR validado
-→ merge
-→ workflow de deploy no runner central
-→ docker compose pull/build
-→ docker compose up -d
-→ smoke test
-→ health check no painel
-```
-
-Mantenha arquivos separados:
-
-```text
-compose.yaml
-compose.test.yaml
-compose.production.yaml
-```
-
-No notebook, use o ambiente de teste, não o de produção pública.
-
-## Acesso remoto
-
-Preferência:
-
-```text
-VPN privada
-→ SSH
-→ painel
-→ APIs de teste
-```
-
-Não faça port-forward público de:
+Avoid public port forwarding for:
 
 - SSH;
-- dashboard;
-- MongoDB;
-- Redis;
+- Cockpit;
+- databases;
 - Docker socket;
-- painéis administrativos.
+- administrative APIs.
 
-Reserve IP no DHCP do roteador para facilitar o acesso na LAN.
+## Heavy worker
 
-## Codex e AgentsOrch trabalhando continuamente
+A more powerful workstation can be an optional second pool for:
 
-Use um usuário dedicado sem sudo:
+- Android/Flutter builds;
+- GPU tasks;
+- high-CPU jobs;
+- temporary parallelism.
 
-```text
-codex-runner
-```
+Use explicit labels so normal jobs remain on the efficient host.
 
-Limites mínimos:
+## Reliability
 
-- sem acesso irrestrito ao host;
-- workspaces separados;
-- timeout por tarefa;
-- limite de CPU e memória quando containerizado;
-- lista explícita de repositórios permitidos;
-- nenhuma alteração de workflow sem autorização;
-- nenhum acesso ao Docker socket para código não confiável;
-- logs e auditoria de comandos;
-- segredos separados por projeto.
+For an always-on home-lab host:
 
-O AgentsOrch pode coordenar filas e metas, mas executores autônomos devem operar em containers ou usuários isolados.
+- keep the SSD healthy;
+- monitor temperature;
+- prevent unwanted sleep/suspend;
+- keep backups outside the machine;
+- consider battery/UPS coverage for host and network equipment;
+- use auto-restart after power loss when supported.
 
-## Energia e hardware
+## Security
 
-O notebook tende a ser mais adequado para ficar ligado continuamente do que um PC gamer, mas a decisão deve ser confirmada medindo o consumo real com tomada inteligente ou wattímetro.
+- do not run untrusted pull requests on persistent privileged runners;
+- avoid giving runner jobs unrestricted Docker socket access;
+- separate secrets by project;
+- use least-privilege GitHub tokens;
+- isolate autonomous tooling in containers/users when appropriate;
+- keep administrative surfaces on a private network.
 
-Cuidados:
-
-- usar SSD saudável;
-- limpar ventoinha e entradas de ar;
-- manter o notebook aberto ou bem ventilado;
-- configurar ação da tampa para não suspender;
-- limitar carga da bateria, se o modelo suportar;
-- monitorar temperatura;
-- habilitar reinício automático após queda de energia, quando suportado;
-- manter backup externo.
-
-A bateria pode ajudar em quedas curtas, mas não substitui backup nem UPS para modem/roteador.
-
-## Observabilidade mínima
-
-O painel de runners já cobre:
-
-- runners e grupos;
-- processos;
-- RAM;
-- load;
-- disco;
-- cache;
-- logs;
-- recomendações.
-
-Para a central completa, evoluir depois com:
-
-- temperatura;
-- SMART do SSD;
-- estado dos containers;
-- health das APIs;
-- filas de jobs;
-- consumo de energia;
-- backups recentes;
-- disponibilidade da rede.
-
-## Fases
-
-### Fase 1 — central básica
-
-- Ubuntu Server LTS;
-- SSH;
-- Docker Engine e Compose;
-- VPN privada;
-- runners do AgentsOrch e NeuroTrack;
-- dashboard;
-- NeuroTrack em Docker Compose.
-
-### Fase 2 — operação confiável
-
-- systemd para runners e dashboard;
-- backups automáticos;
-- health checks;
-- reverse proxy privado;
-- monitoramento de temperatura e disco;
-- limite de concorrência.
-
-### Fase 3 — capacidade sob demanda
-
-- PC gamer como grupo `heavy`;
-- Wake-on-LAN;
-- notebook acorda/desliga o PC gamer conforme fila;
-- AgentsOrch distribui trabalho por capacidade;
-- ambientes descartáveis por branch quando necessário.
-
-## Resultado esperado
+## Result
 
 ```text
-Notebook
-→ central sempre ligada, econômica e previsível
+small Ubuntu host
+→ predictable private CI + test lab
 
-PC gamer
-→ estação manual e executor pesado sob demanda
+optional heavy workstation
+→ on-demand capacity
 
 GitHub Actions
-→ orquestra PRs e checks
+→ orchestration and checks
 
-AgentsOrch
-→ coordena metas, filas e automações
+systemd
+→ local runner lifecycle
 
 Docker Compose
-→ hospeda ambientes de teste
+→ disposable/private test stacks
 ```

@@ -1,12 +1,38 @@
-## graphify
+# Contributor and agent guidance
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+This repository manages local GitHub Actions self-hosted runners.
 
-When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+## Architectural invariants
 
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- The Git repository contains platform code, not machine inventory.
+- Machine-specific runner state belongs under `RUNNERS_CONFIG` / `RUNNER_DATA_ROOT`.
+- Never commit registration tokens, machine-local registry contents or runner credentials.
+- systemd is the lifecycle authority for migrated runners.
+- `RUNNER_BOOT_POLICY=on-demand` is the default and an inactive/boot-disabled runner may be healthy idle capacity.
+- Prefer provider-neutral Agent Skills under `skills/<name>/SKILL.md`.
+- Do not introduce provider-specific copies unless a client cannot express the behavior through the shared skill.
+
+## Change discipline
+
+- Keep public examples generic; do not add maintainer usernames, hostnames or project names.
+- Prefer repository slug as the default group; project-specific grouping belongs in machine-local configuration.
+- Do not expand the legacy PID lifecycle. New operational features should use systemd/journal/Cockpit.
+- Preserve existing runner registrations and local directories unless a change explicitly targets migration/removal.
+
+## Validation
+
+For shell changes:
+
+```bash
+bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh \
+  init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh
+```
+
+For Agent Skills:
+
+```bash
+./install-agent-skills.sh --list
+./install-agent-skills.sh --tool all --dry-run
+```
+
+Optional local code-navigation tools may be used when installed, but they are not prerequisites for contributing to this repository.

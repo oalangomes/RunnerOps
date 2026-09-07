@@ -4,48 +4,16 @@ actions-runner-*.tar.gz
 # Runtime state
 .runner-logs/
 .runner-pids/
-.dashboard-backend.pid
-.dashboard-backend.log
 .runner-cache/
 .runner-service-env/
-__pycache__/
-*.pyc
 *.tmp
 *.log
 
-# Local runner folders. configure-runner.sh also appends exact/future patterns.
-/agentsorch/
-/agentsorch-[0-9]*/
-/neurotrack-app/
-/neurotrack-app-[0-9]*/
-/neurotrack_ms/
-/neurotrack_ms_[0-9]*/
-/neurotrack_web/
-/neurotrack_web-[0-9]*/
-/docsneurotrackapp/
-/docsneurotrackapp-[0-9]*/
-/ea-fc-sheffield-hub/
-/ea-fc-sheffield-hub-[0-9]*/
-/roboapostas/
-/roboapostas-[0-9]*/
-
-# Local generated config
+# Machine-local configuration
 *.conf
-/runners.conf
-runners.conf
-/neurotrack_ms-2/
-/neurotrack_ms-[0-9]*/
-/neurotrack_ms-3/
-/agentsorch-2/
-/agentsorch-3/
-/neurotrack_integrations/
-/neurotrack_integrations-[0-9]*/
-graphify-out/
-.codex/skills/graphify/
-/agentsorchnext-2/
-/agentsorchnext/
-/agentsorchnext-[0-9]*/
-
-# Machine-local runner configuration
 .env.local
 .local-runners/
+
+# Local development artifacts
+graphify-out/
+.codex/skills/

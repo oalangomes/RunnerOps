@@ -33,15 +33,14 @@ Acoes:
   help       mostra ajuda
 
 Exemplos:
-  ./runners.sh status
-  ./runners.sh start all
-  ./runners.sh start agentsorch-2
-  ./runners.sh start group:neurotrack
-  ./runners.sh restart group:agentsorch
-  ./runners.sh stop group:ea-fc
+  ./runners.sh status all
+  ./runners.sh start my-api
+  ./runners.sh start group:my-team
+  ./runners.sh restart my-api-2
+  ./runners.sh stop group:my-team
   ./runners.sh groups
   ./runners.sh doctor all
-  ./runners.sh health group:roboapostas
+  ./runners.sh health my-api
 USAGE
 }
 
@@ -64,17 +63,14 @@ normalize_slug() {
 }
 
 infer_group() {
-  local name="${1,,}"
-  local repo="${2,,}"
-  local value="$name,$repo"
+  local name="$1"
+  local repo="${2:-}"
 
-  case "$value" in
-    *agentsorch*) echo "agentsorch" ;;
-    *neurotrack*|*docsneurotrack*) echo "neurotrack" ;;
-    *ea-fc*|*sheffield*) echo "ea-fc" ;;
-    *roboapostas*|*robo-apostas*|*apostas*) echo "roboapostas" ;;
-    *) normalize_slug "${repo##*/}" ;;
-  esac
+  if [[ -n "$repo" ]]; then
+    normalize_slug "${repo##*/}"
+  else
+    normalize_slug "$name"
+  fi
 }
 
 is_running_pid() {

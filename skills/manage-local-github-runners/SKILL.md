@@ -1,13 +1,13 @@
 ---
 name: manage-local-github-runners
-description: Manage the user's local GitHub Actions self-hosted runner platform from Codex. Use when the user asks to inspect, start, stop, restart, diagnose, validate, register, create, remove, or configure local runners for personal GitHub repositories, or asks whether a project's runner is healthy/available. Prefer the current repository when no target is specified. Support machine-local runner registries and on-demand systemd operation. Never expose registration tokens or perform destructive removal without explicit user intent.
+description: Manage the user's local GitHub Actions self-hosted runner platform from an AI coding agent. Use when the user asks to inspect, start, stop, restart, diagnose, validate, register, create, remove, or configure local runners for user-owned GitHub repositories, or asks whether a project's runner is healthy/available. Prefer the current repository when no target is specified. Support machine-local runner registries and on-demand systemd operation. Never expose registration tokens or perform destructive removal without explicit user intent.
 ---
 
 # Manage Local GitHub Runners
 
 Operate the user's shared local GitHub Actions runner installation safely and project-first.
 
-This skill is for **personal/local runner administration**, not for editing GitHub Actions workflows unless the user explicitly asks for workflow changes.
+This skill is for **local runner administration**, not for editing GitHub Actions workflows unless the user explicitly asks for workflow changes.
 
 ## Platform location
 
@@ -29,7 +29,7 @@ if [[ -f "$RUNNERS_HOME/.env.local" ]]; then
   set +a
 fi
 
-RUNNERS_CONFIG="${RUNNERS_CONFIG:-$RUNNERS_HOME/runners.conf}"
+RUNNERS_CONFIG="${RUNNERS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners/runners.conf}"
 RUNNER_BOOT_POLICY="${RUNNER_BOOT_POLICY:-on-demand}"
 ```
 
@@ -152,11 +152,11 @@ When supported:
 "$RUNNERS_HOME/runner-services.sh" autostart "$runner"
 ```
 
-Prefer `on-demand` for personal runners unless the user explicitly wants always-on.
+Prefer `on-demand` for local runners unless the user explicitly wants always-on.
 
-## Register a runner for a personal repository
+## Register a runner for a user-owned repository
 
-Use this when the user asks to create/cadastrar/adicionar a local runner for a personal GitHub project.
+Use this when the user asks to create/cadastrar/adicionar a local runner for a user-owned GitHub project.
 
 ### Resolve and validate the repository
 

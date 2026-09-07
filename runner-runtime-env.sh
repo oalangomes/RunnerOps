@@ -14,14 +14,7 @@ fi
 
 ACTIONS_RUNNERS_HOME="${ACTIONS_RUNNERS_HOME:-$RUNNER_RUNTIME_BASE_DIR}"
 
-if [[ -z "${RUNNERS_CONFIG:-}" ]]; then
-  # Backward-compatible fallback while the tracked registry is externalized.
-  if [[ -f "$ACTIONS_RUNNERS_HOME/runners.conf" ]]; then
-    RUNNERS_CONFIG="$ACTIONS_RUNNERS_HOME/runners.conf"
-  else
-    RUNNERS_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners/runners.conf"
-  fi
-fi
+RUNNERS_CONFIG="${RUNNERS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners/runners.conf}"
 
 RUNNER_DATA_ROOT="${RUNNER_DATA_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/actions-runners/runners}"
 RUNNER_BOOT_POLICY="${RUNNER_BOOT_POLICY:-on-demand}"

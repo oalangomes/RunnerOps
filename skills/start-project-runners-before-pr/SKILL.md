@@ -1,6 +1,6 @@
 ---
 name: start-project-runners-before-pr
-description: Ensure the local GitHub Actions self-hosted runners mapped to the current repository are running before Codex creates or opens a pull request. Use when Codex is about to run gh pr create, open/publish a PR, or otherwise hand off a branch for PR review from a local project that may use the shared actions-runners installation. Start only runners configured for the current repository, validate they remain healthy, and block PR creation if a configured required runner cannot stay active. Do not use for PR reviews, PR-body edits, or tasks that are not creating a new PR.
+description: Ensure the local GitHub Actions self-hosted runners mapped to the current repository are running before an agent creates or opens a pull request. Use when an agent is about to run gh pr create, open/publish a PR, or otherwise hand off a branch for PR review from a local project that may use the shared actions-runners installation. Start only runners configured for the current repository, validate they remain healthy, and block PR creation if a configured required runner cannot stay active. Do not use for PR reviews, PR-body edits, or tasks that are not creating a new PR.
 ---
 
 # Start Project Runners Before PR
@@ -25,7 +25,7 @@ if [[ -f "$RUNNERS_HOME/.env.local" ]]; then
   set +a
 fi
 
-RUNNERS_CONFIG="${RUNNERS_CONFIG:-$RUNNERS_HOME/runners.conf}"
+RUNNERS_CONFIG="${RUNNERS_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners/runners.conf}"
 ```
 
 The runner registry is machine-local state and may live outside the `actions-runners` Git checkout.
@@ -156,7 +156,7 @@ If found, report stale remote registration. Do not reconfigure or remove automat
 
 ## 8. Continue PR flow
 
-Only after every enabled runner mapped to the current repo is active may Codex continue with `git push` / `gh pr create`.
+Only after every enabled runner mapped to the current repo is active may the agent continue with `git push` / `gh pr create`.
 
 Do not change PR metadata because of this skill.
 
@@ -164,7 +164,7 @@ Do not change PR metadata because of this skill.
 
 ```text
 Runner preflight:
-- repo: oalangomes/example
+- repo: example/example
 - runners: example, example-2
 - status: active
 - PR gate: passed

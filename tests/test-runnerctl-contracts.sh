@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
+EXPECTED_RUNNERCTL_VERSION="0.2.0-dev"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 pass() {
@@ -48,6 +49,24 @@ printf 'service:%s\n' "$*" >> "${TEST_CALL_LOG:?}"
 EOF
 
   chmod +x "$platform/runners.sh" "$platform/runner-services.sh"
+}
+
+test_version_is_platform_independent() {
+  local isolated="$TMP_ROOT/version-only"
+  local output
+
+  mkdir -p "$isolated"
+  cp "$ROOT/runnerctl" "$isolated/runnerctl"
+  chmod +x "$isolated/runnerctl"
+
+  output="$(
+    HOME="$TMP_ROOT/version-home" \
+    XDG_CONFIG_HOME="$TMP_ROOT/version-config" \
+    "$isolated/runnerctl" --version
+  )"
+
+  assert_eq "runnerctl $EXPECTED_RUNNERCTL_VERSION" "$output" "--version deve funcionar sem platform-home"
+  pass "--version independe do checkout/plataforma instalada"
 }
 
 test_repo_resolution() {
@@ -224,6 +243,8 @@ test_install_and_xdg_from_arbitrary_checkout() {
 
   XDG_CONFIG_HOME="$config" RUNNERCTL_BIN_DIR="$bin" "$platform/install.sh" >/dev/null
 
+  assert_eq "runnerctl $EXPECTED_RUNNERCTL_VERSION" "$("$bin/runnerctl" --version)" "binário instalado deve expor a versão esperada"
+
   installed_home="$(
     XDG_CONFIG_HOME="$config" \
     XDG_DATA_HOME="$data" \
@@ -251,6 +272,7 @@ test_install_and_xdg_from_arbitrary_checkout() {
 }
 
 main() {
+  test_version_is_platform_independent
   test_repo_resolution
   test_ensure_is_repo_scoped
   test_remove_contracts

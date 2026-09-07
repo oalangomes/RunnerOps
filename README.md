@@ -85,9 +85,11 @@ No WSL2, habilite systemd antes de usar a plataforma.
 ### 1. Clone
 
 ```bash
-git clone https://github.com/<owner>/actions-runners.git ~/actions-runners
+git clone https://github.com/oalangomes/actions-runners.git ~/actions-runners
 cd ~/actions-runners
 ```
+
+Para uma instalação estável, prefira uma tag publicada (`vX.Y.Z`). A branch `master` representa o estado de desenvolvimento entre releases.
 
 ### 2. Instale a CLI pública
 
@@ -96,6 +98,12 @@ cd ~/actions-runners
 ```
 
 Isso instala `runnerctl` em `~/.local/bin` e salva a localização do checkout na configuração XDG. Humanos e agentes não precisam saber onde o repositório foi clonado.
+
+Confirme a versão instalada:
+
+```bash
+runnerctl --version
+```
 
 Depois, inicialize o estado local da máquina:
 
@@ -176,6 +184,34 @@ policy=on-demand
 ```
 
 O runner não precisa ficar permanentemente ligado.
+
+## Atualização
+
+`install.sh` copia a CLI pública para `~/.local/bin`. Portanto, atualizar somente o checkout Git pode deixar um `runnerctl` antigo chamando scripts mais novos.
+
+Para atualizar uma instalação que acompanha `master`:
+
+```bash
+cd "$(runnerctl platform-home)"
+git status --short
+git pull --ff-only
+./install.sh
+runnerctl --version
+runnerctl platform-doctor
+```
+
+Para mudar para uma release específica, faça checkout da tag desejada e **execute `./install.sh` novamente**:
+
+```bash
+cd "$(runnerctl platform-home)"
+git fetch --tags
+git checkout vX.Y.Z
+./install.sh
+runnerctl --version
+runnerctl platform-doctor
+```
+
+Não faça upgrade sobre um checkout com alterações locais sem antes revisá-las.
 
 ## Operação diária
 
@@ -436,7 +472,7 @@ runnerctl health all
 
 Para contribuidores, o CI valida sintaxe shell, defaults XDG, instalação do `runnerctl`, plano de remoção governada, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
 
-Além do CI, a release foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG.
+A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. Mudanças posteriores em `master` não herdam automaticamente essa prova; cada nova release deve repetir o gate de smoke antes da tag.
 
 O bridge de feedback de CI também possui smoke real em push para `master`: `ci-watch.sh` consulta a API real do GitHub Actions com token efêmero `actions:read` e valida um workflow já concluído do SHA anterior, evitando self-watch.
 
@@ -453,6 +489,8 @@ O bridge de feedback de CI também possui smoke real em push para `master`: `ci-
 
 ## Documentação
 
+- [Changelog](CHANGELOG.md)
+- [Processo de release](docs/releasing.md)
 - [Agent Skills](skills/README.md)
 - [systemd + Cockpit](docs/systemd-cockpit-migration.md)
 - [Home lab](docs/notebook-central-blueprint.md)

@@ -37,6 +37,7 @@ jobs:
         shell: bash
         run: |
           ./runnerctl --help
+          ./runnerctl --version
           ./runnerctl platform-home
           test "$(./runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
           ./runner-package.sh detect
@@ -86,13 +87,31 @@ jobs:
       - name: Validate public portability
         shell: bash
         run: |
-          if grep -R -nE '/home/alangomes|oalangomes/|AlanGomes-PC|agentsorch|neurotrack|roboapostas|sheffield' \
+          if grep -R -nE '/home/alangomes|AlanGomes-PC|agentsorch|neurotrack|roboapostas|sheffield' \
             --exclude-dir=.git \
             --exclude='*.lock' \
             --exclude='validate.yml' .; then
             echo "Found maintainer-specific assumptions in tracked content." >&2
             exit 1
           fi
+
+          owner_refs="$(
+            grep -R -nF 'oalangomes/' \
+              --exclude-dir=.git \
+              --exclude='*.lock' \
+              --exclude='validate.yml' . || true
+          )"
+          unexpected_owner_refs="$(
+            printf '%s\n' "$owner_refs" \
+              | grep -vF 'github.com/oalangomes/actions-runners' \
+              | sed '/^[[:space:]]*$/d' || true
+          )"
+          if [[ -n "$unexpected_owner_refs" ]]; then
+            printf '%s\n' "$unexpected_owner_refs" >&2
+            echo "Found unexpected maintainer-owned repository references." >&2
+            exit 1
+          fi
+
           test ! -d codex-skills
 
 

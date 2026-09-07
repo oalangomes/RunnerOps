@@ -19,7 +19,7 @@ jobs:
       - name: Validate shell syntax
         shell: bash
         run: |
-          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             runner-package.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh             tests/test-runnerctl-contracts.sh
+          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             runner-package.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh             tests/test-runnerctl-contracts.sh             tests/test-runnerctl-routing-contracts.sh             tests/test-runner-package-contracts.sh
 
       - name: Validate XDG runtime defaults
         shell: bash
@@ -47,6 +47,8 @@ jobs:
         shell: bash
         run: |
           bash tests/test-runnerctl-contracts.sh
+          bash tests/test-runnerctl-routing-contracts.sh
+          bash tests/test-runner-package-contracts.sh
 
       - name: Validate governed removal plan
         shell: bash

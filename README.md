@@ -434,6 +434,8 @@ Para contribuidores, o CI valida sintaxe shell, defaults XDG, instalação do `r
 
 Além do CI, a release foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG.
 
+O bridge de feedback de CI também possui smoke real em push para `master`: `ci-watch.sh` consulta a API real do GitHub Actions com token efêmero `actions:read` e valida um workflow já concluído do SHA anterior, evitando self-watch.
+
 ## Segurança
 
 - não execute PR externo não confiável em runner persistente;

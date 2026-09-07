@@ -312,6 +312,8 @@ platform_doctor() {
   echo "platform_home=$PLATFORM_HOME"
   echo "runners_config=$RUNNERS_CONFIG"
   echo "runner_data_root=$RUNNER_DATA_ROOT"
+  echo "runner_cache_root=$RUNNER_CACHE_ROOT"
+  echo "runner_state_root=$RUNNER_STATE_ROOT"
   echo "boot_policy=$RUNNER_BOOT_POLICY"
 
   for cmd in bash git tar sha256sum systemctl; do

@@ -60,21 +60,25 @@ runnerctl init
 Isso cria, por padrão:
 
 ```text
+~/.config/actions-runners/config.env
 ~/.config/actions-runners/runners.conf
 ~/.local/share/actions-runners/runners/
-~/actions-runners/.env.local
+~/.cache/actions-runners/
+~/.local/state/actions-runners/
 ```
 
-O `.env.local` aponta para o estado desta máquina:
+O `config.env` aponta para o estado desta máquina. Config, data, cache e runtime state ficam fora do checkout:
 
 ```bash
-ACTIONS_RUNNERS_HOME="$HOME/actions-runners"
+ACTIONS_RUNNERS_HOME="/path/to/actions-runners"
 RUNNERS_CONFIG="$HOME/.config/actions-runners/runners.conf"
 RUNNER_DATA_ROOT="$HOME/.local/share/actions-runners/runners"
+RUNNER_CACHE_ROOT="$HOME/.cache/actions-runners"
+RUNNER_STATE_ROOT="$HOME/.local/state/actions-runners"
 RUNNER_BOOT_POLICY="on-demand"
 ```
 
-A lista real de runners **não é versionada**.
+A lista real de runners **não é versionada** e o checkout pode permanecer read-only durante operação normal.
 
 ### 3. Register a runner
 
@@ -234,9 +238,11 @@ O grupo é explícito quando informado. Em registros antigos sem a sexta coluna,
 
 `_work` continua sendo workspace descartável.
 
-Runner release packages are cached under `${XDG_CACHE_HOME:-~/.cache}/actions-runners/packages`.
+Runner release packages, tool caches and stack caches ficam sob `${XDG_CACHE_HOME:-~/.cache}/actions-runners`.
 
-Stack/tool caches ainda usam o cache da plataforma atual e podem ser inspecionados com:
+Runtime state (service env, logs/PIDs legados durante migração) fica sob `${XDG_STATE_HOME:-~/.local/state}/actions-runners`.
+
+Caches podem ser inspecionados com:
 
 ```bash
 ./cache.sh profiles

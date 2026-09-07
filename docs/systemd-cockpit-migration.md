@@ -116,7 +116,7 @@ Do not expose the administrative port directly to the public internet. Prefer VP
 `runner-services.sh` snapshots cache variables into:
 
 ```text
-.runner-service-env/<runner>.env
+${XDG_STATE_HOME:-~/.local/state}/actions-runners/service-env/<runner>.env
 ```
 
 and creates a systemd drop-in under:

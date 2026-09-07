@@ -2,7 +2,10 @@
 set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$BASE_DIR/runner-runtime-env.sh"
 CACHE_ENV_PATH="$BASE_DIR/runner-cache-env.sh"
+LEGACY_LOG_DIR="$RUNNER_STATE_ROOT/legacy-logs"
 DRY_RUN=0
 OLDER_THAN_DAYS=30
 CACHE_PROFILE="shared"
@@ -88,7 +91,7 @@ cache_path() {
     nuget) echo "$NUGET_PACKAGES" ;;
     playwright) echo "$PLAYWRIGHT_BROWSERS_PATH" ;;
     tool-cache) echo "$RUNNER_TOOL_CACHE" ;;
-    logs) echo "$BASE_DIR/.runner-logs" ;;
+    logs) echo "$LEGACY_LOG_DIR" ;;
     *) return 1 ;;
   esac
 }

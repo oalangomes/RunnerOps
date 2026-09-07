@@ -21,6 +21,17 @@ jobs:
         run: |
           bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             runner-package.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh
 
+      - name: Validate XDG runtime defaults
+        shell: bash
+        run: |
+          ACTIONS_RUNNERS_ENV="$RUNNER_TEMP/missing.env" bash -c '
+            source ./runner-runtime-env.sh
+            test "$RUNNERS_CONFIG" = "$HOME/.config/actions-runners/runners.conf"
+            test "$RUNNER_DATA_ROOT" = "$HOME/.local/share/actions-runners/runners"
+            test "$RUNNER_CACHE_ROOT" = "$HOME/.cache/actions-runners"
+            test "$RUNNER_STATE_ROOT" = "$HOME/.local/state/actions-runners"
+          '
+
       - name: Validate runnerctl
         shell: bash
         run: |

@@ -5,7 +5,7 @@ This repository manages local GitHub Actions self-hosted runners.
 ## Architectural invariants
 
 - The Git repository contains platform code, not machine inventory.
-- Machine-specific runner state belongs under `RUNNERS_CONFIG` / `RUNNER_DATA_ROOT`.
+- Machine-specific configuration/data/cache/state belong under `RUNNERS_CONFIG`, `RUNNER_DATA_ROOT`, `RUNNER_CACHE_ROOT` and `RUNNER_STATE_ROOT`; normal operation must not write into the Git checkout.
 - Never commit registration tokens, machine-local registry contents or runner credentials.
 - systemd is the lifecycle authority for migrated runners.
 - `RUNNER_BOOT_POLICY=on-demand` is the default and an inactive/boot-disabled runner may be healthy idle capacity.

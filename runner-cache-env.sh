@@ -3,12 +3,11 @@
 # Shared cache locations for self-hosted runner jobs.
 #
 # The runner workspace (_work) stays disposable and isolated per runner.
-# Durable caches live outside _work under .runner-cache, with:
+# Durable caches live outside _work under the machine-local XDG cache root, with:
 # - shared tool caches used by setup actions;
 # - stack/profile caches used by package managers and build tools.
 
-CACHE_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUNNER_CACHE_ROOT="${RUNNER_CACHE_ROOT:-$CACHE_ENV_DIR/.runner-cache}"
+RUNNER_CACHE_ROOT="${RUNNER_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/actions-runners}"
 
 profile_raw="${LOCAL_RUNNER_PROFILE:-${RUNNER_CACHE_PROFILE:-shared}}"
 RUNNER_CACHE_PROFILE="$(printf '%s' "$profile_raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9._-' '-')"

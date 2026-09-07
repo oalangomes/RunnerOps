@@ -6,8 +6,8 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BASE_DIR/runner-runtime-env.sh"
 CONFIG_PATH="$RUNNERS_CONFIG"
 BOOT_POLICY="$RUNNER_BOOT_POLICY"
-PID_DIR="$BASE_DIR/.runner-pids"
-LOG_DIR="$BASE_DIR/.runner-logs"
+PID_DIR="$RUNNER_STATE_ROOT/legacy-pids"
+LOG_DIR="$RUNNER_STATE_ROOT/legacy-logs"
 CACHE_ENV_PATH="$BASE_DIR/runner-cache-env.sh"
 PREWARM_ACTIONS_PATH="$BASE_DIR/prewarm-actions.sh"
 LOG_MAX_BYTES="${RUNNER_LOG_MAX_BYTES:-10485760}"
@@ -407,7 +407,7 @@ source_cache_env() {
     export LOCAL_RUNNER_GROUP="$group"
     # shellcheck source=/dev/null
     source "$CACHE_ENV_PATH"
-    mkdir -p "${RUNNER_CACHE_ROOT:-$BASE_DIR/.runner-cache}"
+    mkdir -p "$RUNNER_CACHE_ROOT"
   fi
 }
 

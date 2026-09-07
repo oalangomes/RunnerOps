@@ -28,7 +28,8 @@ Para mudanças em shell:
 bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh \
   init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh runnerctl install.sh runner-package.sh \
   ci-watch.sh tests/test-runnerctl-contracts.sh tests/test-runnerctl-routing-contracts.sh \
-  tests/test-runner-package-contracts.sh tests/test-ci-watch-contracts.sh tests/test-agent-skills-contracts.sh
+  tests/test-runner-package-contracts.sh tests/test-ci-watch-contracts.sh tests/test-agent-skills-contracts.sh \
+  tests/test-performance-skill-contracts.sh
 ```
 
 Para Agent Skills:

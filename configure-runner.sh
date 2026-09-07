@@ -467,6 +467,5 @@ echo "Labels: $LABELS"
 echo "Profile: $PROFILE"
 echo
 echo "Para subir esse runner:"
-echo "  cd $BASE_DIR"
-echo "  ./runners.sh start $NAME"
-echo "  ./runners.sh start group:$GROUP"
+echo "  runnerctl start $NAME"
+echo "  runnerctl start group:$GROUP"

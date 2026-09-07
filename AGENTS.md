@@ -1,6 +1,6 @@
 # Orientações para contribuidores e agentes
 
-Este repositório gerencia runners locais self-hosted do GitHub Actions.
+`runnerctl` é a interface pública deste repositório para gerenciar runners locais self-hosted do GitHub Actions.
 
 ## Invariantes arquiteturais
 

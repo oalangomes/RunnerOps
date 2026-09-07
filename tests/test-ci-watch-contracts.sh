@@ -50,8 +50,13 @@ if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
   exit 0
 fi
 
-if [[ "${1:-}" == "api" ]]; then
-  case "${TEST_SCENARIO:-success}" in
+[[ "${1:-}" == "api" ]] || exit 1
+
+request="${2:-}"
+scenario="${TEST_SCENARIO:-success}"
+
+if [[ "$request" == *"/actions/runs?"* ]]; then
+  case "$scenario" in
     success)
       printf '101\tCI\tcompleted\tsuccess\thttps://github.com/example/project/actions/runs/101\t1\n'
       printf '102\tLint\tcompleted\tskipped\thttps://github.com/example/project/actions/runs/102\t1\n'
@@ -59,11 +64,17 @@ if [[ "${1:-}" == "api" ]]; then
     failure)
       printf '201\tCI\tcompleted\tfailure\thttps://github.com/example/project/actions/runs/201\t1\n'
       ;;
+    startup-failure)
+      printf '202\tCI\tcompleted\tstartup_failure\thttps://github.com/example/project/actions/runs/202\t1\n'
+      ;;
     cancelled)
       printf '301\tCI\tcompleted\tcancelled\thttps://github.com/example/project/actions/runs/301\t1\n'
       ;;
-    active)
-      printf '401\tCI\tin_progress\t\thttps://github.com/example/project/actions/runs/401\t1\n'
+    self-hosted-offline)
+      printf '501\tCI\tqueued\t\thttps://github.com/example/project/actions/runs/501\t1\n'
+      ;;
+    self-hosted-busy)
+      printf '601\tCI\tqueued\t\thttps://github.com/example/project/actions/runs/601\t1\n'
       ;;
     no-runs)
       ;;
@@ -77,7 +88,40 @@ if [[ "${1:-}" == "api" ]]; then
   exit 0
 fi
 
-exit 1
+if [[ "$request" == *"/actions/runs/201/jobs?"* ]]; then
+  printf '9001\tunit-tests\tfailure\tlocal-runner-1\tDefault\tself-hosted,Linux,X64,project\tRun tests\tfailure\n'
+  exit 0
+fi
+
+if [[ "$request" == *"/actions/runs/202/jobs?"* ]]; then
+  exit 0
+fi
+
+if [[ "$request" == *"/actions/runs/501/jobs?"* ]]; then
+  printf '9501\tbuild\tqueued\t-\tDefault\tself-hosted,Linux,X64,project\n'
+  exit 0
+fi
+
+if [[ "$request" == *"/actions/runs/601/jobs?"* ]]; then
+  printf '9601\tbuild\tqueued\t-\tDefault\tself-hosted,Linux,X64,project\n'
+  exit 0
+fi
+
+if [[ "$request" == *"/actions/runners?"* ]]; then
+  case "$scenario" in
+    self-hosted-offline)
+      printf '77\tlocal-runner-1\toffline\tfalse\tself-hosted,Linux,X64,project\n'
+      ;;
+    self-hosted-busy)
+      printf '78\tlocal-runner-2\tonline\ttrue\tself-hosted,Linux,X64,project\n'
+      ;;
+    *)
+      ;;
+  esac
+  exit 0
+fi
+
+exit 0
 EOF
 
   chmod +x "$fake_bin/gh"
@@ -119,7 +163,7 @@ test_runnerctl_success_and_sha_correlation() {
   pass "runnerctl ci watch correlaciona repo+SHA e agrega workflows"
 }
 
-test_ci_failure_exit_code() {
+test_ci_failure_includes_job_step_and_runner() {
   local output rc
   : > "$TMP_ROOT/gh.log"
 
@@ -130,11 +174,32 @@ test_ci_failure_exit_code() {
 
   assert_status 1 "$rc" "failure de workflow deve retornar exit 1"
   assert_contains "$output" '"status":"failure"' "payload deve indicar failure"
-  assert_contains "$output" '"kind":"ci"' "failure de workflow não pode virar infra failure"
+  assert_contains "$output" '"kind":"ci"' "failure de teste não pode virar infra failure"
   assert_contains "$output" '"workflow":"CI"' "payload deve identificar workflow"
+  assert_contains "$output" '"job":"unit-tests"' "payload deve identificar job"
+  assert_contains "$output" '"step":"Run tests"' "payload deve identificar step"
+  assert_contains "$output" '"runner_name":"local-runner-1"' "payload deve identificar runner"
+  assert_contains "$output" '"runner_group":"Default"' "payload deve identificar runner group"
+  assert_contains "$output" '"runner_labels":"self-hosted,Linux,X64,project"' "payload deve expor labels do job"
   assert_contains "$output" '"run_id":201' "payload deve identificar run"
 
-  pass "CI failure retorna payload estruturado e exit 1"
+  pass "CI failure é enriquecido com job/step/runner sem mudar classificação"
+}
+
+test_startup_failure_is_infra() {
+  local output rc
+
+  set +e
+  output="$(run_helper startup-failure --repo example/project --sha ffffffffffffffffffffffffffffffffffffffff --json --timeout 0 --interval 0 --settle-polls 1 2>&1)"
+  rc=$?
+  set -e
+
+  assert_status 2 "$rc" "startup_failure deve retornar exit 2"
+  assert_contains "$output" '"status":"failure"' "startup failure deve permanecer failure conclusivo"
+  assert_contains "$output" '"kind":"infra"' "startup failure deve ser infraestrutura"
+  assert_contains "$output" '"diagnosis":"workflow_startup_failure"' "diagnóstico deve ser explícito"
+
+  pass "workflow startup_failure é separado de falha de código"
 }
 
 test_cancelled_and_timeout_are_inconclusive() {
@@ -155,10 +220,45 @@ test_cancelled_and_timeout_are_inconclusive() {
   assert_status 3 "$rc" "timeout sem runs deve retornar exit 3"
   assert_contains "$output" '"status":"timeout"' "timeout deve ser explícito"
 
-  pass "cancelled/no-runs permanecem inconclusivos e não viram CI failure"
+  pass "cancelled/no-runs permanecem inconclusivos"
 }
 
-test_infra_failures_are_distinct() {
+test_self_hosted_unavailable_is_infra() {
+  local output rc
+
+  set +e
+  output="$(run_helper self-hosted-offline --repo example/project --sha 1111111111111111111111111111111111111111 --json --timeout 0 --interval 0 --settle-polls 1 2>&1)"
+  rc=$?
+  set -e
+
+  assert_status 2 "$rc" "job queued sem runner online compatível deve retornar exit 2"
+  assert_contains "$output" '"status":"error"' "runner indisponível deve ser erro de infra"
+  assert_contains "$output" '"kind":"infra"' "runner indisponível deve ser infraestrutura"
+  assert_contains "$output" '"job":"build"' "diagnóstico deve apontar job aguardando"
+  assert_contains "$output" '"runner_labels":"self-hosted,Linux,X64,project"' "diagnóstico deve apontar labels requeridas"
+  assert_contains "$output" '"diagnosis":"no_matching_online_self_hosted_runner"' "diagnóstico deve identificar ausência de runner online"
+  assert_contains "$output" 'runnerctl doctor/health' "mensagem deve orientar diagnóstico sem mutação automática"
+
+  pass "self-hosted queued sem capacidade online é infra explícita"
+}
+
+test_self_hosted_busy_remains_inconclusive() {
+  local output rc
+
+  set +e
+  output="$(run_helper self-hosted-busy --repo example/project --sha 2222222222222222222222222222222222222222 --json --timeout 0 --interval 0 --settle-polls 1 2>&1)"
+  rc=$?
+  set -e
+
+  assert_status 3 "$rc" "runner compatível ocupado não deve virar infra failure"
+  assert_contains "$output" '"status":"timeout"' "capacidade ocupada deve continuar timeout"
+  assert_contains "$output" '"kind":"inconclusive"' "capacidade ocupada deve ser inconclusiva"
+  assert_contains "$output" '"diagnosis":"matching_self_hosted_runners_busy"' "diagnóstico deve distinguir busy de offline"
+
+  pass "runner compatível busy não é confundido com falha de infraestrutura"
+}
+
+test_access_failures_are_distinct() {
   local output rc
 
   set +e
@@ -175,14 +275,17 @@ test_infra_failures_are_distinct() {
   assert_status 2 "$rc" "API failure deve retornar exit 2"
   assert_contains "$output" '"status":"error"' "API failure deve ser erro estruturado"
 
-  pass "falhas de acesso/infra são distintas de falhas do CI"
+  pass "falhas de acesso ao GitHub são distintas de falhas do CI"
 }
 
 main() {
   test_runnerctl_success_and_sha_correlation
-  test_ci_failure_exit_code
+  test_ci_failure_includes_job_step_and_runner
+  test_startup_failure_is_infra
   test_cancelled_and_timeout_are_inconclusive
-  test_infra_failures_are_distinct
+  test_self_hosted_unavailable_is_infra
+  test_self_hosted_busy_remains_inconclusive
+  test_access_failures_are_distinct
   printf '\nContratos de ci watch passaram.\n'
 }
 

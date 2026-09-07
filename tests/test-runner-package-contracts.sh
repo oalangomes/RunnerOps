@@ -41,10 +41,10 @@ test_package_cache_contract() {
   digest="$(sha256sum "$payload" | awk '{print $1}')"
   asset="actions-runner-linux-x64-9.9.9.tar.gz"
 
-  cat > "$fake_bin/gh" <<EOF
+  cat > "$fake_bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >> "$log"
+printf '%s\n' "$*" >> "${TEST_GH_LOG:?}"
 
 if [[ "${1:-}" != "api" ]]; then
   exit 1
@@ -52,18 +52,24 @@ fi
 
 case "$*" in
   *"repos/actions/runner/releases/tags/v9.9.9"*)
-    printf '777\t%s\tsha256:%s\n' "$asset" "$digest"
+    printf '777\t%s\tsha256:%s\n' "${TEST_ASSET_NAME:?}" "${TEST_DIGEST:?}"
     ;;
   *"repos/actions/runner/releases/assets/777"*)
-    printf 'asset-download\n' >> "$log"
-    cat "$payload"
+    printf 'asset-download\n' >> "${TEST_GH_LOG:?}"
+    cat "${TEST_PAYLOAD:?}"
     ;;
   *)
+    printf 'unexpected fake gh invocation: %s\n' "$*" >&2
     exit 1
     ;;
 esac
 EOF
   chmod +x "$fake_bin/gh"
+
+  export TEST_GH_LOG="$log"
+  export TEST_ASSET_NAME="$asset"
+  export TEST_DIGEST="$digest"
+  export TEST_PAYLOAD="$payload"
 
   first="$(
     PATH="$fake_bin:$PATH" \

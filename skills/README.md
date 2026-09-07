@@ -8,8 +8,8 @@ Elas usam o formato portável `SKILL.md` de Agent Skills para que o mesmo fluxo 
 
 | Skill | Finalidade |
 |---|---|
-| `start-project-runners-before-pr` | Antes de publicar uma PR, iniciar e validar somente os runners locais mapeados para o repositório atual. |
-| `manage-local-github-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners locais do GitHub Actions. |
+| `start-project-runners-before-pr` | Antes da PR, garantir somente os runners do repositório atual; depois da publicação, consumir `runnerctl ci watch` quando a tarefa exigir aguardar o CI. |
+| `manage-local-github-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners, além de consumir feedback estruturado do CI por PR/SHA. |
 
 ## Instalação
 
@@ -90,6 +90,8 @@ RUNNER_BOOT_POLICY=on-demand
 ```
 
 As skills dependem apenas do comando instalado `runnerctl`; elas não precisam conhecer o diretório onde a plataforma foi clonada.
+
+Para feedback de CI, as skills usam somente a interface pública (`runnerctl ci watch`) e preservam a distinção entre falha de workflow e falha de runner/infraestrutura.
 
 As skills nunca embutem nem persistem registration tokens do GitHub Runner.
 

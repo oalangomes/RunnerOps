@@ -243,6 +243,16 @@ runnerctl ci watch owner/repo --sha <commit-sha> --json
 
 Falha de teste/build **não** é tratada como falha do runner e o watcher não para, reinicia nem remove serviços.
 
+Quando um workflow falha, o payload estruturado também tenta identificar `job`, `step`, runner, grupo e labels associados à falha.
+
+Em timeout com job `self-hosted` ainda em fila, o watcher consulta a capacidade disponível para as labels requeridas:
+
+- nenhum runner compatível online → `kind=infra`, exit `2`, com orientação para `runnerctl doctor/health`;
+- runners compatíveis apenas ocupados → continua `inconclusive`, exit `3`;
+- runner compatível online ou job já em execução → continua aguardando/termina como timeout inconclusivo.
+
+`startup_failure` do workflow também é classificado como infraestrutura. Nenhum desses diagnósticos executa recuperação automática.
+
 ### Remoção segura
 
 ```bash

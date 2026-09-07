@@ -30,6 +30,14 @@ assert_status() {
   }
 }
 
+assert_not_contains() {
+  local haystack="$1" needle="$2" message="$3"
+  [[ "$haystack" != *"$needle"* ]] || {
+    printf 'unexpected: %s\noutput:\n%s\n' "$needle" "$haystack" >&2
+    fail "$message"
+  }
+}
+
 make_fake_gh() {
   local fake_bin="$TMP_ROOT/bin"
   mkdir -p "$fake_bin"
@@ -55,11 +63,30 @@ fi
 request="${2:-}"
 scenario="${TEST_SCENARIO:-success}"
 
+if [[ "$request" == "repos/example/project/pulls/42" ]]; then
+  printf '%s\n' 'abababababababababababababababababababab'
+  exit 0
+fi
+
 if [[ "$request" == *"/actions/runs?"* ]]; then
   case "$scenario" in
-    success)
+    success|pr-success)
       printf '101\tCI\tcompleted\tsuccess\thttps://github.com/example/project/actions/runs/101\t1\n'
       printf '102\tLint\tcompleted\tskipped\thttps://github.com/example/project/actions/runs/102\t1\n'
+      ;;
+    rerun-success)
+      count=0
+      [[ -f "${TEST_GH_STATE:?}" ]] && count="$(cat "$TEST_GH_STATE")"
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$TEST_GH_STATE"
+      if [[ "$count" -eq 1 ]]; then
+        printf '701\tCI\tin_progress\t\thttps://github.com/example/project/actions/runs/701\t2\n'
+      else
+        printf '701\tCI\tcompleted\tsuccess\thttps://github.com/example/project/actions/runs/701\t2\n'
+      fi
+      ;;
+    rerun-failure)
+      printf '702\tCI\tcompleted\tfailure\thttps://github.com/example/project/actions/runs/702\t2\n'
       ;;
     failure)
       printf '201\tCI\tcompleted\tfailure\thttps://github.com/example/project/actions/runs/201\t1\n'
@@ -88,22 +115,32 @@ if [[ "$request" == *"/actions/runs?"* ]]; then
   exit 0
 fi
 
-if [[ "$request" == *"/actions/runs/201/jobs?"* ]]; then
+if [[ "$request" == *"/actions/runs/201/attempts/1/jobs?"* ]]; then
   printf '9001\tunit-tests\tfailure\tlocal-runner-1\tDefault\tself-hosted,Linux,X64,project\tRun tests\tfailure\n'
   exit 0
 fi
 
-if [[ "$request" == *"/actions/runs/202/jobs?"* ]]; then
+if [[ "$request" == *"/actions/runs/202/attempts/1/jobs?"* ]]; then
   exit 0
 fi
 
-if [[ "$request" == *"/actions/runs/501/jobs?"* ]]; then
+if [[ "$request" == *"/actions/runs/501/attempts/1/jobs?"* ]]; then
   printf '9501\tbuild\tqueued\t-\tDefault\tself-hosted,Linux,X64,project\n'
   exit 0
 fi
 
-if [[ "$request" == *"/actions/runs/601/jobs?"* ]]; then
+if [[ "$request" == *"/actions/runs/601/attempts/1/jobs?"* ]]; then
   printf '9601\tbuild\tqueued\t-\tDefault\tself-hosted,Linux,X64,project\n'
+  exit 0
+fi
+
+if [[ "$request" == *"/actions/runs/702/attempts/2/jobs?"* ]]; then
+  printf '9702\tunit-tests\tfailure\tlocal-runner-2\tDefault\tself-hosted,Linux,X64,project\tRun tests on rerun\tfailure\n'
+  exit 0
+fi
+
+if [[ "$request" == *"/actions/runs/702/attempts/1/jobs?"* || "$request" == *"/actions/runs/702/jobs?"* ]]; then
+  printf '9701\tunit-tests\tfailure\tlocal-runner-1\tDefault\tself-hosted,Linux,X64,project\tStale first attempt\tfailure\n'
   exit 0
 fi
 
@@ -133,8 +170,10 @@ run_helper() {
   shift
   local fake_bin
   fake_bin="$(make_fake_gh)"
+  rm -f "$TMP_ROOT/gh-state"
   TEST_SCENARIO="$scenario" \
   TEST_GH_LOG="$TMP_ROOT/gh.log" \
+  TEST_GH_STATE="$TMP_ROOT/gh-state" \
   PATH="$fake_bin:$PATH" \
     bash "$ROOT/ci-watch.sh" "$@"
 }
@@ -148,6 +187,7 @@ test_runnerctl_success_and_sha_correlation() {
   output="$(
     TEST_SCENARIO=success \
     TEST_GH_LOG="$TMP_ROOT/gh.log" \
+    TEST_GH_STATE="$TMP_ROOT/gh-state" \
     PATH="$fake_bin:$PATH" \
     ACTIONS_RUNNERS_HOME="$ROOT" \
     XDG_CONFIG_HOME="$TMP_ROOT/config" \
@@ -161,6 +201,32 @@ test_runnerctl_success_and_sha_correlation() {
   assert_contains "$(cat "$TMP_ROOT/gh.log")" "head_sha=$current_sha" "consulta deve correlacionar o SHA atual"
 
   pass "runnerctl ci watch correlaciona repo+SHA e agrega workflows"
+}
+
+test_pr_correlation_resolves_head_sha() {
+  local fake_bin output log
+  fake_bin="$(make_fake_gh)"
+  : > "$TMP_ROOT/gh.log"
+  rm -f "$TMP_ROOT/gh-state"
+
+  output="$(
+    TEST_SCENARIO=pr-success \
+    TEST_GH_LOG="$TMP_ROOT/gh.log" \
+    TEST_GH_STATE="$TMP_ROOT/gh-state" \
+    PATH="$fake_bin:$PATH" \
+    ACTIONS_RUNNERS_HOME="$ROOT" \
+    XDG_CONFIG_HOME="$TMP_ROOT/config-pr" \
+    "$ROOT/runnerctl" ci watch . --pr 42 --json --timeout 0 --interval 0 --settle-polls 1
+  )"
+  log="$(cat "$TMP_ROOT/gh.log")"
+
+  assert_contains "$output" '"status":"success"' "watch por PR deve concluir normalmente"
+  assert_contains "$output" '"pr_number":42' "payload deve preservar número da PR"
+  assert_contains "$output" '"sha":"abababababababababababababababababababab"' "payload deve usar head SHA da PR"
+  assert_contains "$log" "repos/example/project/pulls/42" "watch deve resolver a PR explicitamente"
+  assert_contains "$log" "head_sha=abababababababababababababababababababab" "runs devem ser filtrados pelo head SHA resolvido"
+
+  pass "runnerctl ci watch --pr correlaciona PR ao head SHA correto"
 }
 
 test_ci_failure_includes_job_step_and_runner() {
@@ -182,8 +248,40 @@ test_ci_failure_includes_job_step_and_runner() {
   assert_contains "$output" '"runner_group":"Default"' "payload deve identificar runner group"
   assert_contains "$output" '"runner_labels":"self-hosted,Linux,X64,project"' "payload deve expor labels do job"
   assert_contains "$output" '"run_id":201' "payload deve identificar run"
+  assert_contains "$output" '"run_attempt":1' "payload deve identificar attempt observado"
+  assert_contains "$(cat "$TMP_ROOT/gh.log")" "/actions/runs/201/attempts/1/jobs" "detalhes devem ser consultados no attempt exato"
 
   pass "CI failure é enriquecido com job/step/runner sem mudar classificação"
+}
+
+test_rerun_uses_latest_attempt_without_stale_failure() {
+  local output rc log
+
+  : > "$TMP_ROOT/gh.log"
+  set +e
+  output="$(run_helper rerun-success --repo example/project --sha 7777777777777777777777777777777777777777 --json --timeout 5 --interval 0 --settle-polls 1 2>&1)"
+  rc=$?
+  set -e
+
+  assert_status 0 "$rc" "rerun ativo que conclui verde deve retornar success"
+  assert_contains "$output" '"status":"success"' "rerun concluído deve retornar success"
+
+  : > "$TMP_ROOT/gh.log"
+  set +e
+  output="$(run_helper rerun-failure --repo example/project --sha 8888888888888888888888888888888888888888 --json --timeout 0 --interval 0 --settle-polls 1 2>&1)"
+  rc=$?
+  set -e
+  log="$(cat "$TMP_ROOT/gh.log")"
+
+  assert_status 1 "$rc" "falha no segundo attempt continua sendo CI failure"
+  assert_contains "$output" '"run_id":702' "payload deve preservar run id do rerun"
+  assert_contains "$output" '"run_attempt":2' "payload deve identificar o segundo attempt"
+  assert_contains "$output" '"step":"Run tests on rerun"' "detalhes devem vir do attempt atual"
+  assert_not_contains "$output" 'Stale first attempt' "payload não pode reutilizar falha do attempt anterior"
+  assert_contains "$log" "/actions/runs/702/attempts/2/jobs" "watch deve consultar jobs do attempt 2"
+  assert_not_contains "$log" "/actions/runs/702/attempts/1/jobs" "watch não deve consultar jobs do attempt antigo"
+
+  pass "rerun/run_attempt não confunde resultado ou detalhes de tentativa anterior"
 }
 
 test_startup_failure_is_infra() {
@@ -280,7 +378,9 @@ test_access_failures_are_distinct() {
 
 main() {
   test_runnerctl_success_and_sha_correlation
+  test_pr_correlation_resolves_head_sha
   test_ci_failure_includes_job_step_and_runner
+  test_rerun_uses_latest_attempt_without_stale_failure
   test_startup_failure_is_infra
   test_cancelled_and_timeout_are_inconclusive
   test_self_hosted_unavailable_is_infra

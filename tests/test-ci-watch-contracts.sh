@@ -98,12 +98,12 @@ if [[ "$request" == *"/actions/runs/202/jobs?"* ]]; then
 fi
 
 if [[ "$request" == *"/actions/runs/501/jobs?"* ]]; then
-  printf '9501\tbuild\tqueued\t\tDefault\tself-hosted,Linux,X64,project\n'
+  printf '9501\tbuild\tqueued\t-\tDefault\tself-hosted,Linux,X64,project\n'
   exit 0
 fi
 
 if [[ "$request" == *"/actions/runs/601/jobs?"* ]]; then
-  printf '9601\tbuild\tqueued\t\tDefault\tself-hosted,Linux,X64,project\n'
+  printf '9601\tbuild\tqueued\t-\tDefault\tself-hosted,Linux,X64,project\n'
   exit 0
 fi
 

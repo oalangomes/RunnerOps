@@ -1,19 +1,19 @@
 # GitHub Actions Local Runners
 
-Uma central Linux leve para operar múltiplos GitHub Actions self-hosted runners com **systemd**, configuração local por máquina e execução **on-demand**.
+Uma central Linux leve para operar múltiplos runners self-hosted do GitHub Actions com **systemd**, configuração local por máquina e execução **on-demand**.
 
 O repositório contém a plataforma de gerenciamento. O inventário real de runners, caminhos locais e credenciais ficam fora do Git.
 
 ## O que este projeto oferece
 
 - múltiplos runners por repositório;
-- lifecycle systemd-first;
-- policy on-demand por padrão;
-- registry local por máquina;
+- ciclo de vida orientado por systemd;
+- política on-demand por padrão;
+- registro local por máquina;
 - cache persistente fora de `_work`;
 - operação por runner, grupo ou frota;
 - health, doctor, logs e planejamento de migração;
-- Cockpit opcional para UI do host;
+- Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
 
 ## Plataformas suportadas
@@ -32,10 +32,10 @@ O produto é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 
 | Capacidade | Interface pública |
 |---|---|
-| Inicializar máquina | `runnerctl init` |
+| Inicializar a máquina | `runnerctl init` |
 | Inventário e grupos | `runnerctl list`, `runnerctl groups` |
 | Status e saúde | `runnerctl status`, `runnerctl health`, `runnerctl doctor` |
-| Lifecycle | `runnerctl start/stop/restart/logs` |
+| Ciclo de vida | `runnerctl start/stop/restart/logs` |
 | On-demand / autostart | `runnerctl on-demand`, `runnerctl autostart` |
 | Repositório atual | `runnerctl repo .`, `runnerctl ensure .` |
 | Registrar runner | `runnerctl add .` |
@@ -47,22 +47,37 @@ O produto é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 ## Modelo
 
 ```text
-GitHub repository
+Repositório GitHub
       │
       ▼
-machine-local registry
+registro local da máquina
       │
       ▼
 runners.sh / runner-services.sh
       │
       ▼
-systemd unit per runner
+unidade systemd por runner
       │
-      ├── idle + boot disabled   ← default on-demand
-      └── active                ← when a job/project needs it
+      ├── ocioso + boot desabilitado   ← padrão on-demand
+      └── ativo                        ← quando um job/projeto precisa
 ```
 
-## Quick start
+## Pré-requisitos
+
+Em uma máquina já preparada, a instalação leva poucos minutos.
+
+Você precisa de:
+
+- Linux x64 ou arm64 com systemd;
+- Git;
+- GitHub CLI (`gh`);
+- `tar`;
+- `sha256sum`;
+- `sudo` para instalação e controle das units systemd.
+
+No WSL2, habilite systemd antes de usar a plataforma.
+
+## Início rápido
 
 ### 1. Clone
 
@@ -71,15 +86,15 @@ git clone https://github.com/<owner>/actions-runners.git ~/actions-runners
 cd ~/actions-runners
 ```
 
-### 2. Install the public CLI
+### 2. Instale a CLI pública
 
 ```bash
 ./install.sh
 ```
 
-This installs `runnerctl` under `~/.local/bin` and stores the checkout location in XDG config, so agents and humans do not need to know where the repository was cloned.
+Isso instala `runnerctl` em `~/.local/bin` e salva a localização do checkout na configuração XDG. Humanos e agentes não precisam saber onde o repositório foi clonado.
 
-Then initialize machine-local state:
+Depois, inicialize o estado local da máquina:
 
 ```bash
 runnerctl init
@@ -95,7 +110,7 @@ Isso cria, por padrão:
 ~/.local/state/actions-runners/
 ```
 
-O `config.env` aponta para o estado desta máquina. Config, data, cache e runtime state ficam fora do checkout:
+O `config.env` aponta para o estado desta máquina. Configuração, dados, cache e estado de runtime ficam fora do checkout:
 
 ```bash
 ACTIONS_RUNNERS_HOME="/path/to/actions-runners"
@@ -106,36 +121,36 @@ RUNNER_STATE_ROOT="$HOME/.local/state/actions-runners"
 RUNNER_BOOT_POLICY="on-demand"
 ```
 
-A lista real de runners **não é versionada** e o checkout pode permanecer read-only durante operação normal.
+A lista real de runners **não é versionada** e o checkout pode permanecer somente leitura durante a operação normal.
 
-### 3. Register a runner
+### 3. Registre um runner
 
-Authenticate GitHub CLI once:
+Autentique a GitHub CLI uma vez:
 
 ```bash
 gh auth status
 ```
 
-Inside the target repository:
+Dentro do repositório alvo:
 
 ```bash
 runnerctl add .
 ```
 
-The command:
+O comando:
 
-- resolves the current `owner/repo`;
-- infers a technical profile from project files;
-- requests a short-lived registration token through `gh`;
-- detects Linux architecture (`x64` or `arm64`);
-- resolves the latest official `actions/runner` release;
-- downloads it to XDG cache;
-- verifies the SHA-256 digest published by GitHub;
-- registers the runner;
-- installs the systemd service;
-- validates doctor/health.
+- resolve o `owner/repo` atual;
+- infere um perfil técnico a partir dos arquivos do projeto;
+- solicita um registration token de curta duração via `gh`;
+- detecta a arquitetura Linux (`x64` ou `arm64`);
+- resolve a release oficial mais recente de `actions/runner`;
+- baixa o pacote para o cache XDG;
+- verifica o digest SHA-256 publicado pelo GitHub;
+- registra o runner;
+- instala o serviço systemd;
+- valida doctor/health.
 
-Overrides remain available when needed:
+Sobrescritas continuam disponíveis quando necessário:
 
 ```bash
 runnerctl add . \
@@ -145,11 +160,11 @@ runnerctl add . \
   --runner-arch auto
 ```
 
-For offline/manual package control, `configure-runner.sh --runner-tar ... --expected-sha256 ...` remains available as an internal/advanced escape hatch.
+Para controle manual/offline do pacote, `configure-runner.sh --runner-tar ... --expected-sha256 ...` permanece disponível como escape hatch interno/avançado.
 
-### 4. On-demand result
+### 4. Resultado on-demand
 
-With the default `on-demand` policy, registration/migration proves the GitHub session and finishes with:
+Com a política padrão `on-demand`, o registro/migração comprova a sessão com o GitHub e termina com:
 
 ```text
 state=idle
@@ -161,7 +176,7 @@ O runner não precisa ficar permanentemente ligado.
 
 ## Operação diária
 
-Use `runnerctl` as the stable public interface:
+Use `runnerctl` como interface pública estável:
 
 ```bash
 runnerctl list
@@ -189,7 +204,7 @@ Para o repositório atual:
 runnerctl ensure .
 ```
 
-Evite `start all` no uso normal. O modelo recomendado é acordar somente a capacidade necessária.
+Evite `start all` no uso normal. O modelo recomendado é acordar apenas a capacidade necessária.
 
 ### Remoção segura
 
@@ -198,7 +213,7 @@ runnerctl remove my-api --plan
 runnerctl remove my-api --yes
 ```
 
-A remoção padrão para o runner exato para/desinstala o serviço, valida e remove a registration remota, remove sua entrada do registry e **preserva a pasta local**.
+A remoção padrão do runner exato interrompe e desinstala o serviço, valida e remove o registro remoto, remove sua entrada do registro local e **preserva a pasta local**.
 
 Para apagar também a pasta da instância:
 
@@ -206,7 +221,7 @@ Para apagar também a pasta da instância:
 runnerctl remove my-api --yes --delete-dir
 ```
 
-Para remover apenas da plataforma local e manter a registration no GitHub:
+Para remover apenas da plataforma local e manter o registro no GitHub:
 
 ```bash
 runnerctl remove my-api --yes --keep-remote
@@ -216,7 +231,7 @@ runnerctl remove my-api --yes --keep-remote
 
 ## On-demand e autostart
 
-On-demand é o default:
+On-demand é o padrão:
 
 ```bash
 runnerctl on-demand my-api
@@ -228,7 +243,7 @@ Se uma máquina ou runner realmente precisar ficar sempre disponível:
 runnerctl autostart my-api
 ```
 
-Em on-demand, `inactive + boot disabled` representa um runner saudável em idle.
+Em on-demand, `inactive + boot disabled` representa um runner saudável e ocioso.
 
 ## Agent Skills
 
@@ -262,7 +277,7 @@ A skill `start-project-runners-before-pr` pode acordar apenas os runners associa
 
 A skill `manage-local-github-runners` cobre inventário, health, start/stop, diagnóstico, cadastro e remoção governada de runners.
 
-Veja [skills/README.md](skills/README.md) para destinos e instalação project-local.
+Veja [skills/README.md](skills/README.md) para destinos e instalação local por projeto.
 
 ## Configuração por máquina
 
@@ -272,7 +287,7 @@ Arquivo de exemplo versionado:
 runners.conf.example
 ```
 
-Registry real:
+Registro real:
 
 ```text
 ~/.config/actions-runners/runners.conf
@@ -301,9 +316,9 @@ O cache durável da plataforma fica fora do checkout, sob `${XDG_CACHE_HOME:-~/.
 └── stacks/         # npm/pnpm/yarn, pip, Gradle/Maven, Pub, Go, NuGet etc.
 ```
 
-O prewarm de **GitHub Actions** é a exceção: `prewarm-actions.sh` aquece `<runner>/_work/_actions`, porque essa é a estrutura consumida pelo runner e ela é específica de cada instância.
+O prewarm de **GitHub Actions** é a exceção: `prewarm-actions.sh` aquece `<runner>/_work/_actions`, porque essa é a estrutura consumida pelo runner e é específica de cada instância.
 
-Runtime state (service env, logs/PIDs legados durante migração) fica sob `${XDG_STATE_HOME:-~/.local/state}/actions-runners`.
+O estado de runtime (service env, logs/PIDs legados durante migração) fica sob `${XDG_STATE_HOME:-~/.local/state}/actions-runners`.
 
 Caches podem ser inspecionados com:
 
@@ -323,13 +338,13 @@ Prewarm:
 
 ## Cockpit
 
-Cockpit é opcional e recomendado quando você quer uma UI para serviços, journal, CPU, RAM, disco e processos:
+Cockpit é opcional e recomendado quando você quer uma interface para serviços, journal, CPU, RAM, disco e processos:
 
 ```bash
 ./setup-cockpit.sh install
 ```
 
-Não exponha a porta administrativa diretamente à internet. Para acesso remoto, prefira VPN/rede privada.
+Não exponha a porta administrativa diretamente à internet. Para acesso remoto, prefira VPN ou rede privada.
 
 Mais detalhes em [docs/systemd-cockpit-migration.md](docs/systemd-cockpit-migration.md).
 
@@ -377,6 +392,10 @@ bash -n \
 ./runners.sh health all
 ```
 
+O CI também valida sintaxe shell, defaults XDG, instalação do `runnerctl`, plano de remoção governada, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
+
+Além do CI, a release foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG.
+
 ## Segurança
 
 - não execute PR externo não confiável em runner persistente;
@@ -392,10 +411,14 @@ bash -n \
 
 - [Agent Skills](skills/README.md)
 - [systemd + Cockpit](docs/systemd-cockpit-migration.md)
-- [Home lab blueprint](docs/notebook-central-blueprint.md)
+- [Home lab](docs/notebook-central-blueprint.md)
+
+## Licença
+
+Distribuído sob a licença **Apache License 2.0**. Consulte [LICENSE](LICENSE).
 
 ## Estado do projeto
 
-A direção atual é **systemd-first + on-demand + machine-local configuration**.
+A direção atual é **systemd-first + on-demand + configuração local por máquina**.
 
-Compatibilidade com lifecycle legado ainda existe apenas para migração; novas instalações devem usar systemd.
+A compatibilidade com ciclo de vida legado existe apenas para migração; novas instalações devem usar systemd.

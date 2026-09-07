@@ -1,0 +1,43 @@
+
+name: Runnerctl E2E
+
+
+
+on:
+
+  push:
+
+    branches:
+
+      - test/runnerctl-e2e
+
+
+
+jobs:
+
+  prove-runner:
+
+    runs-on: [self-hosted, runnerctl-e2e-test]
+
+    timeout-minutes: 5
+
+
+
+    steps:
+
+      - name: Prove execution
+
+        shell: bash
+
+        run: |
+
+          echo "Runner: $RUNNER_NAME"
+
+          echo "OS: $RUNNER_OS"
+
+          echo "Arch: $RUNNER_ARCH"
+
+          uname -a
+
+          git --version
+

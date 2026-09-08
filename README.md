@@ -160,7 +160,8 @@ runnerctl add .
 
 O comando:
 
-- resolve o `owner/repo` atual;
+- resolve o `owner/repo` atual e confirma o `nameWithOwner` canônico no GitHub;
+- valida systemd e acesso administrativo antes de solicitar qualquer registration token;
 - infere um perfil técnico a partir dos arquivos do projeto;
 - solicita um registration token de curta duração via `gh`;
 - detecta a arquitetura Linux (`x64` ou `arm64`);
@@ -170,6 +171,8 @@ O comando:
 - registra o runner;
 - instala o serviço systemd;
 - valida doctor/health.
+
+Se `sudo` exigir autenticação e a execução não tiver terminal interativo, `runnerctl add` falha antes do registro remoto e orienta executar `sudo -v` localmente. Se ocorrer uma falha depois do registro, a CLI reporta o estado como `PARTIAL` ou `INCONCLUSIVE` e informa comandos de recuperação em vez de sugerir repetir `add` às cegas.
 
 Sobrescritas continuam disponíveis quando necessário:
 

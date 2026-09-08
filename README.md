@@ -258,6 +258,8 @@ runnerctl ensure .
 
 Evite `start all` no uso normal. O modelo recomendado é acordar apenas a capacidade necessária.
 
+No backend legado, `runnerctl logs <runner>` mostra as últimas linhas do log local e também o `_diag` mais recente quando disponível; log vazio ou ausente é reportado explicitamente. Em runners systemd, o comando continua usando o journal da unit.
+
 ### Aguardar o CI do commit atual
 
 Depois de publicar um push ou PR, o `runnerctl` pode aguardar os workflows associados ao SHA atual:

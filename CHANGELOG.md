@@ -1,8 +1,14 @@
 # Changelog
 
-Mudanças relevantes do `runnerctl` são registradas aqui.
+Mudanças relevantes do RunnerOps e de sua CLI pública `runnerctl` são registradas aqui.
 
 O projeto segue versionamento SemVer enquanto a API pública amadurece. Em versões `0.x`, mudanças incompatíveis continuam sendo evitadas e devem ser explicitadas quando inevitáveis.
+
+## Unreleased
+
+### Changed
+
+- o produto e o repositório público passam a se chamar **RunnerOps**; a CLI pública permanece `runnerctl` para preservar o contrato existente.
 
 ## v0.2.0 — 2026-09-08
 

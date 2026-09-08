@@ -1,8 +1,10 @@
-# runnerctl
+# RunnerOps
 
-**Release estável atual:** [v0.2.0](https://github.com/oalangomes/runnerctl/releases/tag/v0.2.0)
+**Release estável atual:** [v0.2.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.2.0)
 
-Uma central Linux leve para operar múltiplos runners self-hosted do GitHub Actions com **systemd**, configuração local por máquina e execução **on-demand**.
+**CLI pública:** `runnerctl`
+
+RunnerOps é uma central Linux leve para operar múltiplos runners self-hosted do GitHub Actions com **systemd**, configuração local por máquina e execução **on-demand**.
 
 O repositório contém a plataforma de gerenciamento. O inventário real de runners, caminhos locais e credenciais ficam fora do Git.
 
@@ -28,7 +30,7 @@ O repositório contém a plataforma de gerenciamento. O inventário real de runn
 | macOS nativo | ❌ fora do escopo |
 | Windows nativo | ❌ fora do escopo |
 
-O produto é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; macOS exigiria `launchd` e Windows exigiria um backend de Windows Services, ambos fora do escopo atual.
+RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; macOS exigiria `launchd` e Windows exigiria um backend de Windows Services, ambos fora do escopo atual.
 
 ## Catálogo de funcionalidades
 
@@ -65,7 +67,7 @@ unidade systemd por runner
       └── ativo                        ← quando um job/projeto precisa
 ```
 
-`runnerctl` é a interface pública estável. `runners.sh`, `runner-services.sh` e os demais scripts do checkout são detalhes de implementação e migração.
+RunnerOps é o produto; `runnerctl` é sua interface pública estável. `runners.sh`, `runner-services.sh` e os demais scripts do checkout são detalhes de implementação e migração.
 
 ## Pré-requisitos
 
@@ -87,8 +89,8 @@ No WSL2, habilite systemd antes de usar a plataforma.
 ### 1. Clone
 
 ```bash
-git clone https://github.com/oalangomes/runnerctl.git ~/runnerctl
-cd ~/runnerctl
+git clone https://github.com/oalangomes/RunnerOps.git ~/runnerops
+cd ~/runnerops
 ```
 
 Para uma instalação estável, prefira uma tag publicada (`vX.Y.Z`). A branch `master` representa o estado de desenvolvimento entre releases.
@@ -126,7 +128,7 @@ Isso cria, por padrão:
 O `config.env` aponta para o estado desta máquina. Configuração, dados, cache e estado de runtime ficam fora do checkout:
 
 ```bash
-ACTIONS_RUNNERS_HOME="/path/to/runnerctl"
+ACTIONS_RUNNERS_HOME="/path/to/runnerops"
 RUNNERS_CONFIG="$HOME/.config/actions-runners/runners.conf"
 RUNNER_DATA_ROOT="$HOME/.local/share/actions-runners/runners"
 RUNNER_CACHE_ROOT="$HOME/.cache/actions-runners"

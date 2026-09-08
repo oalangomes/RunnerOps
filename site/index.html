@@ -3,30 +3,39 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#07110d" />
+  <meta name="theme-color" content="#020d1b" />
   <meta name="description" content="RunnerOps is a lightweight Linux operations layer for GitHub Actions self-hosted runners. runnerctl provides systemd-first, on-demand operations, CI feedback and portable Agent Skills." />
-  <meta property="og:title" content="RunnerOps — operate self-hosted runners without babysitting them" />
-  <meta property="og:description" content="A lightweight Linux operations layer for GitHub Actions self-hosted runners, powered by the runnerctl CLI." />
+  <meta property="og:title" content="RunnerOps — GitHub Actions self-hosted runner operations" />
+  <meta property="og:description" content="Lightweight, systemd-first operations for on-demand GitHub Actions self-hosted runners, powered by the runnerctl CLI." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://oalangomes.github.io/RunnerOps/" />
   <title>RunnerOps — GitHub Actions self-hosted runner operations</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="styles.css" />
+  <script src="i18n.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main" data-i18n="skip">Skip to content</a>
 
   <header class="topbar">
     <a class="brand" href="#top" aria-label="RunnerOps home">
-      <span class="brand-mark" aria-hidden="true">R</span>
-      <span>RunnerOps</span>
+      <span class="brand-mark" aria-hidden="true">&gt;_</span>
+      <span class="brand-word"><span>Runner</span><strong>Ops</strong></span>
     </a>
-    <nav aria-label="Primary navigation">
-      <a href="#why">Why</a>
-      <a href="#architecture">Architecture</a>
-      <a href="#evidence">Evidence</a>
-      <a class="nav-github" href="https://github.com/oalangomes/RunnerOps">GitHub</a>
-    </nav>
+
+    <div class="header-actions">
+      <nav data-i18n-aria="navAria" aria-label="Primary navigation">
+        <a href="#why" data-i18n="navWhy">Why</a>
+        <a href="#architecture" data-i18n="navArchitecture">Architecture</a>
+        <a href="#evidence" data-i18n="navEvidence">Evidence</a>
+        <a class="nav-github" href="https://github.com/oalangomes/RunnerOps">GitHub</a>
+      </nav>
+
+      <div class="language-switcher" role="group" data-i18n-aria="languageAria" aria-label="Language">
+        <button type="button" data-lang="en" aria-pressed="true">EN</button>
+        <button type="button" data-lang="pt-BR" aria-pressed="false">PT-BR</button>
+      </div>
+    </div>
   </header>
 
   <main id="main">
@@ -35,22 +44,28 @@
       <div class="hero-glow hero-glow-two" aria-hidden="true"></div>
 
       <div class="hero-copy">
-        <p class="eyebrow">Linux · systemd · GitHub Actions · Developer Tooling</p>
-        <h1>Operate self-hosted runners.<br /><span>Without babysitting them.</span></h1>
-        <p class="lede">
+        <p class="eyebrow">GitHub Actions · Self-hosted runners · Linux · systemd</p>
+
+        <div class="hero-brand" aria-label="RunnerOps">
+          <span class="terminal-logo" aria-hidden="true">&gt;_</span>
+          <span class="hero-wordmark"><span>Runner</span><strong>Ops</strong></span>
+        </div>
+
+        <h1 data-i18n-html="heroTitle">Operate self-hosted runners.<br /><span>Without babysitting them.</span></h1>
+        <p class="lede" data-i18n-html="heroLede">
           RunnerOps is a lightweight Linux operations layer for GitHub Actions self-hosted runners.
           Its public CLI, <code>runnerctl</code>, keeps lifecycle, machine-local state, diagnostics and CI feedback behind one stable interface.
         </p>
 
         <div class="hero-actions">
-          <a class="button primary" href="https://github.com/oalangomes/RunnerOps">View on GitHub</a>
+          <a class="button primary" href="https://github.com/oalangomes/RunnerOps" data-i18n="viewGithub">View on GitHub</a>
           <a class="button secondary" href="https://github.com/oalangomes/RunnerOps/releases/tag/v0.2.1">RunnerOps v0.2.1</a>
         </div>
 
-        <div class="install" aria-label="Quick install">
+        <div class="install" data-i18n-aria="quickStartAria" aria-label="Quick install">
           <div class="terminal-head">
-            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            <span>quick start</span>
+            <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
+            <span data-i18n="quickStart">quick start</span>
           </div>
           <pre><code>git clone https://github.com/oalangomes/RunnerOps.git ~/runnerops
 cd ~/runnerops
@@ -60,36 +75,36 @@ runnerctl platform-doctor</code></pre>
         </div>
       </div>
 
-      <aside class="status-card" aria-label="RunnerOps operational model">
+      <aside class="status-card" data-i18n-aria="statusAria" aria-label="RunnerOps operational model">
         <div class="status-head">
           <span>runnerctl</span>
-          <span class="healthy"><i></i> healthy</span>
+          <span class="healthy"><i></i> <span data-i18n="healthy">healthy</span></span>
         </div>
         <div class="command"><span>$</span> runnerctl health all</div>
         <div class="runner-row">
           <div><strong>api-runner</strong><small>group: backend</small></div>
-          <span class="state idle">idle</span>
+          <span class="state idle" data-i18n="idle">idle</span>
         </div>
         <div class="runner-row">
           <div><strong>web-runner</strong><small>group: frontend</small></div>
-          <span class="state idle">idle</span>
+          <span class="state idle" data-i18n="idle">idle</span>
         </div>
         <div class="runner-row">
           <div><strong>build-runner</strong><small>group: tooling</small></div>
-          <span class="state active">active</span>
+          <span class="state active" data-i18n="active">active</span>
         </div>
         <div class="status-foot">
-          <span>boot: disabled</span>
-          <span>policy: on-demand</span>
+          <span data-i18n="bootDisabled">boot: disabled</span>
+          <span data-i18n="policyOnDemand">policy: on-demand</span>
         </div>
       </aside>
     </section>
 
     <section class="section" id="why">
       <div class="section-heading">
-        <p class="eyebrow">Why RunnerOps</p>
-        <h2>Self-hosted runners are infrastructure.<br />Treat them like it.</h2>
-        <p>
+        <p class="eyebrow" data-i18n="whyEyebrow">Why RunnerOps</p>
+        <h2 data-i18n-html="whyTitle">Self-hosted runners are infrastructure.<br />Treat them like it.</h2>
+        <p data-i18n="whyBody">
           A handful of local runners quickly becomes a mix of processes, paths, labels, stale state and manual recovery.
           RunnerOps turns that collection into a small, inspectable operational platform.
         </p>
@@ -98,26 +113,26 @@ runnerctl platform-doctor</code></pre>
       <div class="feature-grid">
         <article class="feature">
           <span class="feature-index">01</span>
-          <h3>On-demand by default</h3>
-          <p>Runners stay installed but do not need to burn resources while idle. Start only the capacity a repository needs.</p>
+          <h3 data-i18n="feature1Title">On-demand by default</h3>
+          <p data-i18n="feature1Body">Runners stay installed but do not need to burn resources while idle. Start only the capacity a repository needs.</p>
           <code>runnerctl ensure .</code>
         </article>
         <article class="feature">
           <span class="feature-index">02</span>
-          <h3>systemd is the authority</h3>
-          <p>Lifecycle is delegated to the Linux service manager instead of growing another custom process supervisor.</p>
+          <h3 data-i18n="feature2Title">systemd is the authority</h3>
+          <p data-i18n="feature2Body">Lifecycle is delegated to the Linux service manager instead of growing another custom process supervisor.</p>
           <code>runnerctl status all</code>
         </article>
         <article class="feature">
           <span class="feature-index">03</span>
-          <h3>Machine state stays local</h3>
-          <p>XDG configuration, data, cache and runtime state stay outside the Git checkout and outside your public repository.</p>
+          <h3 data-i18n="feature3Title">Machine state stays local</h3>
+          <p data-i18n="feature3Body">XDG configuration, data, cache and runtime state stay outside the Git checkout and outside your public repository.</p>
           <code>runnerctl platform-doctor</code>
         </article>
         <article class="feature">
           <span class="feature-index">04</span>
-          <h3>CI feedback for humans and agents</h3>
-          <p>Correlate GitHub Actions by repository + SHA or PR, keep CI failures distinct from runner infrastructure failures, and emit structured JSON.</p>
+          <h3 data-i18n="feature4Title">CI feedback for humans and agents</h3>
+          <p data-i18n="feature4Body">Correlate GitHub Actions by repository + SHA or PR, keep CI failures distinct from runner infrastructure failures, and emit structured JSON.</p>
           <code>runnerctl ci watch . --json</code>
         </article>
       </div>
@@ -125,61 +140,61 @@ runnerctl platform-doctor</code></pre>
 
     <section class="section architecture-section" id="architecture">
       <div class="section-heading narrow">
-        <p class="eyebrow">Architecture</p>
-        <h2>A thin control plane over native Linux primitives.</h2>
-        <p>RunnerOps keeps the public boundary small. The CLI orchestrates internal scripts; systemd remains responsible for service lifecycle.</p>
+        <p class="eyebrow" data-i18n="architectureEyebrow">Architecture</p>
+        <h2 data-i18n="architectureTitle">A thin control plane over native Linux primitives.</h2>
+        <p data-i18n="architectureBody">RunnerOps keeps the public boundary small. The CLI orchestrates internal scripts; systemd remains responsible for service lifecycle.</p>
       </div>
 
-      <div class="architecture" role="img" aria-label="Human or coding agent calls runnerctl, which invokes internal scripts and systemd services for GitHub Actions runners.">
-        <div class="arch-node arch-source"><span>Human / coding agent</span><small>operator</small></div>
+      <div class="architecture" role="img" data-i18n-aria="architectureAria" aria-label="Human or coding agent calls runnerctl, which invokes internal scripts and systemd services for GitHub Actions runners.">
+        <div class="arch-node arch-source"><span data-i18n="archOperator">Human / coding agent</span><small data-i18n="archOperatorSmall">operator</small></div>
         <span class="arrow">→</span>
-        <div class="arch-node arch-primary"><span>runnerctl</span><small>stable CLI boundary</small></div>
+        <div class="arch-node arch-primary"><span>runnerctl</span><small data-i18n="archBoundary">stable CLI boundary</small></div>
         <span class="arrow">→</span>
-        <div class="arch-node"><span>internal scripts</span><small>implementation</small></div>
+        <div class="arch-node"><span data-i18n="archScripts">internal scripts</span><small data-i18n="archImplementation">implementation</small></div>
         <span class="arrow">→</span>
-        <div class="arch-node"><span>systemd</span><small>lifecycle authority</small></div>
+        <div class="arch-node"><span>systemd</span><small data-i18n="archLifecycle">lifecycle authority</small></div>
         <span class="arrow">→</span>
         <div class="arch-stack">
-          <div class="arch-node compact"><span>runner A</span><small>idle</small></div>
-          <div class="arch-node compact"><span>runner B</span><small>active</small></div>
+          <div class="arch-node compact"><span>runner A</span><small data-i18n="idle">idle</small></div>
+          <div class="arch-node compact"><span>runner B</span><small data-i18n="active">active</small></div>
         </div>
       </div>
 
       <div class="principles">
-        <div><strong>Public API</strong><span><code>runnerctl</code></span></div>
-        <div><strong>Boot policy</strong><span>on-demand</span></div>
-        <div><strong>State model</strong><span>XDG / machine-local</span></div>
-        <div><strong>Supported host</strong><span>Linux + systemd</span></div>
+        <div><strong data-i18n="principleApi">Public API</strong><span><code>runnerctl</code></span></div>
+        <div><strong data-i18n="principleBoot">Boot policy</strong><span>on-demand</span></div>
+        <div><strong data-i18n="principleState">State model</strong><span data-i18n="principleStateValue">XDG / machine-local</span></div>
+        <div><strong data-i18n="principleHost">Supported host</strong><span>Linux + systemd</span></div>
       </div>
     </section>
 
     <section class="section" id="evidence">
       <div class="section-heading">
-        <p class="eyebrow">Engineering evidence</p>
-        <h2>Not just a README claim.</h2>
-        <p>RunnerOps is developed as a small open-source engineering product: contracts, CI, release gates and real environment smoke tests are part of the artifact.</p>
+        <p class="eyebrow" data-i18n="evidenceEyebrow">Engineering evidence</p>
+        <h2 data-i18n="evidenceTitle">Not just a README claim.</h2>
+        <p data-i18n="evidenceBody">RunnerOps is developed as a small open-source engineering product: contracts, CI, release gates and real environment smoke tests are part of the artifact.</p>
       </div>
 
       <div class="evidence-grid">
         <article>
           <span class="evidence-icon">✓</span>
-          <h3>Contract tests</h3>
-          <p>CLI versioning, repository routing, lifecycle boundaries, package integrity, CI watch behavior and Agent Skills are covered by focused contracts.</p>
+          <h3 data-i18n="evidence1Title">Contract tests</h3>
+          <p data-i18n="evidence1Body">CLI versioning, repository routing, lifecycle boundaries, package integrity, CI watch behavior and Agent Skills are covered by focused contracts.</p>
         </article>
         <article>
           <span class="evidence-icon">✓</span>
-          <h3>Real GitHub API smoke</h3>
-          <p>Pushes to master exercise the CI feedback bridge against GitHub Actions rather than relying only on mocks.</p>
+          <h3 data-i18n="evidence2Title">Real GitHub API smoke</h3>
+          <p data-i18n="evidence2Body">Pushes to master exercise the CI feedback bridge against GitHub Actions rather than relying only on mocks.</p>
         </article>
         <article>
           <span class="evidence-icon">✓</span>
-          <h3>WSL2 + systemd smoke</h3>
-          <p>Release validation has exercised installation, on-demand lifecycle, repository-scoped operations and real self-hosted workflow execution.</p>
+          <h3 data-i18n="evidence3Title">WSL2 + systemd smoke</h3>
+          <p data-i18n="evidence3Body">Release validation has exercised installation, on-demand lifecycle, repository-scoped operations and real self-hosted workflow execution.</p>
         </article>
         <article>
           <span class="evidence-icon">✓</span>
-          <h3>Immutable releases</h3>
-          <p>Versioned release gates, changelog discipline and post-release installation checks keep published tags as evidence instead of moving targets.</p>
+          <h3 data-i18n="evidence4Title">Immutable releases</h3>
+          <p data-i18n="evidence4Body">Versioned release gates, changelog discipline and post-release installation checks keep published tags as evidence instead of moving targets.</p>
         </article>
       </div>
     </section>
@@ -187,8 +202,8 @@ runnerctl platform-doctor</code></pre>
     <section class="section skills-section">
       <div>
         <p class="eyebrow">Agent Skills</p>
-        <h2>The same operational boundary for humans and coding agents.</h2>
-        <p>
+        <h2 data-i18n="skillsTitle">The same operational boundary for humans and coding agents.</h2>
+        <p data-i18n="skillsBody">
           Portable Agent Skills let Codex, GitHub Copilot CLI, Claude Code and compatible clients operate runners and consume CI feedback without embedding machine inventory in prompts.
         </p>
       </div>
@@ -205,17 +220,17 @@ $ runnerctl skills install all
 
     <section class="cta">
       <p class="eyebrow">RunnerOps v0.2.1</p>
-      <h2>Small enough to understand.<br />Useful enough to run for real.</h2>
+      <h2 data-i18n-html="ctaTitle">Small enough to understand.<br />Useful enough to run for real.</h2>
       <div class="hero-actions">
-        <a class="button primary" href="https://github.com/oalangomes/RunnerOps">Explore the repository</a>
-        <a class="button secondary" href="https://github.com/oalangomes/RunnerOps/blob/master/README.md">Read the docs</a>
+        <a class="button primary" href="https://github.com/oalangomes/RunnerOps" data-i18n="exploreRepo">Explore the repository</a>
+        <a class="button secondary" href="https://github.com/oalangomes/RunnerOps/blob/master/README.md" data-i18n="readDocs">Read the docs</a>
       </div>
     </section>
   </main>
 
   <footer>
     <span>RunnerOps · Apache-2.0</span>
-    <span>Built by <a href="https://oalangomes.github.io/alan-portfolio/">Alan Gomes</a></span>
+    <span><span data-i18n="builtBy">Built by</span> <a href="https://oalangomes.github.io/alan-portfolio/">Alan Gomes</a></span>
   </footer>
 </body>
 </html>

@@ -261,7 +261,7 @@ Para agentes e harnesses, use a saída estruturada:
 runnerctl ci watch . --json
 ```
 
-O watcher correlaciona `owner/repo + SHA`, observa todos os workflow runs encontrados para o commit e não altera o lifecycle dos runners.
+O watcher correlaciona `owner/repo + SHA`, observa a coorte de execução atual do commit e não altera o lifecycle dos runners. Runs históricos do mesmo SHA ficam fora da decisão; múltiplos workflows pertencentes à coorte atual continuam agregados.
 
 Exit codes:
 

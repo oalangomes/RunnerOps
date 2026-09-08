@@ -130,7 +130,7 @@ resolve_pr_sha() {
 
 query_runs() {
   gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-    --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // "-"), .html_url, (.run_attempt // 1)] | @tsv'
+    --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // "-"), .html_url, (.run_attempt // 1), (.created_at // "-")] | @tsv'
 }
 
 query_failure_details() {
@@ -342,12 +342,45 @@ started_at="$(date +%s)"
 last_terminal_signature=""
 stable_terminal_polls=0
 last_wait_signature=""
+cohort_cutoff=""
+cohort_from_active=0
 
 while true; do
   rows=""
   if ! rows="$(query_runs 2>/dev/null)"; then
     emit_result error infra "" "" "" "" 0 "falha ao consultar GitHub Actions"
     exit 2
+  fi
+
+  latest_created_at=""
+  earliest_active_created_at=""
+
+  while IFS=$'\t' read -r _run_id _workflow _status _conclusion _url _attempt created_at; do
+    [[ -n "${_run_id:-}" ]] || continue
+    [[ "$created_at" == "-" ]] && created_at=""
+    [[ -n "$created_at" ]] || continue
+
+    if [[ -z "$latest_created_at" || "$created_at" > "$latest_created_at" ]]; then
+      latest_created_at="$created_at"
+    fi
+
+    if [[ "$_status" != "completed" ]]; then
+      if [[ -z "$earliest_active_created_at" || "$created_at" < "$earliest_active_created_at" ]]; then
+        earliest_active_created_at="$created_at"
+      fi
+    fi
+  done <<< "$rows"
+
+  if [[ -n "$earliest_active_created_at" ]]; then
+    if [[ -z "$cohort_cutoff" ]]; then
+      cohort_cutoff="$earliest_active_created_at"
+      cohort_from_active=1
+    elif [[ "$cohort_from_active" -eq 0 && "$earliest_active_created_at" > "$cohort_cutoff" ]]; then
+      cohort_cutoff="$earliest_active_created_at"
+      cohort_from_active=1
+    fi
+  elif [[ -z "$cohort_cutoff" && -n "$latest_created_at" ]]; then
+    cohort_cutoff="$latest_created_at"
   fi
 
   run_count=0
@@ -364,9 +397,15 @@ while true; do
   terminal_signature=""
   active_run_ids=()
 
-  while IFS=$'\t' read -r run_id workflow status conclusion url attempt; do
+  while IFS=$'\t' read -r run_id workflow status conclusion url attempt created_at; do
     [[ -n "${run_id:-}" ]] || continue
     [[ "$conclusion" == "-" ]] && conclusion=""
+    [[ "$created_at" == "-" ]] && created_at=""
+
+    if [[ -n "$cohort_cutoff" && -n "$created_at" && "$created_at" < "$cohort_cutoff" ]]; then
+      continue
+    fi
+
     run_count=$((run_count + 1))
     terminal_signature+="${run_id}:${attempt}:${status}:${conclusion}|"
 

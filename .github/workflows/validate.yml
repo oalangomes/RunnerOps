@@ -84,6 +84,17 @@ jobs:
           ./install-agent-skills.sh --list
           ./install-agent-skills.sh --tool all --dry-run
 
+      - name: Validate RunnerOps Pages
+        shell: bash
+        run: |
+          test -s site/index.html
+          test -s site/styles.css
+          test -s site/favicon.svg
+          grep -F '<title>RunnerOps' site/index.html
+          grep -F 'runnerctl' site/index.html
+          grep -F 'https://github.com/oalangomes/RunnerOps' site/index.html
+          grep -F 'RunnerOps v0.2.1' site/index.html
+
       - name: Validate public portability
         shell: bash
         run: |

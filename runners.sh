@@ -561,7 +561,6 @@ start_runner() {
     fi
     echo $! > "$(pid_file "$name")"
   )
-}
 
   sleep "${RUNNER_LEGACY_START_SETTLE_SECONDS:-3}"
   pid="$(runner_pid "$name" || true)"
@@ -578,6 +577,7 @@ start_runner() {
   echo "[ERR] $name nao permaneceu ativo backend=legacy" >&2
   echo "      log: $file" >&2
   return 1
+}
 
 terminate_pid_group() {
   local pid="$1"

@@ -11,7 +11,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 ### Changed
 
 - o produto e o repositório público passam a se chamar **RunnerOps**; a CLI pública permanece `runnerctl` para preservar o contrato existente.
-- clone, README e portability guard passam a usar a URL canônica `oalangomes/RunnerOps`.
+- clone, README e portability guard passam a usar a URL canônica do RunnerOps.
 - nenhum namespace XDG, contrato de runtime ou comando público foi renomeado.
 
 ## v0.2.0 — 2026-09-08

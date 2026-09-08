@@ -84,6 +84,13 @@ jobs:
           ./install-agent-skills.sh --list
           ./install-agent-skills.sh --tool all --dry-run
 
+      - name: Validate README brand asset
+        shell: bash
+        run: |
+          test -s docs/images/runnerops-banner.svg
+          grep -F 'runnerctl start' docs/images/runnerops-banner.svg
+          grep -F 'docs/images/runnerops-banner.svg' README.md
+
       - name: Validate RunnerOps Pages
         shell: bash
         run: |

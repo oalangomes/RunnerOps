@@ -67,12 +67,11 @@ skills_list="$("$ROOT/install-agent-skills.sh" --list)"
 for skill in runnerops-ci-performance runnerops-manage-runners runnerops-pr-validation; do
   grep -Fxq "$skill" <<< "$skills_list" || fail "installer deve listar $skill"
 done
-if grep -Eq '^(start-project-runners-before-pr|manage-local-github-runners|analyze-ci-workflow-performance)
 
-pass "Agent Skills RunnerOps preservam boundary, descoberta e migração de nomes"
- <<< "$skills_list"; then
+if grep -Eq '^(start-project-runners-before-pr|manage-local-github-runners|analyze-ci-workflow-performance)$' <<< "$skills_list"; then
   fail "installer não deve listar nomes legados"
 fi
+
 if grep -Ev '^runnerops-' <<< "$skills_list" | grep -q .; then
   fail "todas as skills canônicas devem usar prefixo runnerops-"
 fi

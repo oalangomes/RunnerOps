@@ -103,7 +103,7 @@ jobs:
           )"
           unexpected_owner_refs="$(
             printf '%s\n' "$owner_refs" \
-              | grep -vF 'github.com/oalangomes/actions-runners' \
+              | grep -vF 'github.com/oalangomes/runnerctl' \
               | sed '/^[[:space:]]*$/d' || true
           )"
           if [[ -n "$unexpected_owner_refs" ]]; then

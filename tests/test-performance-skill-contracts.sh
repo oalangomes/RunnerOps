@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SKILL="$ROOT/skills/analyze-ci-workflow-performance/SKILL.md"
+SKILL="$ROOT/skills/runnerops-ci-performance/SKILL.md"
 
 fail() {
   printf '[FAIL] %s\n' "$1" >&2
@@ -25,9 +25,9 @@ require_absent() {
   fi
 }
 
-[[ -f "$SKILL" ]] || fail "skill analyze-ci-workflow-performance ausente"
+[[ -f "$SKILL" ]] || fail "skill runnerops-ci-performance ausente"
 
-require_text "name: analyze-ci-workflow-performance" "frontmatter deve preservar nome canônico"
+require_text "name: runnerops-ci-performance" "frontmatter deve preservar nome canônico"
 require_text "Do not rewrite workflow YAML unless the user explicitly asks" "skill deve ser read-only por padrão"
 
 require_text "**STATIC**" "skill deve distinguir evidência STATIC"
@@ -65,7 +65,7 @@ require_absent "gh workflow run" "skill não pode disparar workflow por padrão"
 require_absent "gh run rerun" "skill não pode rerodar workflow por padrão"
 
 skills_list="$("$ROOT/install-agent-skills.sh" --list)"
-if ! grep -Fxq "analyze-ci-workflow-performance" <<< "$skills_list"; then
+if ! grep -Fxq "runnerops-ci-performance" <<< "$skills_list"; then
   fail "installer deve descobrir a nova skill automaticamente"
 fi
 

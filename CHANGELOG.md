@@ -8,6 +8,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Fixed
 
+- `runnerctl logs` do backend legado passa a mostrar conteúdo bounded do log local, sinalizar vazio/ausente e incluir automaticamente o `_diag` mais recente quando disponível.
 - consultas de lifecycle systemd deixam de converter falha de observação em `STOP`, `idle=true` ou `OK`; estado não observável passa a ser explícito como unknown/query-error.
 - o start do backend legado agora aguarda um settle curto, valida que o processo permaneceu ativo, limpa PID stale e retorna erro quando a ativação morre imediatamente.
 - `runnerctl add` faz preflight de systemd/sudo antes de solicitar registration token, evitando registro remoto quando a instalação systemd já é sabidamente inviável.

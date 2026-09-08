@@ -1,5 +1,7 @@
 # runnerctl
 
+**Release estável atual:** [v0.1.0](https://github.com/oalangomes/actions-runners/releases/tag/v0.1.0)
+
 Uma central Linux leve para operar múltiplos runners self-hosted do GitHub Actions com **systemd**, configuração local por máquina e execução **on-demand**.
 
 O repositório contém a plataforma de gerenciamento. O inventário real de runners, caminhos locais e credenciais ficam fora do Git.

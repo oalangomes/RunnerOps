@@ -1,4 +1,4 @@
-# Processo de release do runnerctl
+# Processo de release do RunnerOps
 
 Este processo existe para impedir que uma tag seja criada apenas porque a branch parece pronta.
 
@@ -8,8 +8,9 @@ Compare a release anterior com a candidata:
 
 ```bash
 git fetch --tags
-git log --oneline v0.1.0..HEAD
-git diff --stat v0.1.0..HEAD
+PREVIOUS_TAG="$(git describe --tags --abbrev=0)"
+git log --oneline "$PREVIOUS_TAG"..HEAD
+git diff --stat "$PREVIOUS_TAG"..HEAD
 ```
 
 Atualize `CHANGELOG.md` somente com mudanças realmente presentes no delta.
@@ -76,8 +77,9 @@ Somente depois dos gates:
 ```bash
 git status --short
 runnerctl --version
-git tag -a v0.2.0 -m "runnerctl v0.2.0"
-git push origin v0.2.0
+VERSION="$(runnerctl --version | awk '{print $2}')"
+git tag -a "v$VERSION" -m "RunnerOps v$VERSION"
+git push origin "v$VERSION"
 ```
 
 A tag de uma release publicada é imutável.

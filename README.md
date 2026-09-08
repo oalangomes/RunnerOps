@@ -1,6 +1,6 @@
 # runnerctl
 
-**Release estável atual:** [v0.1.0](https://github.com/oalangomes/actions-runners/releases/tag/v0.1.0)
+**Release estável atual:** [v0.2.0](https://github.com/oalangomes/runnerctl/releases/tag/v0.2.0)
 
 Uma central Linux leve para operar múltiplos runners self-hosted do GitHub Actions com **systemd**, configuração local por máquina e execução **on-demand**.
 
@@ -87,8 +87,8 @@ No WSL2, habilite systemd antes de usar a plataforma.
 ### 1. Clone
 
 ```bash
-git clone https://github.com/oalangomes/actions-runners.git ~/actions-runners
-cd ~/actions-runners
+git clone https://github.com/oalangomes/runnerctl.git ~/runnerctl
+cd ~/runnerctl
 ```
 
 Para uma instalação estável, prefira uma tag publicada (`vX.Y.Z`). A branch `master` representa o estado de desenvolvimento entre releases.
@@ -126,7 +126,7 @@ Isso cria, por padrão:
 O `config.env` aponta para o estado desta máquina. Configuração, dados, cache e estado de runtime ficam fora do checkout:
 
 ```bash
-ACTIONS_RUNNERS_HOME="/path/to/actions-runners"
+ACTIONS_RUNNERS_HOME="/path/to/runnerctl"
 RUNNERS_CONFIG="$HOME/.config/actions-runners/runners.conf"
 RUNNER_DATA_ROOT="$HOME/.local/share/actions-runners/runners"
 RUNNER_CACHE_ROOT="$HOME/.cache/actions-runners"
@@ -474,7 +474,7 @@ runnerctl health all
 
 Para contribuidores, o CI valida sintaxe shell, defaults XDG, instalação do `runnerctl`, plano de remoção governada, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
 
-A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. Mudanças posteriores em `master` não herdam automaticamente essa prova; cada nova release deve repetir o gate de smoke antes da tag.
+A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. A `v0.2.0` repetiu o gate em WSL2 + systemd, comprovando instalação/upgrade, operação on-demand repo-scoped, workflow real em self-hosted runner e o bridge `ci watch` contra GitHub Actions. Mudanças posteriores em `master` não herdam automaticamente essas provas; cada nova release deve repetir o gate de smoke antes da tag.
 
 O bridge de feedback de CI também possui smoke real em push para `master`: `ci-watch.sh` consulta a API real do GitHub Actions com token efêmero `actions:read` e valida um workflow já concluído do SHA anterior, evitando self-watch.
 

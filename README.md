@@ -1,5 +1,9 @@
 # RunnerOps
 
+<p align="center">
+  <img src="docs/images/runnerops-banner.svg" alt="RunnerOps — lightweight control for on-demand GitHub Actions runners" width="100%">
+</p>
+
 **Website:** https://oalangomes.github.io/RunnerOps/
 
 **Release estável atual:** [v0.2.1](https://github.com/oalangomes/RunnerOps/releases/tag/v0.2.1)

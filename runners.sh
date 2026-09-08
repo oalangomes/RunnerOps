@@ -86,6 +86,69 @@ log_file() {
   printf '%s/%s.log\n' "$LOG_DIR" "$1"
 }
 
+latest_diag_log() {
+  local path="$1"
+  local diag_dir="$path/_diag"
+  local candidate=""
+
+  [[ -d "$diag_dir" ]] || return 1
+
+  candidate="$(
+    find "$diag_dir" -maxdepth 1 -type f -name 'Runner_*.log' -printf '%T@\t%p\n' 2>/dev/null |
+      sort -nr |
+      head -n 1 |
+      cut -f2-
+  )"
+
+  if [[ -z "$candidate" ]]; then
+    candidate="$(
+      find "$diag_dir" -maxdepth 1 -type f -name '*.log' -printf '%T@\t%p\n' 2>/dev/null |
+        sort -nr |
+        head -n 1 |
+        cut -f2-
+    )"
+  fi
+
+  [[ -n "$candidate" ]] || return 1
+  printf '%s\n' "$candidate"
+}
+
+legacy_logs_runner() {
+  local name="$1"
+  local path="$2"
+  local group="$3"
+  local file diag lines
+
+  lines="${RUNNER_LOG_LINES:-200}"
+  file="$(log_file "$name")"
+
+  echo "===== $name group=$group backend=legacy ====="
+  echo "log: $file"
+
+  if [[ -s "$file" ]]; then
+    tail -n "$lines" "$file"
+  elif [[ -f "$file" ]]; then
+    echo "[INFO] legacy log is empty"
+  else
+    echo "[INFO] legacy log not found"
+  fi
+
+  diag="$(latest_diag_log "$path" 2>/dev/null || true)"
+  if [[ -n "$diag" ]]; then
+    echo
+    echo "===== latest _diag ====="
+    echo "diag: $diag"
+    if [[ -s "$diag" ]]; then
+      tail -n "$lines" "$diag"
+    else
+      echo "[INFO] latest _diag log is empty"
+    fi
+  else
+    echo
+    echo "[INFO] no _diag log found"
+  fi
+}
+
 runner_pid() {
   local file
   file="$(pid_file "$1")"
@@ -1038,7 +1101,7 @@ case "$ACTION" in
         echo "===== ${RUNNER_NAMES[$i]} group=${RUNNER_GROUPS[$i]} backend=systemd unit=$unit ====="
         journalctl_runner "$unit"
       else
-        echo "${RUNNER_NAMES[$i]} group=${RUNNER_GROUPS[$i]} backend=legacy -> $(log_file "${RUNNER_NAMES[$i]}")"
+        legacy_logs_runner "${RUNNER_NAMES[$i]}" "${RUNNER_PATHS[$i]}" "${RUNNER_GROUPS[$i]}"
       fi
     done
     ;;

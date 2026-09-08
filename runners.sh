@@ -106,7 +106,7 @@ runner_service_unit() {
 
   # Fail safe: a missing local marker must not make a systemd-managed runner
   # fall back to the legacy PID/process manager.
-  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+  if systemd_available; then
     while read -r unit; do
       [[ -n "$unit" ]] || continue
       working_dir="$(systemctl show "$unit" --property=WorkingDirectory --value 2>/dev/null || true)"
@@ -130,8 +130,7 @@ runner_uses_systemd() {
 
 require_systemd_for_runner() {
   local name="$1"
-  command -v systemctl >/dev/null 2>&1 || die "$name: systemctl nao encontrado"
-  [[ -d /run/systemd/system ]] || die "$name: possui .service, mas systemd nao esta ativo"
+  systemd_available || die "$name: possui .service, mas systemd nao esta disponivel"
 }
 
 systemctl_mutate() {
@@ -180,6 +179,59 @@ trim() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+systemd_runtime_dir() {
+  printf '%s\n' "${RUNNER_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
+}
+
+systemd_available() {
+  command -v systemctl >/dev/null 2>&1 && [[ -d "$(systemd_runtime_dir)" ]]
+}
+
+systemd_query_value() {
+  local kind="$1"
+  local unit="$2"
+  local output=""
+
+  case "$kind" in
+    load)
+      output="$(systemctl show "$unit" --property=LoadState --value 2>/dev/null || true)"
+      ;;
+    active)
+      output="$(systemctl is-active "$unit" 2>/dev/null || true)"
+      ;;
+    enabled)
+      output="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  output="$(trim "$output")"
+  [[ -n "$output" ]] || return 1
+
+  case "$kind:$output" in
+    load:not-found|load:error|active:unknown|enabled:not-found)
+      return 1
+      ;;
+  esac
+
+  printf '%s\n' "$output"
+}
+
+systemd_observe_unit() {
+  local unit="$1"
+  local load_state active_state boot_state
+
+  systemd_available || return 1
+  load_state="$(systemd_query_value load "$unit")" || return 1
+  active_state="$(systemd_query_value active "$unit")" || return 1
+  boot_state="$(systemd_query_value enabled "$unit")" || return 1
+
+  [[ "$load_state" == "loaded" ]] || return 1
+  printf '%s|%s\n' "$active_state" "$boot_state"
 }
 
 read_config() {
@@ -509,6 +561,22 @@ start_runner() {
     fi
     echo $! > "$(pid_file "$name")"
   )
+
+  sleep "${RUNNER_LEGACY_START_SETTLE_SECONDS:-3}"
+  pid="$(runner_pid "$name" || true)"
+  primary_pid="$(runner_primary_pid_by_path "$path")"
+
+  if is_running_pid "$pid" || [[ -n "$primary_pid" ]]; then
+    mkdir -p "$PID_DIR"
+    echo "${primary_pid:-$pid}" > "$(pid_file "$name")"
+    echo "[OK] $name iniciado backend=legacy pid=${primary_pid:-$pid} ($(runner_process_summary "$path"))"
+    return 0
+  fi
+
+  rm -f "$(pid_file "$name")"
+  echo "[ERR] $name nao permaneceu ativo backend=legacy" >&2
+  echo "      log: $file" >&2
+  return 1
 }
 
 terminate_pid_group() {
@@ -589,13 +657,18 @@ status_runner() {
   local worker_count
 
   if runner_uses_systemd "$path"; then
-    local unit state boot_state prefix
+    local unit state boot_state prefix observation
     require_systemd_for_runner "$name"
     unit="$(runner_service_unit "$path")"
-    state="$(systemctl is-active "$unit" 2>/dev/null || true)"
-    boot_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
-    prefix="[STOP]"
+    observation="$(systemd_observe_unit "$unit" || true)"
+    if [[ -z "$observation" ]]; then
+      echo "[WARN] $name backend=systemd state=unknown boot=unknown policy=$BOOT_POLICY unit=$unit group=$group profile=$profile repo=${repo:-n/a} observation=query-error $path"
+      return 0
+    fi
+    IFS='|' read -r state boot_state <<< "$observation"
+    prefix="[WARN]"
     [[ "$state" == "active" ]] && prefix="[OK]"
+    [[ "$state" == "failed" ]] && prefix="[STOP]"
     if [[ "$BOOT_POLICY" == "on-demand" && "$state" == "inactive" ]]; then
       prefix="[IDLE]"
     fi
@@ -678,14 +751,20 @@ doctor_runner() {
     if [[ ! -f "$path/.service" ]]; then
       echo "[WARN] unit systemd descoberta pelo WorkingDirectory; marcador .service ausente"
     fi
-    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-      state="$(systemctl is-active "$unit" 2>/dev/null || true)"
-      boot_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
-      echo "[OK] backend=systemd unit=$unit state=$state boot=$boot_state policy=$BOOT_POLICY"
-      if [[ "$BOOT_POLICY" == "auto" && "$state" != "active" ]]; then
-        echo "[WARN] servico systemd nao esta ativo"
-      elif [[ "$BOOT_POLICY" == "on-demand" && "$state" == "failed" ]]; then
-        echo "[WARN] servico systemd esta failed"
+    if systemd_available; then
+      local observation
+      observation="$(systemd_observe_unit "$unit" || true)"
+      if [[ -z "$observation" ]]; then
+        echo "[ERR] backend=systemd unit=$unit state=unknown boot=unknown policy=$BOOT_POLICY observation=query-error"
+        ok=1
+      else
+        IFS='|' read -r state boot_state <<< "$observation"
+        echo "[OK] backend=systemd unit=$unit state=$state boot=$boot_state policy=$BOOT_POLICY"
+        if [[ "$BOOT_POLICY" == "auto" && "$state" != "active" ]]; then
+          echo "[WARN] servico systemd nao esta ativo"
+        elif [[ "$BOOT_POLICY" == "on-demand" && "$state" == "failed" ]]; then
+          echo "[WARN] servico systemd esta failed"
+        fi
       fi
     else
       echo "[ERR] .service encontrado, mas systemd nao esta disponivel"
@@ -738,14 +817,18 @@ health_runner() {
   local primary_pid
 
   if runner_uses_systemd "$path"; then
-    local unit state boot_state
+    local unit state boot_state observation
     unit="$(runner_service_unit "$path")"
-    if ! command -v systemctl >/dev/null 2>&1 || [[ ! -d /run/systemd/system ]]; then
+    if ! systemd_available; then
       echo "[CRITICAL] $name backend=systemd mas systemd nao esta disponivel"
       return 0
     fi
-    state="$(systemctl is-active "$unit" 2>/dev/null || true)"
-    boot_state="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+    observation="$(systemd_observe_unit "$unit" || true)"
+    if [[ -z "$observation" ]]; then
+      echo "[WARN] $name backend=systemd state=unknown boot=unknown policy=$BOOT_POLICY observation=query-error unit=$unit"
+      return 0
+    fi
+    IFS='|' read -r state boot_state <<< "$observation"
     if [[ "$enabled" != "true" ]]; then
       echo "[INFO] $name group=$group backend=systemd desabilitado em runners.conf state=$state policy=$BOOT_POLICY"
     elif [[ "$BOOT_POLICY" == "on-demand" ]]; then
@@ -755,8 +838,10 @@ health_runner() {
         echo "[WARN] $name backend=systemd state=$state boot=enabled policy=on-demand expected_boot=disabled unit=$unit"
       elif [[ "$state" == "active" ]]; then
         echo "[OK] $name backend=systemd state=active boot=$boot_state policy=on-demand group=$group"
+      elif [[ "$state" == "inactive" ]]; then
+        echo "[OK] $name backend=systemd state=inactive boot=$boot_state policy=on-demand idle=true group=$group"
       else
-        echo "[OK] $name backend=systemd state=$state boot=$boot_state policy=on-demand idle=true group=$group"
+        echo "[WARN] $name backend=systemd state=$state boot=$boot_state policy=on-demand idle=unknown group=$group"
       fi
     elif [[ "$state" != "active" ]]; then
       echo "[CRITICAL] $name backend=systemd state=$state policy=auto unit=$unit"

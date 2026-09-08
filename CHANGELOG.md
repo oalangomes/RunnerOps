@@ -6,6 +6,11 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ## Unreleased
 
+### Fixed
+
+- consultas de lifecycle systemd deixam de converter falha de observação em `STOP`, `idle=true` ou `OK`; estado não observável passa a ser explícito como unknown/query-error.
+- o start do backend legado agora aguarda um settle curto, valida que o processo permaneceu ativo, limpa PID stale e retorna erro quando a ativação morre imediatamente.
+
 ### Changed
 
 - Agent Skills passam a usar namespace `runnerops-` para melhorar descoberta manual: `runnerops-manage-runners`, `runnerops-pr-validation` e `runnerops-ci-performance`.

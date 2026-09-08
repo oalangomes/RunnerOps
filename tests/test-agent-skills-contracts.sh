@@ -46,6 +46,17 @@ require_text "$MANAGE" "runnerctl ci watch . --pr <number> --json" "skill de ges
 require_text "$MANAGE" "runnerctl ci watch owner/repo --sha <sha> --json" "skill de gestão deve conhecer watcher por SHA"
 require_text "$MANAGE" "Never claim CI success from an inconclusive watcher result." "skill de gestão deve preservar semântica inconclusiva"
 
+require_text "$MANAGE" "After every explicit start or restart, verify the result:" "skill de gestão deve validar start/restart"
+require_text "$MANAGE" "runnerctl status <runner>" "skill de gestão deve verificar status após lifecycle"
+require_text "$MANAGE" "runnerctl health <runner>" "skill de gestão deve verificar health após lifecycle"
+require_text "$MANAGE" "not guaranteed to be repository-scoped" "skill de gestão deve alertar que grupos podem cruzar repositórios"
+require_text "$MANAGE" 'do **not** repeat `runnerctl add`' "skill de gestão deve evitar add duplicado após PARTIAL"
+require_text "$MANAGE" "[INCONCLUSIVE] ... remote-registration=unknown" "skill de gestão deve tratar provisioning inconclusivo"
+require_text "$MANAGE" '**provisioned**, not necessarily **available now**' "skill de gestão deve distinguir provisionado de capacidade imediata"
+require_text "$MANAGE" "state=unknown" "skill de gestão deve tratar lifecycle unknown"
+require_text "$MANAGE" "Do not paraphrase that as full functional integrity" "skill de gestão não deve superestimar doctor"
+require_text "$MANAGE" "Never start a shared group when repository-scoped or exact-runner operation satisfies the request." "skill de gestão deve preferir operação repo-scoped/exata"
+
 # Executable examples must stay on the public boundary. Mentions in prose such as
 # "do not call systemctl" are allowed; direct command examples are not.
 require_absent_command "$PRE" "runners\.sh" "skill pre-PR não pode executar runners.sh"

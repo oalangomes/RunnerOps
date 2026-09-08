@@ -16,6 +16,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Changed
 
+- `runnerops-manage-runners` passa a distinguir capacidade provisionada/ociosa de capacidade disponível agora, exige status/health após start/restart, prefere operações repo-scoped/exatas e trata `PARTIAL`, `INCONCLUSIVE` e lifecycle unknown sem retries cegos.
 - Agent Skills passam a usar namespace `runnerops-` para melhorar descoberta manual: `runnerops-manage-runners`, `runnerops-pr-validation` e `runnerops-ci-performance`.
 - o installer migra somente os nomes legados conhecidos correspondentes ao instalar uma skill renomeada, evitando descoberta duplicada.
 

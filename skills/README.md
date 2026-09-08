@@ -19,8 +19,20 @@ ls ~/.agents/skills | grep '^runnerops-'
 | Skill | Finalidade |
 |---|---|
 | `runnerops-pr-validation` | Antes da PR, garantir somente os runners do repositório atual; depois da publicação, consumir `runnerctl ci watch` quando a tarefa exigir aguardar o CI. |
-| `runnerops-manage-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners, além de consumir feedback estruturado do CI por PR/SHA. |
+| `runnerops-manage-runners` | Operar runners com escopo seguro: inventário, lifecycle verificado, cadastro/recovery, capacidade idle vs disponível agora, remoção governada e feedback de CI por PR/SHA. |
 | `runnerops-ci-performance` | Analisar DAG, critical path, repetição, cache, artifacts, triggers, fila e capacidade usando evidência STATIC / OBSERVED / ESTIMATED; read-only por padrão. |
+
+## Semântica operacional da skill de gestão
+
+A `runnerops-manage-runners` trata grupos como agrupamentos operacionais, não como boundary de repositório. Por padrão, prefere `runnerctl ensure .` ou um runner exato.
+
+Ela também distingue:
+
+- **provisionado/ocioso** — `inactive + boot disabled + on-demand`;
+- **disponível agora** — runner ativo e, quando necessário para o objetivo, confirmado online no GitHub;
+- **inconclusivo** — lifecycle unknown/query-error ou provisioning marcado como `INCONCLUSIVE`.
+
+Após `start` ou `restart` explícito, a skill exige `status` + `health`. Após `PARTIAL` / `INCONCLUSIVE` em cadastro, não repete `runnerctl add` automaticamente.
 
 ## Instalação
 

@@ -1,13 +1,15 @@
 ---
 name: runnerops-manage-runners
-description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
+description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, add immediate CI capacity, or change boot policy for local runners. Prefer repository-scoped or exact-runner operations over shared groups.
 ---
 
 # RunnerOps Manage Runners
 
-Use `runnerctl` as the stable public interface.
+Use `runnerctl` as the stable public interface for lifecycle and provisioning.
 
 Do not discover or call `runners.sh`, `runner-services.sh`, `configure-runner.sh`, `svc.sh` or `systemctl` directly.
+
+Read-only GitHub CLI/API calls are allowed only when remote runner registration/status must be verified and RunnerOps reports the remote state as inconclusive. Never use them to bypass `runnerctl add` or manually obtain a registration token.
 
 ## Platform check
 
@@ -38,34 +40,62 @@ runnerctl logs <runner>
 
 Under on-demand policy:
 
-- active + boot disabled = healthy and available;
-- inactive + boot disabled = healthy idle capacity;
-- failed = unhealthy.
+- `active + boot disabled` = healthy and available now;
+- `inactive + boot disabled` = healthy provisioned capacity, currently idle;
+- `failed` = unhealthy;
+- `state=unknown`, `boot=unknown`, `observation=query-error` or missing lifecycle evidence = inconclusive, never healthy by assumption.
 
-## Current repository
+`runnerctl doctor` proves the checks it actually reports: local runner structure, lifecycle observability, cache configuration and required commands in PATH. Do not paraphrase that as full functional integrity of Git, Python, package managers or the remote runner.
 
-To ensure only the current project's runners are active:
+## Repository scope
+
+For the current repository, prefer:
 
 ```bash
 runnerctl ensure .
 ```
 
-Do not use `runnerctl start all` unless the user explicitly asks for the whole fleet.
+This is repository-scoped.
 
-## Start/stop
+For a known instance, prefer the exact runner:
 
 ```bash
 runnerctl start <runner>
-runnerctl stop <runner>
-runnerctl restart <runner>
 ```
 
-Groups are supported:
+Groups are operational groupings and are **not guaranteed to be repository-scoped**. A shared group may contain runners mapped to different repositories.
+
+Do not use this by default:
 
 ```bash
 runnerctl start group:my-team
-runnerctl health group:my-team
 ```
+
+Use a group only when the user explicitly intends to operate that whole group after its membership has been inspected.
+
+Never use `runnerctl start all` unless the user explicitly asks for the whole fleet.
+
+## Start and restart verification
+
+After every explicit start or restart, verify the result:
+
+```bash
+runnerctl start <runner>
+runnerctl status <runner>
+runnerctl health <runner>
+```
+
+or:
+
+```bash
+runnerctl restart <runner>
+runnerctl status <runner>
+runnerctl health <runner>
+```
+
+Do not declare an activation successful from the start command alone.
+
+For `runnerctl ensure .`, the command already performs repository-scoped start plus status/health validation for the matched runners.
 
 ## Boot policy
 
@@ -105,19 +135,95 @@ runnerctl add . \
   --name backend-runner
 ```
 
-`runnerctl add` uses authenticated GitHub CLI to request a short-lived registration token and passes it through stdin to the internal registration script. Never ask the user to paste or expose a token when this flow is available.
+`runnerctl add` resolves the canonical GitHub `nameWithOwner`, preflights systemd/admin access before requesting a registration token, and passes the short-lived token internally through stdin. Never ask the user to paste or expose a token when this flow is available.
 
-After registration it installs the systemd service and validates doctor/health. With the default on-demand policy, the service should end idle and boot-disabled after validation.
+With the default on-demand policy, a successful registration normally finishes as healthy idle capacity:
+
+```text
+backend=systemd
+state=inactive
+boot=disabled
+policy=on-demand
+```
+
+That means **provisioned**, not necessarily **available now**.
+
+### If add reports PARTIAL
+
+If the command reports a state such as:
+
+```text
+[PARTIAL] ... phase=systemd-migrate
+```
+
+do **not** repeat `runnerctl add`.
+
+Follow the recovery commands emitted by RunnerOps. The normal recovery path is:
+
+```bash
+runnerctl doctor <runner>
+runnerctl migrate <runner>
+runnerctl status <runner>
+runnerctl health <runner>
+```
+
+### If add reports INCONCLUSIVE
+
+If the command reports:
+
+```text
+[INCONCLUSIVE] ... remote-registration=unknown
+```
+
+do **not** blindly repeat `runnerctl add`.
+
+Inspect the local runner with `runnerctl list` / `runnerctl doctor <runner>`. If the remote registration still must be determined, use a read-only GitHub query and verify whether the reported GitHub runner name already exists before attempting any new registration.
+
+Never interpret an inconclusive provisioning phase as either success or absence.
+
+## Provisioned versus available capacity
+
+Infer the requested completion criterion from the user's intent.
+
+If the user asked only to:
+
+- create a runner;
+- register a runner;
+- configure a runner;
+
+then healthy `inactive + boot disabled + on-demand` is a valid completion state.
+
+If the user asked to:
+
+- add capacity now;
+- support the current queue;
+- reduce/descongest CI backlog;
+- make another runner available;
+- help currently queued jobs;
+
+then idle provisioning is **not** enough.
+
+After registration/recovery, start the exact new runner and verify it:
+
+```bash
+runnerctl start <runner>
+runnerctl status <runner>
+runnerctl health <runner>
+```
+
+When immediate remote availability is part of the request, also confirm that GitHub reports the runner online before declaring completion. A busy runner is still available capacity that is currently executing work.
 
 ## Diagnose stale registration
 
 If a runner starts and immediately dies:
 
 ```bash
+runnerctl status <runner>
+runnerctl health <runner>
 runnerctl logs <runner>
 ```
 
-If GitHub reports that the registration was deleted, do not repeatedly restart it.
+If GitHub reports that the registration was deleted, do not repeatedly restart or recreate it without first establishing the intended recovery path.
 
 ## Remove a runner
 
@@ -192,20 +298,28 @@ runnerctl skills install claude
 
 ## Reporting
 
-Keep routine reports compact:
+Keep routine reports compact, but make the completion criterion explicit:
 
 ```text
 Local runner:
-- repo: owner/project
-- runner: project
+- repo: owner/Project
+- runner: project-2
+- backend: systemd
 - policy: on-demand
-- state: active | idle | failed
-- registration: healthy | stale
+- boot: disabled
+- lifecycle: active | idle | failed | unknown
+- capacity: available-now | provisioned-idle | unavailable | inconclusive
+- GitHub: online | offline | busy | unknown
 ```
+
+Do not claim remote health from local checks alone.
 
 ## Prohibitions
 
 - Never expose registration tokens.
+- Never repeat `runnerctl add` merely because a previous add returned PARTIAL or INCONCLUSIVE.
+- Never treat UNKNOWN/query-error lifecycle state as healthy idle capacity.
+- Never start a shared group when repository-scoped or exact-runner operation satisfies the request.
 - Never start all runners unless explicitly requested.
 - Never enable the entire fleet at boot by default.
 - Never delete a runner merely because it is idle.

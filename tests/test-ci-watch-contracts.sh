@@ -88,6 +88,20 @@ if [[ "$request" == *"/actions/runs?"* ]]; then
     rerun-failure)
       printf '702\tCI\tcompleted\tfailure\thttps://github.com/example/project/actions/runs/702\t2\n'
       ;;
+    stale-sha-history)
+      count=0
+      [[ -f "${TEST_GH_STATE:?}" ]] && count="$(cat "$TEST_GH_STATE")"
+      count=$((count + 1))
+      printf '%s\n' "$count" > "$TEST_GH_STATE"
+      printf '801\tCI\tcompleted\tfailure\thttps://github.com/example/project/actions/runs/801\t1\t2026-09-06T03:17:38Z\n'
+      printf '802\tCI\tcompleted\tcancelled\thttps://github.com/example/project/actions/runs/802\t1\t2026-09-08T13:53:43Z\n'
+      if [[ "$count" -eq 1 ]]; then
+        printf '803\tCI\tin_progress\t-\thttps://github.com/example/project/actions/runs/803\t1\t2026-09-08T13:54:05Z\n'
+      else
+        printf '803\tCI\tcompleted\tsuccess\thttps://github.com/example/project/actions/runs/803\t1\t2026-09-08T13:54:05Z\n'
+      fi
+      printf '804\tLint\tcompleted\tsuccess\thttps://github.com/example/project/actions/runs/804\t1\t2026-09-08T13:54:05Z\n'
+      ;;
     failure)
       printf '201\tCI\tcompleted\tfailure\thttps://github.com/example/project/actions/runs/201\t1\n'
       ;;
@@ -284,6 +298,25 @@ test_rerun_uses_latest_attempt_without_stale_failure() {
   pass "rerun/run_attempt não confunde resultado ou detalhes de tentativa anterior"
 }
 
+test_stale_same_sha_history_is_ignored() {
+  local output rc log
+
+  : > "$TMP_ROOT/gh.log"
+  set +e
+  output="$(run_helper stale-sha-history --repo example/project --sha 9999999999999999999999999999999999999999 --json --timeout 5 --interval 0 --settle-polls 1 2>&1)"
+  rc=$?
+  set -e
+  log="$(cat "$TMP_ROOT/gh.log")"
+
+  assert_status 0 "$rc" "failure histórico do mesmo SHA não pode contaminar a execução atual"
+  assert_contains "$output" '"status":"success"' "coorte atual deve concluir com sucesso"
+  assert_contains "$output" '"run_count":2' "workflows atuais do mesmo disparo devem continuar agregados"
+  assert_not_contains "$output" '"run_id":801' "run histórico não pode virar resultado conclusivo"
+  assert_not_contains "$log" "/actions/runs/801/attempts/1/jobs" "watcher não deve consultar detalhes da falha histórica"
+
+  pass "ci watch ignora runs históricos do mesmo SHA e observa a coorte atual"
+}
+
 test_startup_failure_is_infra() {
   local output rc
 
@@ -381,6 +414,7 @@ main() {
   test_pr_correlation_resolves_head_sha
   test_ci_failure_includes_job_step_and_runner
   test_rerun_uses_latest_attempt_without_stale_failure
+  test_stale_same_sha_history_is_ignored
   test_startup_failure_is_infra
   test_cancelled_and_timeout_are_inconclusive
   test_self_hosted_unavailable_is_infra

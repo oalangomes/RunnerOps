@@ -1,6 +1,6 @@
 # RunnerOps
 
-**Release estável atual:** [v0.2.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.2.0)
+**Release estável atual:** [v0.2.1](https://github.com/oalangomes/RunnerOps/releases/tag/v0.2.1)
 
 **CLI pública:** `runnerctl`
 

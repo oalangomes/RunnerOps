@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
+ISOLATED_ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing-actions-runners.env"
 EXPECTED_RUNNERCTL_VERSION="0.2.1"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
@@ -115,6 +116,7 @@ EOF
 
   output="$(
     TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
     ACTIONS_RUNNERS_HOME="$platform" \
     RUNNERS_CONFIG="$registry" \
     "$ROOT/runnerctl" ensure example/project
@@ -150,6 +152,7 @@ EOF
   before="$(sha256sum "$registry" | awk '{print $1}')"
   output="$(
     TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
     ACTIONS_RUNNERS_HOME="$platform" \
     RUNNERS_CONFIG="$registry" \
     "$ROOT/runnerctl" remove ci-remove --plan
@@ -162,18 +165,19 @@ EOF
   assert_contains "$output" "- GitHub registration: REMOVE" "plano deve declarar remoção remota"
   assert_contains "$output" "- local directory: KEEP" "diretório local deve ser preservado por padrão"
 
-  if TEST_CALL_LOG="$log" ACTIONS_RUNNERS_HOME="$platform" RUNNERS_CONFIG="$registry" \
+  if TEST_CALL_LOG="$log" ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" ACTIONS_RUNNERS_HOME="$platform" RUNNERS_CONFIG="$registry" \
       "$ROOT/runnerctl" remove all --plan >/dev/null 2>&1; then
     fail "remove all deve ser rejeitado"
   fi
 
-  if TEST_CALL_LOG="$log" ACTIONS_RUNNERS_HOME="$platform" RUNNERS_CONFIG="$registry" \
+  if TEST_CALL_LOG="$log" ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" ACTIONS_RUNNERS_HOME="$platform" RUNNERS_CONFIG="$registry" \
       "$ROOT/runnerctl" remove group:example --plan >/dev/null 2>&1; then
     fail "remove group:* deve ser rejeitado"
   fi
 
   rejected="$(
     TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
     ACTIONS_RUNNERS_HOME="$platform" \
     RUNNERS_CONFIG="$registry" \
     "$ROOT/runnerctl" remove all --plan 2>&1 || true
@@ -200,6 +204,7 @@ EOF
 
   output="$(
     TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
     ACTIONS_RUNNERS_HOME="$platform" \
     RUNNERS_CONFIG="$registry" \
     RUNNER_DATA_ROOT="$data_root" \

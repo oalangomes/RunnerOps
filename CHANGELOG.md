@@ -16,6 +16,10 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - smoke real do CI feedback bridge contra a API do GitHub Actions em pushes para `master`.
 - `runnerctl --version` como identidade explícita da CLI instalada.
 
+### Fixed
+
+- `runnerctl ci watch` ignora runs históricos de um SHA reutilizado e mantém a decisão restrita à coorte de execução atual.
+
 ### Changed
 
 - a skill pre-PR pode consumir `runnerctl ci watch` depois da publicação para devolver o estado conclusivo do CI.

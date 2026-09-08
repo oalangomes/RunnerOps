@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
-EXPECTED_RUNNERCTL_VERSION="0.2.0-dev"
+EXPECTED_RUNNERCTL_VERSION="0.2.0"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 pass() {

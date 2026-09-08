@@ -4,7 +4,7 @@ Mudanças relevantes do `runnerctl` são registradas aqui.
 
 O projeto segue versionamento SemVer enquanto a API pública amadurece. Em versões `0.x`, mudanças incompatíveis continuam sendo evitadas e devem ser explicitadas quando inevitáveis.
 
-## Unreleased — v0.2.0
+## v0.2.0 — 2026-09-08
 
 ### Added
 
@@ -26,17 +26,6 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - a skill de gerenciamento local passou a documentar e consumir o feedback estruturado do CI.
 - documentação de instalação/upgrade agora deixa explícito que `install.sh` deve ser executado novamente após atualizar o checkout.
 - validação de release passa a distinguir a evidência histórica da v0.1.0 da prova exigida para uma release nova.
-
-### Release gate
-
-Antes de trocar a versão de desenvolvimento por `0.2.0` e criar a tag:
-
-- CI da candidata deve estar verde;
-- `runnerctl --version` deve reportar `0.2.0`;
-- instalação/upgrade devem estar validados;
-- smoke real Linux/systemd ou WSL2/systemd deve passar;
-- smoke real do bridge de GitHub Actions deve passar;
-- README e changelog devem ser revisados contra a diferença real desde `v0.1.0`.
 
 ## v0.1.0
 

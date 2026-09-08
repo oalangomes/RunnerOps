@@ -1,9 +1,9 @@
 ---
-name: start-project-runners-before-pr
+name: runnerops-pr-validation
 description: Ensure the local GitHub Actions self-hosted runners mapped to the current repository are active before an agent publishes a pull request, then consume GitHub Actions feedback through runnerctl after the push/PR when validation is part of the task. Use runnerctl as the only runner-management and CI-watch interface.
 ---
 
-# Start Project Runners Before PR and Watch CI
+# RunnerOps PR Validation
 
 Before publishing a pull request, ensure the current repository's configured local runner capacity is active. After publishing, use the public CI watcher when the task requires waiting for GitHub Actions.
 

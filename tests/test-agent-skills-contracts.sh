@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PRE="$ROOT/skills/start-project-runners-before-pr/SKILL.md"
-MANAGE="$ROOT/skills/manage-local-github-runners/SKILL.md"
+PRE="$ROOT/skills/runnerops-pr-validation/SKILL.md"
+MANAGE="$ROOT/skills/runnerops-manage-runners/SKILL.md"
 
 fail() {
   printf '[FAIL] %s\n' "$1" >&2
@@ -29,6 +29,9 @@ require_absent_command() {
 [[ -f "$PRE" ]] || fail "skill pre-PR ausente"
 [[ -f "$MANAGE" ]] || fail "skill de gestão ausente"
 
+require_text "$PRE" "name: runnerops-pr-validation" "skill pre-PR deve usar nome RunnerOps canônico"
+require_text "$MANAGE" "name: runnerops-manage-runners" "skill de gestão deve usar nome RunnerOps canônico"
+
 require_text "$PRE" "runnerctl ensure ." "skill pre-PR deve usar runnerctl ensure ."
 require_text "$PRE" "runnerctl ci watch . --pr <number> --json" "skill pre-PR deve preferir watcher por PR"
 require_text "$PRE" "runnerctl ci watch . --json" "skill pre-PR deve suportar watcher por HEAD"
@@ -52,4 +55,25 @@ require_absent_command "$MANAGE" "runners\.sh" "skill de gestão não pode execu
 require_absent_command "$MANAGE" "runner-services\.sh" "skill de gestão não pode executar runner-services.sh"
 require_absent_command "$MANAGE" "systemctl" "skill de gestão não pode executar systemctl diretamente"
 
-pass "Agent Skills preservam runnerctl como boundary e consomem ci watch"
+tmp_home="$(mktemp -d)"
+trap 'rm -rf "$tmp_home"' EXIT
+mkdir -p "$tmp_home/.agents/skills/manage-local-github-runners"
+printf '%s\n' legacy > "$tmp_home/.agents/skills/manage-local-github-runners/marker"
+HOME="$tmp_home" "$ROOT/install-agent-skills.sh" --tool agents --skill runnerops-manage-runners >/dev/null
+[[ ! -e "$tmp_home/.agents/skills/manage-local-github-runners" ]] || fail "installer deve remover nome legado correspondente"
+[[ -f "$tmp_home/.agents/skills/runnerops-manage-runners/SKILL.md" ]] || fail "installer deve instalar nome canônico novo"
+
+skills_list="$("$ROOT/install-agent-skills.sh" --list)"
+for skill in runnerops-ci-performance runnerops-manage-runners runnerops-pr-validation; do
+  grep -Fxq "$skill" <<< "$skills_list" || fail "installer deve listar $skill"
+done
+
+if grep -Eq '^(start-project-runners-before-pr|manage-local-github-runners|analyze-ci-workflow-performance)$' <<< "$skills_list"; then
+  fail "installer não deve listar nomes legados"
+fi
+
+if grep -Ev '^runnerops-' <<< "$skills_list" | grep -q .; then
+  fail "todas as skills canônicas devem usar prefixo runnerops-"
+fi
+
+pass "Agent Skills RunnerOps preservam boundary, descoberta e migração de nomes"

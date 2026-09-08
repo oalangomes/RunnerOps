@@ -1,9 +1,9 @@
 ---
-name: manage-local-github-runners
+name: runnerops-manage-runners
 description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, or change boot policy for local runners. Prefer the current GitHub repository when no target is specified.
 ---
 
-# Manage Local GitHub Runners
+# RunnerOps Manage Runners
 
 Use `runnerctl` as the stable public interface.
 
@@ -16,7 +16,7 @@ command -v runnerctl
 runnerctl platform-doctor
 ```
 
-If `runnerctl` is missing, report that the platform CLI must be installed from the actions-runners checkout with `./install.sh`.
+If `runnerctl` is missing, report that the platform CLI must be installed from the RunnerOps checkout with `./install.sh`.
 
 ## Inventory and health
 

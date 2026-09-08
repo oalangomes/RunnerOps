@@ -349,11 +349,11 @@ As skills canônicas vivem em:
 
 ```text
 skills/
-├── start-project-runners-before-pr/
+├── runnerops-pr-validation/
 │   └── SKILL.md
-├── manage-local-github-runners/
+├── runnerops-manage-runners/
 │   └── SKILL.md
-├── analyze-ci-workflow-performance/
+├── runnerops-ci-performance/
 │   └── SKILL.md
 └── README.md
 ```
@@ -373,11 +373,11 @@ runnerctl skills install claude
 runnerctl skills install agents
 ```
 
-A skill `start-project-runners-before-pr` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR e, depois da publicação, consumir `runnerctl ci watch` para devolver o estado conclusivo do CI ao agente.
+A skill `runnerops-pr-validation` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR e, depois da publicação, consumir `runnerctl ci watch` para devolver o estado conclusivo do CI ao agente.
 
-A skill `manage-local-github-runners` cobre inventário, health, start/stop, diagnóstico, cadastro, remoção governada e leitura estruturada do feedback de CI.
+A skill `runnerops-manage-runners` cobre inventário, health, start/stop, diagnóstico, cadastro, remoção governada e leitura estruturada do feedback de CI.
 
-A skill `analyze-ci-workflow-performance` faz análise read-only de arquitetura/performance do GitHub Actions, separando evidência `STATIC`, `OBSERVED` e `ESTIMATED` e evitando recomendar otimizações sem prova.
+A skill `runnerops-ci-performance` faz análise read-only de arquitetura/performance do GitHub Actions, separando evidência `STATIC`, `OBSERVED` e `ESTIMATED` e evitando recomendar otimizações sem prova.
 
 Veja [skills/README.md](skills/README.md) para destinos e instalação local por projeto.
 

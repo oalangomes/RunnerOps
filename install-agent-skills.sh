@@ -41,7 +41,7 @@ Exemplos:
   ./install-agent-skills.sh --tool all
   ./install-agent-skills.sh --tool claude
   ./install-agent-skills.sh --tool copilot --scope project --project-dir ~/projetos/meu-repo
-  ./install-agent-skills.sh --tool agents --skill manage-local-github-runners
+  ./install-agent-skills.sh --tool agents --skill runnerops-manage-runners
 EOF
 }
 
@@ -102,19 +102,43 @@ destination_for() {
   fi
 }
 
+legacy_name_for() {
+  case "$1" in
+    runnerops-pr-validation) printf '%s\n' "start-project-runners-before-pr" ;;
+    runnerops-manage-runners) printf '%s\n' "manage-local-github-runners" ;;
+    runnerops-ci-performance) printf '%s\n' "analyze-ci-workflow-performance" ;;
+    *) return 0 ;;
+  esac
+}
+
 install_one_skill() {
   local source_dir="$1" destination_root="$2" tool="$3"
-  local skill target
+  local skill target legacy legacy_target
 
   skill="$(basename "$source_dir")"
   target="$destination_root/$skill"
+  legacy="$(legacy_name_for "$skill")"
+  legacy_target=""
+
+  if [[ -n "$legacy" ]]; then
+    legacy_target="$destination_root/$legacy"
+  fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
+    if [[ -n "$legacy_target" && -d "$legacy_target" ]]; then
+      echo "[DRY] $tool: migrate $legacy -> $skill"
+    fi
     echo "[DRY] $tool: $skill -> $target"
     return 0
   fi
 
   mkdir -p "$destination_root"
+
+  if [[ -n "$legacy_target" && -d "$legacy_target" ]]; then
+    rm -rf "$legacy_target"
+    echo "[MIGRATE] $tool: $legacy -> $skill"
+  fi
+
   rm -rf "$target"
   mkdir -p "$target"
   cp -a "$source_dir/." "$target/"

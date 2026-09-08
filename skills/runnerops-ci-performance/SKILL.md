@@ -1,9 +1,9 @@
 ---
-name: analyze-ci-workflow-performance
+name: runnerops-ci-performance
 description: Analyze GitHub Actions workflow architecture and performance without changing workflow files by default. Use when the user asks about CI speed, queue time, critical path, parallelism, needs dependencies, matrices, caching, artifact reuse, runner capacity, duplicated workflows, or GitHub Actions optimization. Combine static workflow evidence with observed GitHub run/job history when available, and label recommendations as STATIC, OBSERVED, or ESTIMATED.
 ---
 
-# Analyze CI Workflow Performance
+# RunnerOps CI Performance
 
 Analyze first. Do not rewrite workflow YAML unless the user explicitly asks to apply a recommendation.
 

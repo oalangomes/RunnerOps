@@ -6,6 +6,11 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ## Unreleased
 
+### Changed
+
+- Agent Skills passam a usar namespace `runnerops-` para melhorar descoberta manual: `runnerops-manage-runners`, `runnerops-pr-validation` e `runnerops-ci-performance`.
+- o installer migra somente os nomes legados conhecidos correspondentes ao instalar uma skill renomeada, evitando descoberta duplicada.
+
 ## v0.2.1 — 2026-09-08
 
 ### Changed

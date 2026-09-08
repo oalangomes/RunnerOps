@@ -4,13 +4,23 @@ Estas são as skills canônicas para operação de runners self-hosted deste rep
 
 Elas usam o formato portável `SKILL.md` de Agent Skills para que o mesmo fluxo não precise de uma implementação diferente para cada coding agent.
 
+## Convenção de nomes
+
+Todas as skills oficiais do produto usam o prefixo `runnerops-`. Isso mantém as skills agrupadas e fáceis de localizar manualmente em diretórios como `~/.agents/skills`, `~/.codex/skills`, `~/.copilot/skills` e `~/.claude/skills`.
+
+Exemplo:
+
+```bash
+ls ~/.agents/skills | grep '^runnerops-'
+```
+
 ## Skills incluídas
 
 | Skill | Finalidade |
 |---|---|
-| `start-project-runners-before-pr` | Antes da PR, garantir somente os runners do repositório atual; depois da publicação, consumir `runnerctl ci watch` quando a tarefa exigir aguardar o CI. |
-| `manage-local-github-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners, além de consumir feedback estruturado do CI por PR/SHA. |
-| `analyze-ci-workflow-performance` | Analisar DAG, critical path, repetição, cache, artifacts, triggers, fila e capacidade usando evidência STATIC / OBSERVED / ESTIMATED; read-only por padrão. |
+| `runnerops-pr-validation` | Antes da PR, garantir somente os runners do repositório atual; depois da publicação, consumir `runnerctl ci watch` quando a tarefa exigir aguardar o CI. |
+| `runnerops-manage-runners` | Inventariar, iniciar/parar, diagnosticar, registrar, remover e validar runners, além de consumir feedback estruturado do CI por PR/SHA. |
+| `runnerops-ci-performance` | Analisar DAG, critical path, repetição, cache, artifacts, triggers, fila e capacidade usando evidência STATIC / OBSERVED / ESTIMATED; read-only por padrão. |
 
 ## Instalação
 
@@ -34,7 +44,7 @@ Instale somente uma skill:
 ```bash
 ./install-agent-skills.sh \
   --tool claude \
-  --skill manage-local-github-runners
+  --skill runnerops-manage-runners
 ```
 
 Visualize o que seria feito sem gravar:
@@ -95,6 +105,16 @@ As skills dependem apenas do comando instalado `runnerctl`; elas não precisam c
 Para feedback de CI, as skills usam somente a interface pública (`runnerctl ci watch`) e preservam a distinção entre falha de workflow e falha de runner/infraestrutura.
 
 As skills nunca embutem nem persistem registration tokens do GitHub Runner.
+
+## Migração de nomes anteriores
+
+Ao instalar uma skill com o nome novo, o installer remove somente o diretório legado conhecido correspondente antes de gravar a versão `runnerops-*`. Ele não remove outras skills nem diretórios desconhecidos.
+
+| Nome anterior | Nome atual |
+|---|---|
+| `start-project-runners-before-pr` | `runnerops-pr-validation` |
+| `manage-local-github-runners` | `runnerops-manage-runners` |
+| `analyze-ci-workflow-performance` | `runnerops-ci-performance` |
 
 ## Compatibilidade
 

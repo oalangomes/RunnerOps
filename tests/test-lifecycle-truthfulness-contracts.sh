@@ -106,14 +106,29 @@ test_query_failure_is_not_healthy() {
   fixture="$(make_systemd_fixture queryfail)"
   IFS='|' read -r runner_dir registry <<< "$fixture"
 
+  local status_rc=0 health_rc=0
+  set +e
   status_output="$(run_systemd_action query-error "$registry" status queryfail 2>&1)"
+  status_rc=$?
+  set -e
+  [[ "$status_rc" -eq 0 ]] || {
+    printf 'status rc=%s output:\n%s\n' "$status_rc" "$status_output" >&2
+    fail "status deve permanecer consultável quando a observação systemd falha"
+  }
   assert_contains "$status_output" "[WARN]" "status deve sinalizar observação desconhecida"
   assert_contains "$status_output" "state=unknown" "status deve usar state=unknown"
   assert_contains "$status_output" "observation=query-error" "status deve explicar falha de observação"
   assert_not_contains "$status_output" "[STOP]" "falha de consulta não pode virar STOP"
   assert_not_contains "$status_output" "[IDLE]" "falha de consulta não pode virar IDLE"
 
+  set +e
   health_output="$(run_systemd_action query-error "$registry" health queryfail 2>&1)"
+  health_rc=$?
+  set -e
+  [[ "$health_rc" -eq 0 ]] || {
+    printf 'health rc=%s output:\n%s\n' "$health_rc" "$health_output" >&2
+    fail "health deve reportar WARN sem abortar quando a observação systemd falha"
+  }
   assert_contains "$health_output" "[WARN]" "health deve sinalizar observação desconhecida"
   assert_contains "$health_output" "state=unknown" "health deve usar state=unknown"
   assert_not_contains "$health_output" "[OK]" "falha de consulta não pode virar health OK"
@@ -135,16 +150,38 @@ test_inactive_on_demand_remains_healthy_idle() {
   fixture="$(make_systemd_fixture idleok)"
   IFS='|' read -r runner_dir registry <<< "$fixture"
 
-  status_output="$(run_systemd_action idle "$registry" status idleok)"
+  local status_rc=0 health_rc=0 doctor_rc=0
+  set +e
+  status_output="$(run_systemd_action idle "$registry" status idleok 2>&1)"
+  status_rc=$?
+  set -e
+  [[ "$status_rc" -eq 0 ]] || {
+    printf 'idle status rc=%s output:\n%s\n' "$status_rc" "$status_output" >&2
+    fail "status idle válido não deve falhar"
+  }
   assert_contains "$status_output" "[IDLE]" "inactive on-demand deve continuar IDLE"
   assert_contains "$status_output" "state=inactive" "status deve preservar inactive"
   assert_contains "$status_output" "boot=disabled" "status deve preservar boot disabled"
 
-  health_output="$(run_systemd_action idle "$registry" health idleok)"
+  set +e
+  health_output="$(run_systemd_action idle "$registry" health idleok 2>&1)"
+  health_rc=$?
+  set -e
+  [[ "$health_rc" -eq 0 ]] || {
+    printf 'idle health rc=%s output:\n%s\n' "$health_rc" "$health_output" >&2
+    fail "health idle válido não deve falhar"
+  }
   assert_contains "$health_output" "[OK]" "inactive on-demand deve continuar saudável"
   assert_contains "$health_output" "idle=true" "inactive on-demand deve continuar idle=true"
 
-  doctor_output="$(run_systemd_action idle "$registry" doctor idleok)"
+  set +e
+  doctor_output="$(run_systemd_action idle "$registry" doctor idleok 2>&1)"
+  doctor_rc=$?
+  set -e
+  [[ "$doctor_rc" -eq 0 ]] || {
+    printf 'idle doctor rc=%s output:\n%s\n' "$doctor_rc" "$doctor_output" >&2
+    fail "doctor idle válido não deve falhar"
+  }
   assert_contains "$doctor_output" "[OK] backend=systemd" "doctor deve aceitar observação válida"
   assert_contains "$doctor_output" "state=inactive" "doctor deve reportar inactive"
 

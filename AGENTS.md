@@ -1,6 +1,6 @@
 # Orientações para contribuidores e agentes
 
-`runnerctl` é a interface pública deste repositório para gerenciar runners locais self-hosted do GitHub Actions.
+RunnerOps é o produto deste repositório. `runnerctl` é sua interface pública para gerenciar runners locais self-hosted do GitHub Actions.
 
 ## Invariantes arquiteturais
 

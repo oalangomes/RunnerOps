@@ -124,6 +124,48 @@ resolve_repo() {
   printf '%s\n' "$repo"
 }
 
+canonical_repo() {
+  local requested="$1"
+  local key canonical
+
+  key="$(normalize_repo "$requested")"
+  canonical="$(gh repo view "$key" --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+  [[ "$canonical" == */* ]] || die "não foi possível resolver nameWithOwner canônico para $requested"
+  printf '%s\n' "$canonical"
+}
+
+preflight_systemd_admin() {
+  local runtime_dir="${RUNNER_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
+
+  command -v systemctl >/dev/null 2>&1 ||
+    die "runnerctl add exige systemctl antes de registrar o runner"
+  [[ -d "$runtime_dir" ]] ||
+    die "runnerctl add exige systemd ativo antes de registrar o runner"
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    echo "[OK] preflight systemd/admin: root"
+    return 0
+  fi
+
+  command -v sudo >/dev/null 2>&1 ||
+    die "runnerctl add exige sudo para instalar o serviço systemd"
+
+  if sudo -n true >/dev/null 2>&1; then
+    echo "[OK] preflight systemd/admin: sudo disponível"
+    return 0
+  fi
+
+  if [[ -t 0 && -t 1 ]]; then
+    echo "[AUTH] validando sudo antes de qualquer registro remoto..."
+    sudo -v ||
+      die "não foi possível validar sudo; nenhum registration token foi solicitado"
+    echo "[OK] preflight systemd/admin: sudo validado"
+    return 0
+  fi
+
+  die "sudo exige autenticação interativa; execute 'sudo -v' em um terminal e repita runnerctl add; nenhum registration token foi solicitado"
+}
+
 repo_slug() {
   local repo="$1"
   printf '%s\n' "${repo##*/}" | tr '[:upper:]' '[:lower:]'
@@ -237,11 +279,13 @@ add_runner() {
   done
 
   repo="$(resolve_repo "$repo_arg")"
-  slug="$(repo_slug "$repo")"
 
   command -v gh >/dev/null 2>&1 || die "GitHub CLI (gh) é obrigatório para runnerctl add"
   gh auth status >/dev/null 2>&1 || die "GitHub CLI não está autenticado"
-  gh repo view "$repo" --json nameWithOwner,viewerPermission >/dev/null
+  repo="$(canonical_repo "$repo")"
+  slug="$(repo_slug "$repo")"
+
+  preflight_systemd_admin
 
   source_dir="$(pwd)"
   if [[ "$profile" == "auto" ]]; then
@@ -250,7 +294,7 @@ add_runner() {
     else
       local current=""
       current="$(current_repo || true)"
-      if [[ "$current" == "$repo" ]]; then
+      if [[ "$(normalize_repo "$current")" == "$(normalize_repo "$repo")" ]]; then
         profile="$(infer_profile_from_dir "$source_dir")"
       else
         profile="generic"
@@ -290,6 +334,12 @@ add_runner() {
   if ! output="$(printf '%s\n' "$token" | "$PLATFORM_HOME/configure-runner.sh" "${args[@]}" 2>&1)"; then
     unset token
     printf '%s\n' "$output" >&2
+    runner_name="$(printf '%s\n' "$output" | awk -F': ' '/^Runner local: /{print $2}' | tail -n 1)"
+    echo "[INCONCLUSIVE] runner=${runner_name:-unknown} repo=$repo phase=configure remote-registration=unknown" >&2
+    if [[ -n "$runner_name" ]]; then
+      echo "[RECOVERY] runnerctl doctor $runner_name" >&2
+    fi
+    echo "[RECOVERY] verifique o registro remoto antes de repetir runnerctl add" >&2
     return 1
   fi
   unset token
@@ -298,8 +348,19 @@ add_runner() {
   runner_name="$(printf '%s\n' "$output" | awk -F': ' '/^Nome local: /{print $2}' | tail -n 1)"
   [[ -n "$runner_name" ]] || die "runner foi configurado, mas o nome local não pôde ser resolvido"
 
-  "$PLATFORM_HOME/runner-services.sh" migrate "$runner_name"
-  "$PLATFORM_HOME/runners.sh" doctor "$runner_name"
+  if ! "$PLATFORM_HOME/runner-services.sh" migrate "$runner_name"; then
+    echo "[PARTIAL] runner=$runner_name repo=$repo phase=systemd-migrate remote-registration=present" >&2
+    echo "[RECOVERY] runnerctl doctor $runner_name" >&2
+    echo "[RECOVERY] runnerctl migrate $runner_name" >&2
+    return 1
+  fi
+
+  if ! "$PLATFORM_HOME/runners.sh" doctor "$runner_name"; then
+    echo "[PARTIAL] runner=$runner_name repo=$repo phase=post-migrate-doctor remote-registration=present" >&2
+    echo "[RECOVERY] runnerctl doctor $runner_name" >&2
+    return 1
+  fi
+
   "$PLATFORM_HOME/runners.sh" health "$runner_name"
 
   echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"

@@ -378,7 +378,7 @@ runnerctl skills install agents
 
 A skill `runnerops-pr-validation` pode acordar apenas os runners associados ao repositório atual antes de publicar uma PR e, depois da publicação, consumir `runnerctl ci watch` para devolver o estado conclusivo do CI ao agente.
 
-A skill `runnerops-manage-runners` cobre inventário, health, start/stop, diagnóstico, cadastro, remoção governada e leitura estruturada do feedback de CI.
+A skill `runnerops-manage-runners` cobre inventário, lifecycle verificado, cadastro/recovery, capacidade provisionada vs disponível agora, operações repo-scoped, remoção governada e leitura estruturada do feedback de CI.
 
 A skill `runnerops-ci-performance` faz análise read-only de arquitetura/performance do GitHub Actions, separando evidência `STATIC`, `OBSERVED` e `ESTIMATED` e evitando recomendar otimizações sem prova.
 

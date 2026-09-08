@@ -130,7 +130,7 @@ resolve_pr_sha() {
 
 query_runs() {
   gh api "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-    --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // "-"), .html_url, (.run_attempt // 1)] | @tsv'
+    --jq '.workflow_runs[] | [.id, .name, .status, (.conclusion // "-"), .html_url, (.run_attempt // 1), (.created_at // "-")] | @tsv'
 }
 
 query_failure_details() {
@@ -342,12 +342,381 @@ started_at="$(date +%s)"
 last_terminal_signature=""
 stable_terminal_polls=0
 last_wait_signature=""
+cohort_cutoff=""
+cohort_from_active=0
 
 while true; do
   rows=""
   if ! rows="$(query_runs 2>/dev/null)"; then
     emit_result error infra "" "" "" "" 0 "falha ao consultar GitHub Actions"
     exit 2
+  fi
+
+  latest_created_at=""
+  earliest_active_created_at=""
+
+  while IFS=
+  failure_workflow=""
+  failure_run_id=""
+  failure_url=""
+  failure_attempt=""
+  cancelled_workflow=""
+  cancelled_run_id=""
+  cancelled_url=""
+  cancelled_attempt=""
+  terminal_signature=""
+  active_run_ids=()
+
+  while IFS=
+    terminal_signature+="${run_id}:${attempt}:${status}:${conclusion}|"
+
+    if [[ "$status" != "completed" ]]; then
+      active_count=$((active_count + 1))
+      active_run_ids+=("$run_id:$attempt")
+      continue
+    fi
+
+    case "$conclusion" in
+      success|neutral|skipped)
+        ;;
+      failure|timed_out|action_required|startup_failure)
+        if [[ -z "$failure_run_id" ]]; then
+          failure_conclusion="$conclusion"
+          failure_workflow="$workflow"
+          failure_run_id="$run_id"
+          failure_url="$url"
+          failure_attempt="$attempt"
+        fi
+        ;;
+      cancelled)
+        if [[ -z "$cancelled_run_id" ]]; then
+          cancelled_workflow="$workflow"
+          cancelled_run_id="$run_id"
+          cancelled_url="$url"
+          cancelled_attempt="$attempt"
+        fi
+        ;;
+      *)
+        active_count=$((active_count + 1))
+        ;;
+    esac
+  done <<< "$rows"
+
+  if [[ -n "$failure_run_id" ]]; then
+    populate_failure_details "$failure_run_id" "$failure_attempt"
+    if [[ "$failure_conclusion" == "startup_failure" ]]; then
+      DETAIL_DIAGNOSIS="workflow_startup_failure"
+      emit_result failure infra "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow não conseguiu iniciar"
+      exit 2
+    fi
+    emit_result failure ci "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow concluído com falha"
+    exit 1
+  fi
+
+  if [[ "$run_count" -gt 0 && "$active_count" -eq 0 ]]; then
+    if [[ -n "$cancelled_run_id" ]]; then
+      DETAIL_RUN_ATTEMPT="$cancelled_attempt"
+      emit_result cancelled inconclusive cancelled "$cancelled_workflow" "$cancelled_run_id" "$cancelled_url" "$run_count" "workflow cancelado"
+      exit 3
+    fi
+
+    if [[ "$terminal_signature" == "$last_terminal_signature" ]]; then
+      stable_terminal_polls=$((stable_terminal_polls + 1))
+    else
+      last_terminal_signature="$terminal_signature"
+      stable_terminal_polls=1
+    fi
+
+    if [[ "$stable_terminal_polls" -ge "$SETTLE_POLLS" ]]; then
+      emit_result success ci success "" "" "" "$run_count" "todos os workflows observados concluíram com sucesso"
+      exit 0
+    fi
+  else
+    stable_terminal_polls=0
+    last_terminal_signature=""
+  fi
+
+  now="$(date +%s)"
+  elapsed=$((now - started_at))
+  if [[ "$elapsed" -ge "$TIMEOUT_SECONDS" ]]; then
+    if [[ "${#active_run_ids[@]}" -gt 0 ]] && diagnose_waiting_self_hosted "${active_run_ids[@]}"; then
+      emit_result error infra "" "" "" "" "$run_count" "nenhum runner self-hosted online corresponde às labels do job aguardando; valide runnerctl doctor/health no host"
+      exit 2
+    fi
+    emit_result timeout inconclusive "" "" "" "" "$run_count" "timeout aguardando conclusão do CI"
+    exit 3
+  fi
+
+  if [[ "$JSON_OUTPUT" -eq 0 ]]; then
+    wait_signature="$run_count:$active_count:$stable_terminal_polls"
+    if [[ "$wait_signature" != "$last_wait_signature" ]]; then
+      echo "[WAIT] repo=$REPO sha=$SHA runs=$run_count active=$active_count"
+      last_wait_signature="$wait_signature"
+    fi
+  fi
+
+  sleep "$INTERVAL_SECONDS"
+done
+\t' read -r _run_id _workflow _status _conclusion _url _attempt created_at; do
+    [[ -n "${_run_id:-}" ]] || continue
+    [[ "$created_at" == "-" ]] && created_at=""
+    [[ -n "$created_at" ]] || continue
+
+    if [[ -z "$latest_created_at" || "$created_at" > "$latest_created_at" ]]; then
+      latest_created_at="$created_at"
+    fi
+
+    if [[ "$_status" != "completed" ]]; then
+      if [[ -z "$earliest_active_created_at" || "$created_at" < "$earliest_active_created_at" ]]; then
+        earliest_active_created_at="$created_at"
+      fi
+    fi
+  done <<< "$rows"
+
+  if [[ -n "$earliest_active_created_at" ]]; then
+    if [[ -z "$cohort_cutoff" ]]; then
+      cohort_cutoff="$earliest_active_created_at"
+      cohort_from_active=1
+    elif [[ "$cohort_from_active" -eq 0 && "$earliest_active_created_at" > "$cohort_cutoff" ]]; then
+      cohort_cutoff="$earliest_active_created_at"
+      cohort_from_active=1
+    fi
+  elif [[ -z "$cohort_cutoff" && -n "$latest_created_at" ]]; then
+    cohort_cutoff="$latest_created_at"
+  fi
+
+  run_count=0
+  active_count=0
+  failure_conclusion=""
+  failure_workflow=""
+  failure_run_id=""
+  failure_url=""
+  failure_attempt=""
+  cancelled_workflow=""
+  cancelled_run_id=""
+  cancelled_url=""
+  cancelled_attempt=""
+  terminal_signature=""
+  active_run_ids=()
+
+  while IFS=$'\t' read -r run_id workflow status conclusion url attempt; do
+    [[ -n "${run_id:-}" ]] || continue
+    [[ "$conclusion" == "-" ]] && conclusion=""
+    run_count=$((run_count + 1))
+    terminal_signature+="${run_id}:${attempt}:${status}:${conclusion}|"
+
+    if [[ "$status" != "completed" ]]; then
+      active_count=$((active_count + 1))
+      active_run_ids+=("$run_id:$attempt")
+      continue
+    fi
+
+    case "$conclusion" in
+      success|neutral|skipped)
+        ;;
+      failure|timed_out|action_required|startup_failure)
+        if [[ -z "$failure_run_id" ]]; then
+          failure_conclusion="$conclusion"
+          failure_workflow="$workflow"
+          failure_run_id="$run_id"
+          failure_url="$url"
+          failure_attempt="$attempt"
+        fi
+        ;;
+      cancelled)
+        if [[ -z "$cancelled_run_id" ]]; then
+          cancelled_workflow="$workflow"
+          cancelled_run_id="$run_id"
+          cancelled_url="$url"
+          cancelled_attempt="$attempt"
+        fi
+        ;;
+      *)
+        active_count=$((active_count + 1))
+        ;;
+    esac
+  done <<< "$rows"
+
+  if [[ -n "$failure_run_id" ]]; then
+    populate_failure_details "$failure_run_id" "$failure_attempt"
+    if [[ "$failure_conclusion" == "startup_failure" ]]; then
+      DETAIL_DIAGNOSIS="workflow_startup_failure"
+      emit_result failure infra "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow não conseguiu iniciar"
+      exit 2
+    fi
+    emit_result failure ci "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow concluído com falha"
+    exit 1
+  fi
+
+  if [[ "$run_count" -gt 0 && "$active_count" -eq 0 ]]; then
+    if [[ -n "$cancelled_run_id" ]]; then
+      DETAIL_RUN_ATTEMPT="$cancelled_attempt"
+      emit_result cancelled inconclusive cancelled "$cancelled_workflow" "$cancelled_run_id" "$cancelled_url" "$run_count" "workflow cancelado"
+      exit 3
+    fi
+
+    if [[ "$terminal_signature" == "$last_terminal_signature" ]]; then
+      stable_terminal_polls=$((stable_terminal_polls + 1))
+    else
+      last_terminal_signature="$terminal_signature"
+      stable_terminal_polls=1
+    fi
+
+    if [[ "$stable_terminal_polls" -ge "$SETTLE_POLLS" ]]; then
+      emit_result success ci success "" "" "" "$run_count" "todos os workflows observados concluíram com sucesso"
+      exit 0
+    fi
+  else
+    stable_terminal_polls=0
+    last_terminal_signature=""
+  fi
+
+  now="$(date +%s)"
+  elapsed=$((now - started_at))
+  if [[ "$elapsed" -ge "$TIMEOUT_SECONDS" ]]; then
+    if [[ "${#active_run_ids[@]}" -gt 0 ]] && diagnose_waiting_self_hosted "${active_run_ids[@]}"; then
+      emit_result error infra "" "" "" "" "$run_count" "nenhum runner self-hosted online corresponde às labels do job aguardando; valide runnerctl doctor/health no host"
+      exit 2
+    fi
+    emit_result timeout inconclusive "" "" "" "" "$run_count" "timeout aguardando conclusão do CI"
+    exit 3
+  fi
+
+  if [[ "$JSON_OUTPUT" -eq 0 ]]; then
+    wait_signature="$run_count:$active_count:$stable_terminal_polls"
+    if [[ "$wait_signature" != "$last_wait_signature" ]]; then
+      echo "[WAIT] repo=$REPO sha=$SHA runs=$run_count active=$active_count"
+      last_wait_signature="$wait_signature"
+    fi
+  fi
+
+  sleep "$INTERVAL_SECONDS"
+done
+\t' read -r run_id workflow status conclusion url attempt created_at; do
+    [[ -n "${run_id:-}" ]] || continue
+    [[ "$conclusion" == "-" ]] && conclusion=""
+    [[ "$created_at" == "-" ]] && created_at=""
+
+    if [[ -n "$cohort_cutoff" && -n "$created_at" && "$created_at" < "$cohort_cutoff" ]]; then
+      continue
+    fi
+
+    run_count=$((run_count + 1))
+    terminal_signature+="${run_id}:${attempt}:${status}:${conclusion}|"
+
+    if [[ "$status" != "completed" ]]; then
+      active_count=$((active_count + 1))
+      active_run_ids+=("$run_id:$attempt")
+      continue
+    fi
+
+    case "$conclusion" in
+      success|neutral|skipped)
+        ;;
+      failure|timed_out|action_required|startup_failure)
+        if [[ -z "$failure_run_id" ]]; then
+          failure_conclusion="$conclusion"
+          failure_workflow="$workflow"
+          failure_run_id="$run_id"
+          failure_url="$url"
+          failure_attempt="$attempt"
+        fi
+        ;;
+      cancelled)
+        if [[ -z "$cancelled_run_id" ]]; then
+          cancelled_workflow="$workflow"
+          cancelled_run_id="$run_id"
+          cancelled_url="$url"
+          cancelled_attempt="$attempt"
+        fi
+        ;;
+      *)
+        active_count=$((active_count + 1))
+        ;;
+    esac
+  done <<< "$rows"
+
+  if [[ -n "$failure_run_id" ]]; then
+    populate_failure_details "$failure_run_id" "$failure_attempt"
+    if [[ "$failure_conclusion" == "startup_failure" ]]; then
+      DETAIL_DIAGNOSIS="workflow_startup_failure"
+      emit_result failure infra "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow não conseguiu iniciar"
+      exit 2
+    fi
+    emit_result failure ci "$failure_conclusion" "$failure_workflow" "$failure_run_id" "$failure_url" "$run_count" "workflow concluído com falha"
+    exit 1
+  fi
+
+  if [[ "$run_count" -gt 0 && "$active_count" -eq 0 ]]; then
+    if [[ -n "$cancelled_run_id" ]]; then
+      DETAIL_RUN_ATTEMPT="$cancelled_attempt"
+      emit_result cancelled inconclusive cancelled "$cancelled_workflow" "$cancelled_run_id" "$cancelled_url" "$run_count" "workflow cancelado"
+      exit 3
+    fi
+
+    if [[ "$terminal_signature" == "$last_terminal_signature" ]]; then
+      stable_terminal_polls=$((stable_terminal_polls + 1))
+    else
+      last_terminal_signature="$terminal_signature"
+      stable_terminal_polls=1
+    fi
+
+    if [[ "$stable_terminal_polls" -ge "$SETTLE_POLLS" ]]; then
+      emit_result success ci success "" "" "" "$run_count" "todos os workflows observados concluíram com sucesso"
+      exit 0
+    fi
+  else
+    stable_terminal_polls=0
+    last_terminal_signature=""
+  fi
+
+  now="$(date +%s)"
+  elapsed=$((now - started_at))
+  if [[ "$elapsed" -ge "$TIMEOUT_SECONDS" ]]; then
+    if [[ "${#active_run_ids[@]}" -gt 0 ]] && diagnose_waiting_self_hosted "${active_run_ids[@]}"; then
+      emit_result error infra "" "" "" "" "$run_count" "nenhum runner self-hosted online corresponde às labels do job aguardando; valide runnerctl doctor/health no host"
+      exit 2
+    fi
+    emit_result timeout inconclusive "" "" "" "" "$run_count" "timeout aguardando conclusão do CI"
+    exit 3
+  fi
+
+  if [[ "$JSON_OUTPUT" -eq 0 ]]; then
+    wait_signature="$run_count:$active_count:$stable_terminal_polls"
+    if [[ "$wait_signature" != "$last_wait_signature" ]]; then
+      echo "[WAIT] repo=$REPO sha=$SHA runs=$run_count active=$active_count"
+      last_wait_signature="$wait_signature"
+    fi
+  fi
+
+  sleep "$INTERVAL_SECONDS"
+done
+\t' read -r _run_id _workflow _status _conclusion _url _attempt created_at; do
+    [[ -n "${_run_id:-}" ]] || continue
+    [[ "$created_at" == "-" ]] && created_at=""
+    [[ -n "$created_at" ]] || continue
+
+    if [[ -z "$latest_created_at" || "$created_at" > "$latest_created_at" ]]; then
+      latest_created_at="$created_at"
+    fi
+
+    if [[ "$_status" != "completed" ]]; then
+      if [[ -z "$earliest_active_created_at" || "$created_at" < "$earliest_active_created_at" ]]; then
+        earliest_active_created_at="$created_at"
+      fi
+    fi
+  done <<< "$rows"
+
+  if [[ -n "$earliest_active_created_at" ]]; then
+    if [[ -z "$cohort_cutoff" ]]; then
+      cohort_cutoff="$earliest_active_created_at"
+      cohort_from_active=1
+    elif [[ "$cohort_from_active" -eq 0 && "$earliest_active_created_at" > "$cohort_cutoff" ]]; then
+      cohort_cutoff="$earliest_active_created_at"
+      cohort_from_active=1
+    fi
+  elif [[ -z "$cohort_cutoff" && -n "$latest_created_at" ]]; then
+    cohort_cutoff="$latest_created_at"
   fi
 
   run_count=0

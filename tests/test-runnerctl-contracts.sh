@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
 ISOLATED_ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing-actions-runners.env"
-EXPECTED_RUNNERCTL_VERSION="0.2.1"
+EXPECTED_RUNNERCTL_VERSION="0.2.2"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 pass() {

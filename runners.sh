@@ -568,10 +568,6 @@ start_runner() {
   [[ -x "$run_sh" ]] || die "$name: run.sh nao encontrado ou sem permissao em: $path"
 
   pid="$(runner_pid "$name" || true)"
-  if is_running_pid "$pid"; then
-    echo "[OK] $name ja esta rodando (pid $pid; $(runner_process_summary "$path"))"
-    return 0
-  fi
 
   listener_count="$(runner_listener_count_by_path "$path")"
   worker_count="$(runner_worker_count_by_path "$path")"
@@ -629,10 +625,10 @@ start_runner() {
   pid="$(runner_pid "$name" || true)"
   primary_pid="$(runner_primary_pid_by_path "$path")"
 
-  if is_running_pid "$pid" || [[ -n "$primary_pid" ]]; then
+  if [[ -n "$primary_pid" ]]; then
     mkdir -p "$PID_DIR"
-    echo "${primary_pid:-$pid}" > "$(pid_file "$name")"
-    echo "[OK] $name iniciado backend=legacy pid=${primary_pid:-$pid} ($(runner_process_summary "$path"))"
+    echo "$primary_pid" > "$(pid_file "$name")"
+    echo "[OK] $name iniciado backend=legacy pid=$primary_pid ($(runner_process_summary "$path"))"
     return 0
   fi
 

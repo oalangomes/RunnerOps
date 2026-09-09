@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RUNNERCTL_VERSION="0.2.1"
+RUNNERCTL_VERSION="0.2.2"
 
 if [[ "${1:-}" == "--version" ]]; then
   printf 'runnerctl %s\n' "$RUNNERCTL_VERSION"

@@ -203,25 +203,28 @@ EOF
   printf '%s\n' '# name|path|profile|repo|enabled|group' > "$registry"
   printf 'dead|%s|generic|example/project|true|example\n' "$runner_dir" >> "$registry"
 
-  set +e
-  output="$(
-    PATH="$TMP_ROOT/bin:$PATH" \
-      ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
-      RUNNERS_CONFIG="$registry" \
-      RUNNER_STATE_ROOT="$TMP_ROOT/legacy-state" \
-      RUNNER_CACHE_ROOT="$TMP_ROOT/legacy-cache" \
-      RUNNER_SYSTEMD_RUNTIME_DIR="$TMP_ROOT/no-systemd" \
-      RUNNER_LEGACY_START_SETTLE_SECONDS=0.2 \
-      "$ROOT/runners.sh" start dead 2>&1
-  )"
-  rc=$?
-  set -e
+  local attempt
+  for attempt in 1 2 3; do
+    set +e
+    output="$(
+      PATH="$TMP_ROOT/bin:$PATH" \
+        ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+        RUNNERS_CONFIG="$registry" \
+        RUNNER_STATE_ROOT="$TMP_ROOT/legacy-state" \
+        RUNNER_CACHE_ROOT="$TMP_ROOT/legacy-cache" \
+        RUNNER_SYSTEMD_RUNTIME_DIR="$TMP_ROOT/no-systemd" \
+        RUNNER_LEGACY_START_SETTLE_SECONDS=0.2 \
+        "$ROOT/runners.sh" start dead 2>&1
+    )"
+    rc=$?
+    set -e
 
-  [[ "$rc" -ne 0 ]] || fail "legacy start deve falhar se processo morrer durante settle"
-  assert_contains "$output" "[ERR] dead nao permaneceu ativo backend=legacy" "falha de ativação deve ser explícita"
-  [[ ! -e "$pid_file" ]] || fail "PID stale deve ser removido após falha de start"
+    [[ "$rc" -ne 0 ]] || fail "legacy start deve falhar se processo morrer durante settle (tentativa $attempt)"
+    assert_contains "$output" "[ERR] dead nao permaneceu ativo backend=legacy" "falha de ativação deve ser explícita"
+    [[ ! -e "$pid_file" ]] || fail "PID stale deve ser removido após falha de start"
+  done
 
-  pass "legacy start valida settle e remove PID stale ao falhar"
+  pass "legacy start exige processo do runner e remove PID stale de forma repetível"
 }
 
 main() {

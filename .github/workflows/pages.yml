@@ -32,10 +32,12 @@ jobs:
           test -s site/styles.css
           test -s site/favicon.svg
           test -s site/i18n.js
+          test -s site/social-preview.jpg
           node --check site/i18n.js
           grep -F '<title>RunnerOps' site/index.html
           grep -F 'runnerctl' site/index.html
           grep -F 'https://github.com/oalangomes/RunnerOps' site/index.html
+          grep -F 'https://oalangomes.github.io/RunnerOps/social-preview.jpg' site/index.html
           grep -F 'RunnerOps v0.2.2' site/index.html
           grep -F 'data-lang="pt-BR"' site/index.html
           grep -F "'pt-BR':" site/i18n.js

@@ -90,9 +90,8 @@ jobs:
       - name: Validate README brand asset
         shell: bash
         run: |
-          test -s docs/images/runnerops-banner.svg
-          grep -F 'runnerctl start' docs/images/runnerops-banner.svg
-          grep -F 'docs/images/runnerops-banner.svg' README.md
+          test -s docs/images/runnerops-social-preview.jpg
+          grep -F 'docs/images/runnerops-social-preview.jpg' README.md
 
       - name: Validate RunnerOps Pages
         shell: bash
@@ -101,10 +100,12 @@ jobs:
           test -s site/styles.css
           test -s site/favicon.svg
           test -s site/i18n.js
+          test -s site/social-preview.jpg
           node --check site/i18n.js
           grep -F '<title>RunnerOps' site/index.html
           grep -F 'runnerctl' site/index.html
-          grep -F 'https://github.com/oalangomes/RunnerOps' site/index.html\n          grep -F 'https://oalangomes.github.io/RunnerOps/social-preview.jpg' site/index.html
+          grep -F 'https://github.com/oalangomes/RunnerOps' site/index.html
+          grep -F 'https://oalangomes.github.io/RunnerOps/social-preview.jpg' site/index.html
           grep -F 'RunnerOps v0.2.2' site/index.html
           grep -F 'data-lang="pt-BR"' site/index.html
           grep -F "'pt-BR':" site/i18n.js

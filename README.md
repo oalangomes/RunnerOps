@@ -1,7 +1,7 @@
 # RunnerOps
 
 <p align="center">
-  <img src="docs/images/runnerops-banner.svg" alt="RunnerOps — lightweight control for on-demand GitHub Actions runners" width="100%">
+  <img src="docs/images/runnerops-social-preview.jpg" alt="RunnerOps — lightweight control for on-demand GitHub Actions runners" width="100%">
 </p>
 
 **Website:** https://oalangomes.github.io/RunnerOps/

@@ -90,8 +90,9 @@ jobs:
       - name: Validate README brand asset
         shell: bash
         run: |
+          test -s docs/images/runnerops-banner-green.jpg
+          grep -F 'docs/images/runnerops-banner-green.jpg' README.md
           test -s docs/images/runnerops-social-preview.jpg
-          grep -F 'docs/images/runnerops-social-preview.jpg' README.md
 
       - name: Validate RunnerOps Pages
         shell: bash

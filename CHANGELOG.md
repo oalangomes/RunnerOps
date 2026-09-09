@@ -4,7 +4,7 @@ Mudanças relevantes do RunnerOps e de sua CLI pública `runnerctl` são registr
 
 O projeto segue versionamento SemVer enquanto a API pública amadurece. Em versões `0.x`, mudanças incompatíveis continuam sendo evitadas e devem ser explicitadas quando inevitáveis.
 
-## Unreleased
+## v0.2.2 — 2026-09-08
 
 ### Fixed
 
@@ -20,6 +20,12 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - `runnerops-manage-runners` passa a distinguir capacidade provisionada/ociosa de capacidade disponível agora, exige status/health após start/restart, prefere operações repo-scoped/exatas e trata `PARTIAL`, `INCONCLUSIVE` e lifecycle unknown sem retries cegos.
 - Agent Skills passam a usar namespace `runnerops-` para melhorar descoberta manual: `runnerops-manage-runners`, `runnerops-pr-validation` e `runnerops-ci-performance`.
 - o installer migra somente os nomes legados conhecidos correspondentes ao instalar uma skill renomeada, evitando descoberta duplicada.
+
+### Validation
+
+- o release gate #64 passou no host real WSL2 + systemd: lifecycle truthfulness, start de runner exato com confirmação `online` no GitHub, preflight de sudo antes do registro remoto, persistência canônica de `nameWithOwner`, provisioning temporário e limpeza governada.
+- `runnerctl ci watch` foi validado contra um workflow real e classificou corretamente uma falha de step como `kind=ci`, sem atribuí-la a runner/infraestrutura.
+- diagnósticos do backend legado permaneceram cobertos por contratos focados; não havia runner legado no host do release gate.
 
 ## v0.2.1 — 2026-09-08
 

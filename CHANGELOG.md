@@ -8,11 +8,15 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Added
 
+- audit store local e opcional de autoscale com SQLite via biblioteca padrão do Python, schema/migration v1, observações consecutivas de fila, decisões imutáveis, ações correlacionadas e transições idempotentes. Retention e limites de crescimento são configuráveis; registros não incluem snapshots brutos ou diagnósticos livres.
+- `runnerctl autoscale history [--since DURATION] [--json]` e `runnerctl autoscale explain --decision ID [--json]` consultam o histórico sem criar ou modificar o banco em `RUNNER_STATE_ROOT/autoscale.db`.
+- duração de fila observada pelo RunnerOps usa `first_seen_queued_at`/`last_seen_queued_at` e interrompe continuidade em lacunas, falhas de coleta e saída da fila; `job.created_at` permanece apenas evidência de origem. A gravação é uma API interna, sem planner/controller ou mudanças em `capacity`.
 - `runnerctl capacity [owner/repo|.] [--json]` e `runnerctl autoscale status` adicionam observabilidade read-only de fila e capacidade com `CapacitySnapshot` v1, preservando identidade canônica, labels, estados local/remoto e evidência inconclusiva sem mutação.
 - a capacidade opcional usa Python 3.8+ somente com biblioteca padrão; `platform-doctor` reporta essa capability sem torná-la requisito para os comandos tradicionais do RunnerOps.
 
 ### Fixed
 
+- `runnerctl init` passa a proteger `RUNNER_STATE_ROOT` com modo `0700`, inclusive ao reaplicar a configuração sobre um diretório existente, garantindo compatibilidade entre o fluxo oficial de inicialização e o audit store privado.
 - `runnerctl ensure .` deixa de chamar `systemctl start` para runners systemd já ativos; o caminho passa a ser idempotente e não solicita sudo quando nenhuma mutação é necessária.
 - lifecycle runtime (`ensure/start/stop/restart`) deixa de abrir prompt interativo de sudo: mutações usam autorização one-time via `runnerctl platform-authorize` e falham rápido quando ela não existe.
 - lifecycle systemd desconhecido/query-error continua fail-safe e não dispara mutação privilegiada.

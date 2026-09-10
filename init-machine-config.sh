@@ -20,6 +20,12 @@ die() {
 
 mkdir -p "$CONFIG_HOME" "$(dirname "$TARGET_CONFIG")" "$DATA_ROOT" "$CACHE_ROOT" "$STATE_ROOT"
 
+# Machine-local state may contain audit evidence and diagnostics. Keep the
+# canonical state root private even when mkdir inherited a permissive umask,
+# and tighten existing installs so the autoscale audit writer can use the same
+# path safely.
+chmod 700 "$STATE_ROOT" || die "não foi possível proteger RUNNER_STATE_ROOT: $STATE_ROOT"
+
 if [[ -f "$TARGET_CONFIG" ]]; then
   echo "[KEEP] registry local ja existe: $TARGET_CONFIG"
 else

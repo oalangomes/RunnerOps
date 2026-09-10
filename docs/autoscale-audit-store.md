@@ -35,10 +35,12 @@ read-only opening constraints. WAL can be reconsidered with measured contention
 in a future controller; it is not necessary for this audit contract.
 
 Only an explicit internal writer opens/creates a database and applies migrations.
-Creation uses a private state directory (`0700`) and file (`0600`). Existing unsafe
-directory/file permissions are reported, not silently changed; an operator may
-correct ownership/permissions before opening a writer. Read commands never create
-the state directory, initialize schema, prune records or repair corruption.
+Creation uses a private state directory (`0700`) and file (`0600`). The canonical
+`runnerctl init` path creates or tightens `RUNNER_STATE_ROOT` to `0700`, including
+existing RunnerOps state roots created under a permissive umask. The audit writer
+still rejects an unsafe state root when reached outside that initialization path;
+it never weakens the permission check itself. Read commands never create the state
+directory, initialize schema, prune records or repair corruption.
 
 ## Schema v1
 

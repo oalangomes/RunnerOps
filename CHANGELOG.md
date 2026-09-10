@@ -16,6 +16,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Fixed
 
+- `runnerctl init` passa a proteger `RUNNER_STATE_ROOT` com modo `0700`, inclusive ao reaplicar a configuração sobre um diretório existente, garantindo compatibilidade entre o fluxo oficial de inicialização e o audit store privado.
 - `runnerctl ensure .` deixa de chamar `systemctl start` para runners systemd já ativos; o caminho passa a ser idempotente e não solicita sudo quando nenhuma mutação é necessária.
 - lifecycle runtime (`ensure/start/stop/restart`) deixa de abrir prompt interativo de sudo: mutações usam autorização one-time via `runnerctl platform-authorize` e falham rápido quando ela não existe.
 - lifecycle systemd desconhecido/query-error continua fail-safe e não dispara mutação privilegiada.

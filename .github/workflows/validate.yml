@@ -67,8 +67,28 @@ jobs:
             autoscale_contracts.py \
             autoscale_store.py \
             autoscale_audit.py \
+            .github/scripts/resolve-runner-identity.py \
             tests/test-capacity-contracts.py \
             tests/test-autoscale-audit-contracts.py
+
+      - name: Validate dogfood identity resolver
+        shell: bash
+        run: |
+          fixture="$RUNNER_TEMP/runner-identity"
+          runner_path="$fixture/runnerops-fixture"
+          workspace="$runner_path/_work/RunnerOps/RunnerOps"
+          registry="$fixture/runners.conf"
+          mkdir -p "$workspace"
+          printf '%s\n' '{"agentId":42,"agentName":"host-runnerops-fixture"}' > "$runner_path/.runner"
+          printf '%s|%s|generic|example/runnerops|true|runnerops\n' \
+            'runnerops-fixture' "$runner_path" > "$registry"
+          resolved="$(
+            python3 -B .github/scripts/resolve-runner-identity.py \
+              --registry "$registry" \
+              --workspace "$workspace" \
+              --github-runner-name 'host-runnerops-fixture'
+          )"
+          test "$resolved" = 'runnerops-fixture'
 
       - name: Validate XDG runtime defaults
         shell: bash
@@ -221,10 +241,6 @@ jobs:
               --settle-polls 1
           )" || watch_rc=$?
           printf '%s\n' "$watch_output"
-
-          # For this smoke, both success (0) and a conclusively classified CI
-          # failure (1) prove the GitHub API feedback bridge. Infra/access (2)
-          # and inconclusive/timeout (3) remain failures of the smoke itself.
           case "$watch_rc" in
             0|1) ;;
             *)
@@ -267,55 +283,16 @@ jobs:
           runnerctl platform-doctor
           test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
 
-          # Resolve the local RunnerOps identity from facts owned by this host:
-          # the current Actions workspace must live under one registered runner's
-          # <runner-path>/_work, and that runner's official .runner metadata must
-          # expose the same GitHub agentName as RUNNER_NAME. This avoids assuming
-          # local id == GitHub name and does not require the runner-admin API.
+          # The local RunnerOps id and GitHub's agent name are separate identities.
+          # Resolve the current local id from this job's workspace plus the official
+          # local .runner registration metadata; no runner-admin API is required.
           # shellcheck source=/dev/null
           source "$platform_home/runner-runtime-env.sh"
           local_runner_name="$(
-            python3 - "$RUNNERS_CONFIG" "$GITHUB_WORKSPACE" "$RUNNER_NAME" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-config_path = Path(sys.argv[1])
-workspace = Path(sys.argv[2]).resolve()
-remote_name = sys.argv[3].casefold()
-matches = []
-
-for raw_line in config_path.read_text(encoding="utf-8").splitlines():
-    line = raw_line.strip().replace("\r", "")
-    if not line or line.startswith("#"):
-        continue
-    fields = [value.strip() for value in line.split("|")]
-    if len(fields) < 2 or not fields[0] or not fields[1]:
-        raise SystemExit("invalid runners.conf entry while resolving current runner")
-
-    local_name, raw_path = fields[0], fields[1]
-    runner_path = Path(raw_path).expanduser().resolve()
-    work_root = (runner_path / "_work").resolve()
-    try:
-        workspace.relative_to(work_root)
-    except ValueError:
-        continue
-
-    registration_path = runner_path / ".runner"
-    try:
-        registration = json.loads(registration_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot read runner registration metadata for {local_name}: {exc}")
-
-    if str(registration.get("agentName", "")).casefold() == remote_name:
-        matches.append(local_name)
-
-if len(matches) != 1:
-    raise SystemExit(
-        f"expected exactly one local RunnerOps execution identity for {sys.argv[3]!r}; found {len(matches)}"
-    )
-print(matches[0])
-PY
+            python3 -B ./.github/scripts/resolve-runner-identity.py \
+              --registry "$RUNNERS_CONFIG" \
+              --workspace "$GITHUB_WORKSPACE" \
+              --github-runner-name "$RUNNER_NAME"
           )"
           test -n "$local_runner_name"
           printf 'github_runner_name=%s\nlocal_runner_name=%s\nidentity_source=workspace+registration\n' \

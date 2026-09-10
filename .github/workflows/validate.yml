@@ -244,15 +244,51 @@ jobs:
 
       - name: Dogfood installed RunnerOps control plane
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           command -v runnerctl >/dev/null 2>&1
           runnerctl --version
-          runnerctl platform-home
+          platform_home="$(runnerctl platform-home)"
+          printf 'platform_home=%s\n' "$platform_home"
           runnerctl platform-doctor
           test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
-          runnerctl status "$RUNNER_NAME"
-          runnerctl health "$RUNNER_NAME"
-          runnerctl plan "$RUNNER_NAME"
+
+          # RunnerOps keeps a stable local id (for example runnerops-1) while
+          # GitHub exposes the registered agent name (for example host-runnerops-1).
+          # Reuse CapacitySnapshot's registration-id correlation instead of
+          # assuming both namespaces are equal or stripping a hostname prefix.
+          # shellcheck source=/dev/null
+          source "$platform_home/runner-runtime-env.sh"
+          capacity_json="$(python3 -B ./capacity.py "$GITHUB_REPOSITORY" --json)"
+          local_runner_name="$(
+            python3 -c '
+          import json
+          import sys
+
+          snapshot = json.load(sys.stdin)
+          remote_name = sys.argv[1].casefold()
+          matches = [
+              runner["name"]
+              for runner in snapshot["capacity"]["runners"]
+              if runner.get("scope") == "local"
+              and isinstance(runner.get("github"), dict)
+              and str(runner["github"].get("name", "")).casefold() == remote_name
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  f"expected exactly one local RunnerOps identity for {sys.argv[1]!r}; found {len(matches)}"
+              )
+          print(matches[0])
+          ' "$RUNNER_NAME" <<<"$capacity_json"
+          )"
+          test -n "$local_runner_name"
+          printf 'github_runner_name=%s\nlocal_runner_name=%s\n' \
+            "$RUNNER_NAME" "$local_runner_name"
+
+          runnerctl status "$local_runner_name"
+          runnerctl health "$local_runner_name"
+          runnerctl plan "$local_runner_name"
 
       - name: Exercise current checkout CI feedback bridge
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'

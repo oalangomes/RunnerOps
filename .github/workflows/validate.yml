@@ -259,8 +259,6 @@ jobs:
 
       - name: Dogfood installed RunnerOps control plane
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           command -v runnerctl >/dev/null 2>&1
           runnerctl --version
@@ -269,6 +267,11 @@ jobs:
           runnerctl platform-doctor
           test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
 
+          # Do not inject github.token into GH_TOKEN here. The repository runner
+          # inventory endpoint requires permission beyond the workflow token and
+          # GH_TOKEN would mask the host's authenticated gh session used by
+          # RunnerOps for governed runner administration.
+          #
           # RunnerOps keeps a stable local id (for example runnerops-1) while
           # GitHub exposes the registered agent name (for example host-runnerops-1).
           # Reuse CapacitySnapshot's registration-id correlation instead of

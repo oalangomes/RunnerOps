@@ -267,51 +267,59 @@ jobs:
           runnerctl platform-doctor
           test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
 
-          # Do not inject github.token into GH_TOKEN here. The repository runner
-          # inventory endpoint requires permission beyond the workflow token and
-          # GH_TOKEN would mask the host's authenticated gh session used by
-          # RunnerOps for governed runner administration.
-          #
-          # RunnerOps keeps a stable local id (for example runnerops-1) while
-          # GitHub exposes the registered agent name (for example host-runnerops-1).
-          # Reuse CapacitySnapshot's registration-id correlation instead of
-          # assuming both namespaces are equal or stripping a hostname prefix.
+          # Resolve the local RunnerOps identity from facts owned by this host:
+          # the current Actions workspace must live under one registered runner's
+          # <runner-path>/_work, and that runner's official .runner metadata must
+          # expose the same GitHub agentName as RUNNER_NAME. This avoids assuming
+          # local id == GitHub name and does not require the runner-admin API.
           # shellcheck source=/dev/null
           source "$platform_home/runner-runtime-env.sh"
-          capacity_rc=0
-          capacity_json="$(python3 -B ./capacity.py "$GITHUB_REPOSITORY" --json)" || capacity_rc=$?
-          case "$capacity_rc" in
-            0|3) ;;
-            *)
-              echo "capacity collector failed unexpectedly (exit=$capacity_rc)" >&2
-              exit "$capacity_rc"
-              ;;
-          esac
-
           local_runner_name="$(
-            python3 -c '
-          import json
-          import sys
+            python3 - "$RUNNERS_CONFIG" "$GITHUB_WORKSPACE" "$RUNNER_NAME" <<'PY'
+import json
+import sys
+from pathlib import Path
 
-          snapshot = json.load(sys.stdin)
-          remote_name = sys.argv[1].casefold()
-          matches = [
-              runner["name"]
-              for runner in snapshot["capacity"]["runners"]
-              if runner.get("scope") == "local"
-              and isinstance(runner.get("github"), dict)
-              and str(runner["github"].get("name", "")).casefold() == remote_name
-          ]
-          if len(matches) != 1:
-              raise SystemExit(
-                  f"expected exactly one local RunnerOps identity for {sys.argv[1]!r}; found {len(matches)}"
-              )
-          print(matches[0])
-          ' "$RUNNER_NAME" <<<"$capacity_json"
+config_path = Path(sys.argv[1])
+workspace = Path(sys.argv[2]).resolve()
+remote_name = sys.argv[3].casefold()
+matches = []
+
+for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip().replace("\r", "")
+    if not line or line.startswith("#"):
+        continue
+    fields = [value.strip() for value in line.split("|")]
+    if len(fields) < 2 or not fields[0] or not fields[1]:
+        raise SystemExit("invalid runners.conf entry while resolving current runner")
+
+    local_name, raw_path = fields[0], fields[1]
+    runner_path = Path(raw_path).expanduser().resolve()
+    work_root = (runner_path / "_work").resolve()
+    try:
+        workspace.relative_to(work_root)
+    except ValueError:
+        continue
+
+    registration_path = runner_path / ".runner"
+    try:
+        registration = json.loads(registration_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read runner registration metadata for {local_name}: {exc}")
+
+    if str(registration.get("agentName", "")).casefold() == remote_name:
+        matches.append(local_name)
+
+if len(matches) != 1:
+    raise SystemExit(
+        f"expected exactly one local RunnerOps execution identity for {sys.argv[3]!r}; found {len(matches)}"
+    )
+print(matches[0])
+PY
           )"
           test -n "$local_runner_name"
-          printf 'github_runner_name=%s\nlocal_runner_name=%s\ncapacity_exit=%s\n' \
-            "$RUNNER_NAME" "$local_runner_name" "$capacity_rc"
+          printf 'github_runner_name=%s\nlocal_runner_name=%s\nidentity_source=workspace+registration\n' \
+            "$RUNNER_NAME" "$local_runner_name"
 
           runnerctl status "$local_runner_name"
           runnerctl health "$local_runner_name"

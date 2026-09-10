@@ -26,7 +26,7 @@ sudoers_file="/etc/sudoers.d/runnerops-${invoking_user}"
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
-[[ -x "$SOURCE_HELPER" ]] || die "helper ausente ou sem permissao de execucao: $SOURCE_HELPER"
+[[ -f "$SOURCE_HELPER" ]] || die "helper ausente: $SOURCE_HELPER"
 command -v sudo >/dev/null 2>&1 || [[ "$(id -u)" -eq 0 ]] ||
   die "sudo e obrigatorio para instalar a autorizacao de runtime"
 

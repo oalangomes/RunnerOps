@@ -85,6 +85,7 @@ Você precisa de:
 - Linux x64 ou arm64 com systemd;
 - Git;
 - GitHub CLI (`gh`);
+- Python 3.8+ para `capacity` e `autoscale status` (somente biblioteca padrão);
 - `tar`;
 - `sha256sum`;
 - `sudo` para setup administrativo e autorização inicial das units systemd; após `runnerctl platform-authorize`, o lifecycle diário é não interativo.
@@ -332,6 +333,26 @@ Em timeout com job `self-hosted` ainda em fila, o watcher consulta a capacidade 
 - runner compatível online ou job já em execução → continua aguardando/termina como timeout inconclusivo.
 
 `startup_failure` do workflow também é classificado como infraestrutura. Nenhum desses diagnósticos executa recuperação automática.
+
+### Observar fila e capacidade
+
+```bash
+runnerctl capacity .
+runnerctl capacity example/my-api --json
+runnerctl autoscale status . --json
+```
+
+Os dois comandos consultam a fila do GitHub, os registros de runners e o systemd,
+sem iniciar serviços nem gravar estado. O snapshot distingue `available_now`,
+`busy_capacity`, `provisioned_idle` e `inconclusive`, e mostra a capacidade que
+corresponde às labels de cada job em fila. Runners on-demand inativos e válidos
+são capacidade provisionada; runners ocupados não são falha de infraestrutura.
+
+O JSON preserva o `nameWithOwner` canônico e usa `schema_version: 1`. Evidência
+ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
+Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
+permissões de leitura, limites e interpretação. `autoscale` oferece somente
+`status` neste slice.
 
 ### Remoção segura
 

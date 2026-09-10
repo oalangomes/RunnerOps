@@ -58,6 +58,7 @@ jobs:
           bash tests/test-safe-provisioning-contracts.sh
           bash tests/test-legacy-diagnostics-contracts.sh
           bash tests/test-noninteractive-runtime-contracts.sh
+          python3 -B tests/test-capacity-contracts.py
 
       - name: Validate governed removal plan
         shell: bash

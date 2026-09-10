@@ -39,6 +39,8 @@ Uso:
   runnerctl on-demand <runner|group:<group>|all>
   runnerctl autostart <runner|group:<group>|all>
   runnerctl repo [owner/repo|.]
+  runnerctl capacity [owner/repo|.] [--json]
+  runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl ensure [owner/repo|.]
   runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
                  [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64]
@@ -761,6 +763,14 @@ case "$cmd" in
     ;;
   repo)
     resolve_repo "${1:-.}"
+    ;;
+  capacity|autoscale)
+    if [[ "$cmd" == "autoscale" ]]; then
+      [[ "${1:-}" == "status" ]] || die "autoscale aceita somente status (read-only)"
+      shift
+    fi
+    command -v python3 >/dev/null 2>&1 || die "capacity exige python3"
+    exec python3 -B "$PLATFORM_HOME/capacity.py" "$@"
     ;;
   ensure)
     repo="$(resolve_repo "${1:-.}")"

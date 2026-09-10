@@ -53,6 +53,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Pacote oficial do runner | `runnerctl package detect/ensure` |
 | Aguardar resultado do CI | `runnerctl ci watch .` |
 | Agent Skills | `runnerctl skills list/install` |
+| Autorização de runtime | `runnerctl platform-authorize` |
 | Diagnóstico da plataforma | `runnerctl platform-doctor` |
 
 ## Modelo
@@ -86,7 +87,7 @@ Você precisa de:
 - GitHub CLI (`gh`);
 - `tar`;
 - `sha256sum`;
-- `sudo` para instalação e controle das units systemd.
+- `sudo` para setup administrativo e autorização inicial das units systemd; após `runnerctl platform-authorize`, o lifecycle diário é não interativo.
 
 No WSL2, habilite systemd antes de usar a plataforma.
 
@@ -144,7 +145,30 @@ RUNNER_BOOT_POLICY="on-demand"
 
 A lista real de runners **não é versionada** e o checkout pode permanecer somente leitura durante a operação normal.
 
-### 3. Registre um runner
+### 3. Autorize o lifecycle não interativo
+
+Para uso por coding agents, CI ou automação local, faça uma autorização **uma única vez**:
+
+```bash
+runnerctl platform-authorize
+```
+
+Esse setup pode solicitar `sudo`. Ele instala um helper root-owned e uma regra sudoers mínima que permite apenas `start`, `stop` e `restart` de units `actions.runner.*.service`.
+
+Depois disso, operações de runtime como:
+
+```bash
+runnerctl ensure .
+runnerctl start <runner>
+runnerctl stop <runner>
+runnerctl restart <runner>
+```
+
+não abrem prompt de senha. Se a autorização estiver ausente e uma mutação for realmente necessária, RunnerOps falha imediatamente e orienta executar `runnerctl platform-authorize` em um terminal humano.
+
+Runners que já estão ativos são tratados de forma idempotente: `ensure` não chama `systemctl start` nem consulta `sudo`.
+
+### 4. Registre um runner
 
 Autentique a GitHub CLI uma vez:
 
@@ -186,7 +210,7 @@ runnerctl add . \
 
 Para controle manual/offline do pacote, `configure-runner.sh --runner-tar ... --expected-sha256 ...` permanece disponível como escape hatch interno/avançado.
 
-### 4. Resultado on-demand
+### 5. Resultado on-demand
 
 Com a política padrão `on-demand`, o registro/migração comprova a sessão com o GitHub e termina com:
 

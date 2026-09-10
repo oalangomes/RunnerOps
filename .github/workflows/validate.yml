@@ -5,22 +5,70 @@ on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: runnerops-validate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   static-validation:
+    name: Hosted validation
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Validate shell syntax
         shell: bash
         run: |
-          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             authorize-runtime.sh             runnerops-systemctl             runner-package.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh             ci-watch.sh             tests/test-runnerctl-contracts.sh             tests/test-runnerctl-routing-contracts.sh             tests/test-runner-package-contracts.sh             tests/test-ci-watch-contracts.sh             tests/test-agent-skills-contracts.sh             tests/test-performance-skill-contracts.sh             tests/test-lifecycle-truthfulness-contracts.sh             tests/test-safe-provisioning-contracts.sh             tests/test-legacy-diagnostics-contracts.sh             tests/test-noninteractive-runtime-contracts.sh
+          bash -n \
+            configure-runner.sh \
+            runners.sh \
+            runner-services.sh \
+            runner-runtime-env.sh \
+            init-machine-config.sh \
+            sync-local-git-excludes.sh \
+            install-agent-skills.sh \
+            runnerctl \
+            install.sh \
+            authorize-runtime.sh \
+            runnerops-systemctl \
+            runner-package.sh \
+            setup-cockpit.sh \
+            cache.sh \
+            prewarm-cache.sh \
+            prewarm-actions.sh \
+            runner-cache-env.sh \
+            ci-watch.sh \
+            tests/test-runnerctl-contracts.sh \
+            tests/test-runnerctl-routing-contracts.sh \
+            tests/test-runner-package-contracts.sh \
+            tests/test-ci-watch-contracts.sh \
+            tests/test-agent-skills-contracts.sh \
+            tests/test-performance-skill-contracts.sh \
+            tests/test-lifecycle-truthfulness-contracts.sh \
+            tests/test-safe-provisioning-contracts.sh \
+            tests/test-legacy-diagnostics-contracts.sh \
+            tests/test-noninteractive-runtime-contracts.sh
+
+      - name: Validate Python syntax
+        shell: bash
+        run: |
+          python3 -B -m py_compile \
+            capacity.py \
+            autoscale_contracts.py \
+            autoscale_store.py \
+            autoscale_audit.py \
+            tests/test-capacity-contracts.py \
+            tests/test-autoscale-audit-contracts.py
 
       - name: Validate XDG runtime defaults
         shell: bash
@@ -144,17 +192,70 @@ jobs:
 
           test ! -d codex-skills
 
-
   real-ci-watch-smoke:
-    name: Real GitHub API smoke
+    name: Hosted GitHub API smoke
     if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
     needs: static-validation
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Watch previous master SHA through GitHub API
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.before }}
+        run: |
+          bash ./ci-watch.sh \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$TARGET_SHA" \
+            --json \
+            --timeout 30 \
+            --interval 1 \
+            --settle-polls 1
+
+  self-hosted-dogfood:
+    name: RunnerOps self-hosted dogfood
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: static-validation
+    runs-on: [self-hosted, Linux, X64, runnerops, local-runner]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify self-hosted runner identity
+        shell: bash
+        run: |
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          test -n "$RUNNER_NAME"
+          printf 'runner_name=%s\nrunner_os=%s\nrunner_arch=%s\n' \
+            "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
+
+      - name: Dogfood installed RunnerOps control plane
+        shell: bash
+        run: |
+          command -v runnerctl >/dev/null 2>&1
+          runnerctl --version
+          runnerctl platform-home
+          runnerctl platform-doctor
+          test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
+          runnerctl status "$RUNNER_NAME"
+          runnerctl health "$RUNNER_NAME"
+          runnerctl plan "$RUNNER_NAME"
+
+      - name: Exercise current checkout CI feedback bridge
+        if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

@@ -6,6 +6,11 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ## Unreleased
 
+### Added
+
+- `runnerctl capacity [owner/repo|.] [--json]` e `runnerctl autoscale status` adicionam observabilidade read-only de fila e capacidade com `CapacitySnapshot` v1, preservando identidade canônica, labels, estados local/remoto e evidência inconclusiva sem mutação.
+- a capacidade opcional usa Python 3.8+ somente com biblioteca padrão; `platform-doctor` reporta essa capability sem torná-la requisito para os comandos tradicionais do RunnerOps.
+
 ### Fixed
 
 - `runnerctl ensure .` deixa de chamar `systemctl start` para runners systemd já ativos; o caminho passa a ser idempotente e não solicita sudo quando nenhuma mutação é necessária.

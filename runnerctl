@@ -39,6 +39,8 @@ Uso:
   runnerctl on-demand <runner|group:<group>|all>
   runnerctl autostart <runner|group:<group>|all>
   runnerctl repo [owner/repo|.]
+  runnerctl capacity [owner/repo|.] [--json]
+  runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl ensure [owner/repo|.]
   runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
                  [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64]
@@ -702,6 +704,17 @@ platform_doctor() {
     echo "[WARN] gh=missing add=unavailable"
   fi
 
+  if command -v python3 >/dev/null 2>&1; then
+    python_version="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || true)"
+    if python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+      echo "[OK] capacity_runtime=python3 version=${python_version:-unknown}"
+    else
+      echo "[WARN] capacity_runtime=python3-too-old version=${python_version:-unknown} required='>=3.8'"
+    fi
+  else
+    echo "[WARN] capacity_runtime=python3-missing capacity=unavailable"
+  fi
+
   if [[ -d /run/systemd/system ]]; then
     echo "[OK] systemd=active"
   else
@@ -761,6 +774,17 @@ case "$cmd" in
     ;;
   repo)
     resolve_repo "${1:-.}"
+    ;;
+  capacity|autoscale)
+    if [[ "$cmd" == "autoscale" ]]; then
+      [[ "${1:-}" == "status" ]] || die "autoscale aceita somente status (read-only)"
+      shift
+    fi
+    [[ -f "$PLATFORM_HOME/capacity.py" ]] || die "capacity.py ausente em: $PLATFORM_HOME"
+    command -v python3 >/dev/null 2>&1 || die "capacity exige python3 3.8+"
+    python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+      die "capacity exige python3 3.8+"
+    exec python3 -B "$PLATFORM_HOME/capacity.py" "$@"
     ;;
   ensure)
     repo="$(resolve_repo "${1:-.}")"

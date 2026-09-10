@@ -734,9 +734,9 @@ case "$cmd" in
     printf '%s\n' "$PLATFORM_HOME"
     ;;
   platform-authorize)
-    [[ -x "$PLATFORM_HOME/authorize-runtime.sh" ]] ||
+    [[ -f "$PLATFORM_HOME/authorize-runtime.sh" ]] ||
       die "authorize-runtime.sh ausente em: $PLATFORM_HOME"
-    exec "$PLATFORM_HOME/authorize-runtime.sh" "$@"
+    exec bash "$PLATFORM_HOME/authorize-runtime.sh" "$@"
     ;;
   platform-doctor)
     platform_doctor

@@ -39,7 +39,10 @@ def resolve_local_runner(registry, workspace, github_runner_name):
 
         registration_path = runner_path / ".runner"
         try:
-            registration = json.loads(registration_path.read_text(encoding="utf-8"))
+            # The official GitHub Actions runner may write .runner with a UTF-8
+            # BOM. utf-8-sig consumes that BOM while remaining compatible with
+            # ordinary UTF-8 metadata.
+            registration = json.loads(registration_path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SystemExit(
                 f"cannot read runner registration metadata for {local_name}: {exc}"

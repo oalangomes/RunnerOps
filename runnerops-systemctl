@@ -24,7 +24,12 @@ esac
 [[ "$unit" =~ ^actions\.runner\.[A-Za-z0-9_.@:-]+\.service$ ]] ||
   die "refusing non-runner unit: $unit"
 
-systemctl_bin="$(command -v systemctl || true)"
-[[ -n "$systemctl_bin" ]] || die "systemctl not found"
+if [[ -x /usr/bin/systemctl ]]; then
+  systemctl_bin=/usr/bin/systemctl
+elif [[ -x /bin/systemctl ]]; then
+  systemctl_bin=/bin/systemctl
+else
+  die "systemctl not found at an approved absolute path"
+fi
 
 exec "$systemctl_bin" "$action" "$unit"

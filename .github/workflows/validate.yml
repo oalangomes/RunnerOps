@@ -79,7 +79,7 @@ jobs:
           workspace="$runner_path/_work/RunnerOps/RunnerOps"
           registry="$fixture/runners.conf"
           mkdir -p "$workspace"
-          printf '%s\n' '{"agentId":42,"agentName":"host-runnerops-fixture"}' > "$runner_path/.runner"
+          printf '\357\273\277%s\n' '{"agentId":42,"agentName":"host-runnerops-fixture"}' > "$runner_path/.runner"
           printf '%s|%s|generic|example/runnerops|true|runnerops\n' \
             'runnerops-fixture' "$runner_path" > "$registry"
           resolved="$(

@@ -109,7 +109,11 @@ if [[ "${2:-}" == "check" ]]; then
 fi
 
 [[ "${TEST_AUTHORIZED:-0}" == "1" ]] || exit 1
-"$@"
+helper="$1"
+action="${2:-}"
+unit="${3:-}"
+[[ "$helper" == "${RUNNEROPS_SYSTEMCTL_HELPER:?}" ]] || exit 1
+systemctl "$action" "$unit"
 EOF
 
   chmod +x "$bin/systemctl" "$bin/sudo"

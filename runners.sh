@@ -10,6 +10,7 @@ PID_DIR="$RUNNER_STATE_ROOT/legacy-pids"
 LOG_DIR="$RUNNER_STATE_ROOT/legacy-logs"
 CACHE_ENV_PATH="$BASE_DIR/runner-cache-env.sh"
 PREWARM_ACTIONS_PATH="$BASE_DIR/prewarm-actions.sh"
+RUNNEROPS_SYSTEMCTL_HELPER="${RUNNEROPS_SYSTEMCTL_HELPER:-/usr/local/libexec/runnerops-systemctl}"
 LOG_MAX_BYTES="${RUNNER_LOG_MAX_BYTES:-10485760}"
 ARCHIVE_DIAG_PAGES_ON_START="${RUNNER_ARCHIVE_DIAG_PAGES_ON_START:-1}"
 
@@ -197,13 +198,29 @@ require_systemd_for_runner() {
 }
 
 systemctl_mutate() {
+  local action="${1:-}"
+  local unit="${2:-}"
+
+  [[ "$action" =~ ^(start|stop|restart)$ ]] ||
+    die "systemctl_mutate: acao de runtime nao permitida: $action"
+  [[ "$unit" == actions.runner.*.service ]] ||
+    die "systemctl_mutate: unit fora do escopo RunnerOps: $unit"
+
   if [[ "$(id -u)" -eq 0 ]]; then
-    systemctl "$@"
-  elif command -v sudo >/dev/null 2>&1; then
-    sudo systemctl "$@"
-  else
-    systemctl "$@"
+    systemctl "$action" "$unit"
+    return
   fi
+
+  if command -v sudo >/dev/null 2>&1 &&
+      [[ -x "$RUNNEROPS_SYSTEMCTL_HELPER" ]] &&
+      sudo -n "$RUNNEROPS_SYSTEMCTL_HELPER" check >/dev/null 2>&1; then
+    sudo -n "$RUNNEROPS_SYSTEMCTL_HELPER" "$action" "$unit"
+    return
+  fi
+
+  echo "[AUTH] runtime systemd mutation is not authorized for non-interactive use" >&2
+  echo "       run once in a terminal: runnerctl platform-authorize" >&2
+  return 1
 }
 
 journalctl_runner() {
@@ -546,9 +563,23 @@ start_runner() {
   fi
 
   if runner_uses_systemd "$path"; then
-    local unit
+    local unit observation state boot_state
     require_systemd_for_runner "$name"
     unit="$(runner_service_unit "$path")"
+    observation="$(systemd_observe_unit "$unit" || true)"
+
+    if [[ -z "$observation" ]]; then
+      echo "[ERR] $name backend=systemd state=unknown boot=unknown observation=query-error" >&2
+      echo "      refusing start without trustworthy lifecycle evidence" >&2
+      return 1
+    fi
+
+    IFS='|' read -r state boot_state <<< "$observation"
+    if [[ "$state" == "active" ]]; then
+      echo "[OK] $name ja esta ativo backend=systemd state=active boot=$boot_state unit=$unit"
+      return 0
+    fi
+
     systemctl_mutate start "$unit"
 
     # systemctl start can succeed even when the GitHub listener exits seconds
@@ -662,9 +693,24 @@ stop_runner() {
   local primary_pid
 
   if runner_uses_systemd "$path"; then
-    local unit
+    local unit observation state boot_state
     require_systemd_for_runner "$name"
     unit="$(runner_service_unit "$path")"
+    observation="$(systemd_observe_unit "$unit" || true)"
+
+    if [[ -z "$observation" ]]; then
+      echo "[ERR] $name backend=systemd state=unknown boot=unknown observation=query-error" >&2
+      echo "      refusing stop without trustworthy lifecycle evidence" >&2
+      return 1
+    fi
+
+    IFS='|' read -r state boot_state <<< "$observation"
+    if [[ "$state" == "inactive" ]]; then
+      rm -f "$(pid_file "$name")"
+      echo "[OK] $name ja esta parado backend=systemd state=inactive boot=$boot_state unit=$unit"
+      return 0
+    fi
+
     systemctl_mutate stop "$unit"
     rm -f "$(pid_file "$name")"
     echo "[OK] $name parado backend=systemd unit=$unit"

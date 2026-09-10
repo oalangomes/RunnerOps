@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+die() {
+  echo "runnerops-systemctl: $*" >&2
+  exit 64
+}
+
+if [[ "${1:-}" == "check" ]]; then
+  [[ $# -eq 1 ]] || die "check does not accept extra arguments"
+  exit 0
+fi
+
+[[ $# -eq 2 ]] || die "usage: runnerops-systemctl <start|stop|restart> <actions.runner.*.service>"
+
+action="$1"
+unit="$2"
+
+case "$action" in
+  start|stop|restart) ;;
+  *) die "unsupported action: $action" ;;
+esac
+
+[[ "$unit" =~ ^actions\.runner\.[A-Za-z0-9_.@:-]+\.service$ ]] ||
+  die "refusing non-runner unit: $unit"
+
+if [[ -x /usr/bin/systemctl ]]; then
+  systemctl_bin=/usr/bin/systemctl
+elif [[ -x /bin/systemctl ]]; then
+  systemctl_bin=/bin/systemctl
+else
+  die "systemctl not found at an approved absolute path"
+fi
+
+exec "$systemctl_bin" "$action" "$unit"

@@ -4,6 +4,18 @@ Mudanças relevantes do RunnerOps e de sua CLI pública `runnerctl` são registr
 
 O projeto segue versionamento SemVer enquanto a API pública amadurece. Em versões `0.x`, mudanças incompatíveis continuam sendo evitadas e devem ser explicitadas quando inevitáveis.
 
+## Unreleased
+
+### Fixed
+
+- `runnerctl ensure .` deixa de chamar `systemctl start` para runners systemd já ativos; o caminho passa a ser idempotente e não solicita sudo quando nenhuma mutação é necessária.
+- lifecycle runtime (`ensure/start/stop/restart`) deixa de abrir prompt interativo de sudo: mutações usam autorização one-time via `runnerctl platform-authorize` e falham rápido quando ela não existe.
+- lifecycle systemd desconhecido/query-error continua fail-safe e não dispara mutação privilegiada.
+
+### Security
+
+- novo helper root-owned restringe runtime privilegiado a `start|stop|restart` de units `actions.runner.*.service`; não há `NOPASSWD: ALL` nem acesso arbitrário a `systemctl`.
+
 ## v0.2.2 — 2026-09-08
 
 ### Fixed

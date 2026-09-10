@@ -20,7 +20,7 @@ jobs:
       - name: Validate shell syntax
         shell: bash
         run: |
-          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             runner-package.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh             ci-watch.sh             tests/test-runnerctl-contracts.sh             tests/test-runnerctl-routing-contracts.sh             tests/test-runner-package-contracts.sh             tests/test-ci-watch-contracts.sh             tests/test-agent-skills-contracts.sh             tests/test-performance-skill-contracts.sh             tests/test-lifecycle-truthfulness-contracts.sh             tests/test-safe-provisioning-contracts.sh             tests/test-legacy-diagnostics-contracts.sh
+          bash -n             configure-runner.sh             runners.sh             runner-services.sh             runner-runtime-env.sh             init-machine-config.sh             sync-local-git-excludes.sh             install-agent-skills.sh             runnerctl             install.sh             authorize-runtime.sh             runnerops-systemctl             runner-package.sh             setup-cockpit.sh             cache.sh             prewarm-cache.sh             prewarm-actions.sh             runner-cache-env.sh             ci-watch.sh             tests/test-runnerctl-contracts.sh             tests/test-runnerctl-routing-contracts.sh             tests/test-runner-package-contracts.sh             tests/test-ci-watch-contracts.sh             tests/test-agent-skills-contracts.sh             tests/test-performance-skill-contracts.sh             tests/test-lifecycle-truthfulness-contracts.sh             tests/test-safe-provisioning-contracts.sh             tests/test-legacy-diagnostics-contracts.sh             tests/test-noninteractive-runtime-contracts.sh
 
       - name: Validate XDG runtime defaults
         shell: bash
@@ -57,6 +57,7 @@ jobs:
           bash tests/test-lifecycle-truthfulness-contracts.sh
           bash tests/test-safe-provisioning-contracts.sh
           bash tests/test-legacy-diagnostics-contracts.sh
+          bash tests/test-noninteractive-runtime-contracts.sh
 
       - name: Validate governed removal plan
         shell: bash

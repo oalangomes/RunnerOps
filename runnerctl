@@ -49,11 +49,13 @@ Uso:
   runnerctl skills list
   runnerctl skills install [codex|copilot|claude|agents|all]
   runnerctl platform-home
+  runnerctl platform-authorize
   runnerctl platform-doctor
 
 Notas:
   - on-demand é a policy padrão.
   - "ensure ." inicia somente os runners habilitados mapeados ao repositório atual.
+  - lifecycle runtime (ensure/start/stop/restart) nunca solicita sudo interativamente; rode "runnerctl platform-authorize" uma vez para autorizar mutações systemd.
   - "add" usa GitHub CLI autenticado, não persiste o registration token e o envia ao helper interno por stdin; o config.sh oficial recebe o token somente durante o registro.
 EOF
 }
@@ -80,6 +82,7 @@ resolve_platform_home() {
 }
 
 PLATFORM_HOME="$(resolve_platform_home)"
+RUNNEROPS_SYSTEMCTL_HELPER="${RUNNEROPS_SYSTEMCTL_HELPER:-/usr/local/libexec/runnerops-systemctl}"
 export ACTIONS_RUNNERS_HOME="$PLATFORM_HOME"
 # shellcheck source=/dev/null
 source "$PLATFORM_HOME/runner-runtime-env.sh"
@@ -706,6 +709,16 @@ platform_doctor() {
     rc=1
   fi
 
+  if [[ "$(id -u)" -eq 0 ]]; then
+    echo "[OK] runtime_privileges=root"
+  elif command -v sudo >/dev/null 2>&1 &&
+      [[ -x "$RUNNEROPS_SYSTEMCTL_HELPER" ]] &&
+      sudo -n "$RUNNEROPS_SYSTEMCTL_HELPER" check >/dev/null 2>&1; then
+    echo "[OK] runtime_privileges=non-interactive"
+  else
+    echo "[WARN] runtime_privileges=not-authorized action='runnerctl platform-authorize'"
+  fi
+
   [[ -f "$RUNNERS_CONFIG" ]] && echo "[OK] registry=present" || echo "[WARN] registry=missing run='runnerctl init'"
   return "$rc"
 }
@@ -719,6 +732,11 @@ case "$cmd" in
     ;;
   platform-home)
     printf '%s\n' "$PLATFORM_HOME"
+    ;;
+  platform-authorize)
+    [[ -f "$PLATFORM_HOME/authorize-runtime.sh" ]] ||
+      die "authorize-runtime.sh ausente em: $PLATFORM_HOME"
+    exec bash "$PLATFORM_HOME/authorize-runtime.sh" "$@"
     ;;
   platform-doctor)
     platform_doctor

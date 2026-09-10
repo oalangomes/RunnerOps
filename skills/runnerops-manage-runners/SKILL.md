@@ -20,6 +20,20 @@ runnerctl platform-doctor
 
 If `runnerctl` is missing, report that the platform CLI must be installed from the RunnerOps checkout with `./install.sh`.
 
+For runtime lifecycle, RunnerOps is intentionally non-interactive. If `platform-doctor` reports:
+
+```text
+runtime_privileges=not-authorized
+```
+
+do **not** invoke `sudo runnerctl ...`, `sudo systemctl ...`, or attempt to obtain credentials. Report that a human must run the one-time setup:
+
+```bash
+runnerctl platform-authorize
+```
+
+Once authorized, `ensure/start/stop/restart` may run without password prompts.
+
 ## Inventory and health
 
 ```bash
@@ -317,6 +331,7 @@ Do not claim remote health from local checks alone.
 ## Prohibitions
 
 - Never expose registration tokens.
+- Never invoke `sudo runnerctl`, `sudo systemctl` or interactive privilege escalation to unblock runtime lifecycle; use the one-time human `runnerctl platform-authorize` setup.
 - Never repeat `runnerctl add` merely because a previous add returned PARTIAL or INCONCLUSIVE.
 - Never treat UNKNOWN/query-error lifecycle state as healthy idle capacity.
 - Never start a shared group when repository-scoped or exact-runner operation satisfies the request.

@@ -158,6 +158,47 @@ class AuditContracts(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         return json.loads(result.stdout) if json_output else result.stdout + result.stderr
 
+    def test_runnerctl_init_prepares_private_state_for_audit_writer(self):
+        xdg = self.base / "xdg"
+        env = dict(
+            os.environ,
+            HOME=str(self.base / "home"),
+            XDG_CONFIG_HOME=str(xdg / "config"),
+            XDG_DATA_HOME=str(xdg / "data"),
+            XDG_CACHE_HOME=str(xdg / "cache"),
+            XDG_STATE_HOME=str(xdg / "state"),
+            ACTIONS_RUNNERS_ENV=str(self.base / "missing.env"),
+        )
+        Path(env["HOME"]).mkdir()
+        # Reproduce the normal permissive shell default that exposed the integration bug.
+        result = subprocess.run(
+            ["bash", "-c", 'umask 022; exec "$1" init', "runnerops-init", str(ROOT / "runnerctl")],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+        state_root = xdg / "state" / "actions-runners"
+        self.assertEqual(state_root.stat().st_mode & 0o777, 0o700)
+
+        # The real init path must produce state accepted by the real audit writer.
+        with patch.dict(os.environ, {"RUNNER_STATE_ROOT": str(state_root)}):
+            with AuditStore(writable=True, clock=lambda: self.now, settings=Settings()) as store:
+                self.assertEqual(store.path, state_root / "autoscale.db")
+                self.assertEqual(store.path.stat().st_mode & 0o777, 0o600)
+
+        # Upgrade path: init tightens an already-existing permissive state root.
+        state_root.chmod(0o755)
+        result = subprocess.run(
+            ["bash", "-c", 'umask 022; exec "$1" init', "runnerops-init", str(ROOT / "runnerctl")],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(state_root.stat().st_mode & 0o777, 0o700)
+
     def test_bootstrap_schema_permissions_and_default_path(self):
         with self.store() as store:
             connection = store.connection

@@ -86,6 +86,7 @@ Você precisa de:
 - Git;
 - GitHub CLI (`gh`);
 - Python 3.8+ para `capacity` e `autoscale status` (somente biblioteca padrão);
+- para o audit store opcional, módulo Python `sqlite3` com SQLite 3.24+; o binário `sqlite3` não é necessário;
 - `tar`;
 - `sha256sum`;
 - `sudo` para setup administrativo e autorização inicial das units systemd; após `runnerctl platform-authorize`, o lifecycle diário é não interativo.
@@ -352,7 +353,33 @@ O JSON preserva o `nameWithOwner` canônico e usa `schema_version: 1`. Evidênci
 ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece somente
-`status` neste slice.
+observabilidade e leitura do histórico; ainda não existe `apply`.
+
+### Histórico local de autoscale
+
+```bash
+runnerctl autoscale history --since 24h
+runnerctl autoscale history --since 24h --json
+runnerctl autoscale explain --decision decision-example --json
+```
+
+O audit store opcional usa `${RUNNER_STATE_ROOT}/autoscale.db`, cujo padrão é
+`${XDG_STATE_HOME:-$HOME/.local/state}/actions-runners/autoscale.db`. Os leitores
+não criam o banco. Nesta slice, observações, decisões e ações são gravadas apenas
+pela API Python interna; `capacity` e `autoscale status` continuam sem escrita.
+Banco ausente ou inválido retorna erro explícito, inclusive em JSON.
+
+O histórico mantém `first_seen_queued_at` e `last_seen_queued_at` por episódio de
+observações consecutivas. Lacunas, coletas inconclusivas e saída da fila quebram
+a continuidade. A duração observada pelo RunnerOps é distinta da idade calculada
+por `job.created_at`, que pode incluir dependências e aprovações.
+
+O schema v1 inclui transações, replay idempotente, limites de crescimento e
+retention padrão de 30 dias. Decisões com ações pendentes são preservadas;
+saturação que impeça guardar nova evidência retorna erro. Veja
+[o contrato e a API do audit store](docs/autoscale-audit-store.md) para configuração,
+segurança e exemplos. `platform-doctor` informa a capability opcional sem torná-la
+requisito para os comandos tradicionais.
 
 ### Remoção segura
 

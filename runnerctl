@@ -41,6 +41,8 @@ Uso:
   runnerctl repo [owner/repo|.]
   runnerctl capacity [owner/repo|.] [--json]
   runnerctl autoscale status [owner/repo|.] [--json]
+  runnerctl autoscale history [--since DURATION] [--json]
+  runnerctl autoscale explain --decision ID [--json]
   runnerctl ensure [owner/repo|.]
   runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
                  [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64]
@@ -708,6 +710,11 @@ platform_doctor() {
     python_version="$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || true)"
     if python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
       echo "[OK] capacity_runtime=python3 version=${python_version:-unknown}"
+      if python3 -B -c 'import sqlite3; raise SystemExit(0 if sqlite3.sqlite_version_info >= (3, 24, 0) else 1)' >/dev/null 2>&1; then
+        echo "[OK] autoscale_audit_runtime=python3-sqlite3"
+      else
+        echo "[WARN] autoscale_audit_runtime=sqlite3-missing-or-old required='SQLite>=3.24' autoscale_audit=unavailable"
+      fi
     else
       echo "[WARN] capacity_runtime=python3-too-old version=${python_version:-unknown} required='>=3.8'"
     fi
@@ -777,8 +784,19 @@ case "$cmd" in
     ;;
   capacity|autoscale)
     if [[ "$cmd" == "autoscale" ]]; then
-      [[ "${1:-}" == "status" ]] || die "autoscale aceita somente status (read-only)"
+      sub="${1:-}"
+      case "$sub" in
+        status|history|explain) ;;
+        *) die "autoscale aceita status, history ou explain (read-only)" ;;
+      esac
       shift
+      if [[ "$sub" != "status" ]]; then
+        [[ -f "$PLATFORM_HOME/autoscale_audit.py" ]] || die "autoscale_audit.py ausente em: $PLATFORM_HOME"
+        command -v python3 >/dev/null 2>&1 || die "autoscale audit exige python3 3.8+ com módulo sqlite3"
+        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+          die "autoscale audit exige python3 3.8+ com módulo sqlite3"
+        exec python3 -B "$PLATFORM_HOME/autoscale_audit.py" "$sub" "$@"
+      fi
     fi
     [[ -f "$PLATFORM_HOME/capacity.py" ]] || die "capacity.py ausente em: $PLATFORM_HOME"
     command -v python3 >/dev/null 2>&1 || die "capacity exige python3 3.8+"

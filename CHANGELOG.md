@@ -8,6 +8,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Added
 
+- `runnerctl autoscale run-once [owner/repo|.] [--json]` introduz a primeira mutação governada do autoscaler, opt-in via `RUNNER_AUTOSCALE_ENABLED=true` e limitada a um `START_LOCAL` exato. O controller usa lock por host, revalida policy, persiste decision/action lifecycle, verifica status+health local e GitHub online e não executa `PROVISION_LOCAL`/cloud.
 - `runnerctl autoscale plan [owner/repo|.] [--json]` adiciona um planner determinístico e read-only com `AutoscalePlan` v1, reason codes estáveis e decisões `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED` ou `INCONCLUSIVE`; a slice não inicia/provisiona runners, não chama provider e não grava decisões no audit store.
 - política do planner usa configuração local/env para threshold observado de fila, limite local, headroom de memória/CPU, cooldown, burst e escopo de labels; o mesmo conjunto normalizado de evidência + policy produz o mesmo decision ID e JSON.
 - audit store local e opcional de autoscale com SQLite via biblioteca padrão do Python, schema/migration v1, observações consecutivas de fila, decisões imutáveis, ações correlacionadas e transições idempotentes. Retention e limites de crescimento são configuráveis; registros não incluem snapshots brutos ou diagnósticos livres.

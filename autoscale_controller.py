@@ -257,11 +257,9 @@ def _controller_result(plan_result=None, *, status, action=None, diagnostic=None
 
 def _cancel_or_fail_pending(store, action, at, code):
     if action["state"] == "planned":
-        # Storage requires cancelled actions to carry started_at only when a start
-        # actually happened, so convert planned -> started only for real starts.
-        # A never-started planned action is left pending rather than fabricating
-        # execution evidence; caller must return without mutation.
-        return action
+        cancelled = _transition_existing(action, "cancelled", at, code, None)
+        store.record_action(cancelled)
+        return cancelled
     failed = _transition_existing(action, "failed", at, code, 1)
     store.record_action(failed)
     return failed
@@ -422,6 +420,32 @@ def run_once(
                     plan_result,
                     status="noop",
                     diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
+                ), 0
+
+            # A deterministic plan already terminal in the audit journal must
+            # never replay its lifecycle mutation.
+            try:
+                previous = store.explain(plan_result["decision_id"])
+            except AuditError as exc:
+                if exc.code != "decision_not_found":
+                    raise
+            else:
+                expected = _action_id(
+                    plan_result["decision_id"], plan_result["action"]["target"]
+                )
+                matches = [item for item in previous["actions"] if item["action_id"] == expected]
+                if len(matches) != 1 or matches[0]["state"] not in (
+                    "succeeded", "failed", "cancelled"
+                ):
+                    return _controller_result(
+                        plan_result, status="inconclusive", diagnostic="AUDIT_REPLAY_INCONCLUSIVE"
+                    ), 3
+                terminal = matches[0]
+                return _controller_result(
+                    plan_result,
+                    status="ok" if terminal["state"] == "succeeded" else "noop",
+                    action=terminal,
+                    diagnostic="ACTION_ALREADY_TERMINAL",
                 ), 0
 
             # TOCTOU guard: re-read policy after planning and before persisting or

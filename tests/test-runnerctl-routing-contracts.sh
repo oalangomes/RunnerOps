@@ -47,7 +47,15 @@ with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
     log.write("autoscale-plan:" + " ".join(sys.argv[1:]) + "\n")
 EOF
 
-  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py"
+  cat > "$platform/autoscale_controller.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+    log.write("autoscale-run-once:" + " ".join(sys.argv[1:]) + "\n")
+EOF
+
+  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py" "$platform/autoscale_controller.py"
 }
 
 run_ctl() {
@@ -134,11 +142,25 @@ test_autoscale_plan_routes_to_read_only_planner() {
   pass "autoscale plan preserva repo/flags e usa boundary próprio"
 }
 
+test_autoscale_run_once_routes_to_governed_controller() {
+  local platform="$TMP_ROOT/autoscale-controller-platform"
+  local log="$TMP_ROOT/autoscale-controller.log"
+  make_fake_platform "$platform"
+  : > "$log"
+  run_ctl "$platform" "$log" autoscale run-once example/repo --json
+  assert_eq \
+    'autoscale-run-once:example/repo --json' \
+    "$(cat "$log")" \
+    "runnerctl autoscale run-once deve encaminhar somente ao controller governado"
+  pass "autoscale run-once preserva repo/flags e usa boundary mutável isolado"
+}
+
 main() {
   test_exact_runner_and_group_routing
   test_boot_policy_routing
   test_default_targets_are_explicit
   test_autoscale_plan_routes_to_read_only_planner
+  test_autoscale_run_once_routes_to_governed_controller
   printf '\nContratos de routing/lifecycle passaram.\n'
 }
 

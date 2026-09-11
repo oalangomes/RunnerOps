@@ -358,7 +358,8 @@ O JSON preserva o `nameWithOwner` canônico e usa `schema_version: 1`. Evidênci
 ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
-planejamento read-only e leitura do histórico; ainda não existe `apply`.
+planejamento read-only e leitura do histórico. A primeira mutação governada é
+`autoscale run-once`, limitada a `START_LOCAL` e desabilitada por padrão.
 
 ### Planejar autoscale sem aplicar
 
@@ -398,6 +399,31 @@ reason codes e JSON. Evidência necessária ausente/contraditória resulta em
 `INCONCLUSIVE` (exit `3`) em vez de uma ação otimista. Veja o
 [contrato do planner determinístico](docs/autoscale-planner.md).
 
+### Aplicar uma ativação local governada
+
+> Esta capacidade está em `master` e será publicada em uma release posterior à v0.2.2.
+
+```bash
+RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
+RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once example/my-api --json
+```
+
+O controller executa o mesmo planner determinístico e aplica **somente
+`START_LOCAL`** para um runner local exato, já provisionado, saudável e
+on-demand. `PROVISION_LOCAL` e `BURST_CLOUD` continuam sem execução.
+
+Antes de mutar, `run-once` exige lock exclusivo por host, revalida a policy e
+persiste `decision -> planned -> started`. Depois exige `status + health`
+locais e GitHub `online`; sucesso de `start` sozinho não basta. Reinícios
+reconciliam ações pendentes para evitar mutação duplicada.
+
+`RUNNER_AUTOSCALE_ENABLED` é `false` por padrão. Desabilitado, `run-once` não
+coleta snapshot, não cria SQLite/lock e não toca no lifecycle. Esta primeira
+entrega mutável é one-shot; daemon contínuo e `enable/disable` permanecem fora
+até este caminho ser provado.
+
+Veja [o contrato do controller governado](docs/autoscale-controller.md).
+
 ### Histórico local de autoscale
 
 ```bash
@@ -408,9 +434,10 @@ runnerctl autoscale explain --decision decision-example --json
 
 O audit store opcional usa `${RUNNER_STATE_ROOT}/autoscale.db`, cujo padrão é
 `${XDG_STATE_HOME:-$HOME/.local/state}/actions-runners/autoscale.db`. Os leitores
-não criam o banco. Observações, decisões e ações são gravadas apenas pela API
-Python interna; `capacity`, `autoscale status` e `autoscale plan` continuam sem
-escrita. Banco ausente ou inválido retorna erro explícito nos leitores, inclusive
+não criam o banco. A API Python interna permanece a base de escrita; quando
+explicitamente habilitado, `autoscale run-once` usa essa API para continuidade de
+fila e lifecycle auditável da ação. `capacity`, `autoscale status` e `autoscale plan`
+continuam sem escrita. Banco ausente ou inválido retorna erro explícito nos leitores, inclusive
 em JSON.
 
 O histórico mantém `first_seen_queued_at` e `last_seen_queued_at` por episódio de
@@ -419,8 +446,9 @@ a continuidade. A duração observada pelo RunnerOps é distinta da idade calcul
 por `job.created_at`, que pode incluir dependências e aprovações.
 
 `autoscale plan` não persiste o ID que produz. Portanto, `autoscale explain` só
-encontra decisões realmente registradas pela API interna; um controller futuro
-será responsável por persistir deliberadamente a decisão antes de aplicar uma ação.
+encontra decisões realmente registradas. `autoscale run-once`, ao chegar a um
+`START_LOCAL` aplicável, persiste decisão e ação antes da mutação e registra o
+resultado da verificação depois dela.
 
 O schema v1 inclui transações, replay idempotente, limites de crescimento e
 retention padrão de 30 dias. Decisões com ações pendentes são preservadas;

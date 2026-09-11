@@ -42,6 +42,7 @@ Uso:
   runnerctl capacity [owner/repo|.] [--json]
   runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl autoscale plan [owner/repo|.] [--json]
+  runnerctl autoscale run-once [owner/repo|.] [--json]
   runnerctl autoscale history [--since DURATION] [--json]
   runnerctl autoscale explain --decision ID [--json]
   runnerctl ensure [owner/repo|.]
@@ -787,8 +788,8 @@ case "$cmd" in
     if [[ "$cmd" == "autoscale" ]]; then
       sub="${1:-}"
       case "$sub" in
-        status|plan|history|explain) ;;
-        *) die "autoscale aceita status, plan, history ou explain (read-only)" ;;
+        status|plan|run-once|history|explain) ;;
+        *) die "autoscale aceita status, plan, run-once, history ou explain" ;;
       esac
       shift
       if [[ "$sub" == "plan" ]]; then
@@ -797,6 +798,13 @@ case "$cmd" in
         python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
           die "autoscale plan exige python3 3.8+"
         exec python3 -B "$PLATFORM_HOME/autoscale_planner.py" "$@"
+      fi
+      if [[ "$sub" == "run-once" ]]; then
+        [[ -f "$PLATFORM_HOME/autoscale_controller.py" ]] || die "autoscale_controller.py ausente em: $PLATFORM_HOME"
+        command -v python3 >/dev/null 2>&1 || die "autoscale run-once exige python3 3.8+ com módulo sqlite3"
+        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+          die "autoscale run-once exige python3 3.8+ com módulo sqlite3"
+        exec python3 -B "$PLATFORM_HOME/autoscale_controller.py" "$@"
       fi
       if [[ "$sub" != "status" ]]; then
         [[ -f "$PLATFORM_HOME/autoscale_audit.py" ]] || die "autoscale_audit.py ausente em: $PLATFORM_HOME"

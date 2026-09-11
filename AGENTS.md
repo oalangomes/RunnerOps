@@ -44,6 +44,15 @@ python3 -B tests/test-autoscale-audit-contracts.py
 python3 -B tests/test-autoscale-planner-contracts.py
 ```
 
+Para mudanças de autoscale:
+
+```bash
+python3 -B tests/test-capacity-contracts.py
+python3 -B tests/test-autoscale-audit-contracts.py
+python3 -B tests/test-autoscale-planner-contracts.py
+python3 -B tests/test-autoscale-controller-contracts.py
+```
+
 Para Agent Skills:
 
 ```bash

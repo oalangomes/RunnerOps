@@ -13,7 +13,7 @@ registry, and query access to systemd. The collector only invokes `gh repo view`
 `gh api --method GET`, `git remote get-url origin` as a fallback, and
 `systemctl show/list-unit-files`. It does not create runtime directories, store
 snapshots, read credentials, request registration tokens, or invoke lifecycle
-commands. No database, controller, cloud integration, or apply command is included.
+commands. No controller, cloud integration, or apply command is included.
 
 Exit codes: `0` for a complete observation, `3` for an inconclusive observation
 (still emitting the snapshot), and `2` for invalid capacity arguments. Unsupported
@@ -83,10 +83,11 @@ it is `null` for remote-only registrations. `github` contains `id`, `name`,
 ## Classification
 
 Local correlation requires a valid `.runner` ID/name, executable `run.sh`, and
-matching remote ID/name. A stored `gitHubUrl`, when present, must match the
-registry repository. Duplicate IDs are inconclusive. Units must be loaded and
-their `WorkingDirectory` must match the runner directory. Missing `.service`
-markers can be recovered through read-only unit discovery; PID files are unused.
+matching remote ID/name. GitHub's `.runner` metadata is accepted as UTF-8 with or
+without a BOM. A stored `gitHubUrl`, when present, must match the registry
+repository. Duplicate IDs are inconclusive. Units must be loaded and their
+`WorkingDirectory` must match the runner directory. Missing `.service` markers can
+be recovered through read-only unit discovery; PID files are unused.
 
 | Category | Required evidence |
 | --- | --- |
@@ -112,6 +113,31 @@ Collection reason vocabulary: `canonical_identity_unavailable`,
 `query_failed`, `incomplete_pagination`, `pagination_limit`, `invalid_run`,
 `invalid_job`, `unknown_job_status`, `invalid_runners`.
 
+## CapacitySnapshot as planner input
+
+`runnerctl autoscale plan [owner/repo|.] [--json]` consumes a fresh
+`CapacitySnapshot` but does not reinterpret `queue_age_seconds` as scheduler wait.
+Threshold-dependent decisions require a matching, continuous queue episode from
+the optional audit store and use only the RunnerOps-observed interval
+`last_seen_queued_at - first_seen_queued_at`.
+
+The planner combines three evidence classes without mutating any of them:
+
+```text
+CapacitySnapshot
++ host memory / optional CPU headroom
++ read-only audit continuity / cooldown / active burst evidence
+        ↓
+AutoscalePlan
+```
+
+A complete CapacitySnapshot is necessary for decisions that depend on local or
+GitHub runner state, but it is not sufficient by itself to justify scaling. Missing
+or contradictory required evidence produces `INCONCLUSIVE`; it never promotes an
+old GitHub creation timestamp into `START_LOCAL`, `PROVISION_LOCAL`, or
+`BURST_CLOUD`. See `runnerctl autoscale plan --help` and the audit-store contract
+for the continuity boundary.
+
 ## Collection boundaries
 
 The collector paginates workflow runs in `queued`, `in_progress`, `waiting`,
@@ -125,7 +151,8 @@ GitHub limits status-filtered run searches to 1,000 results. Reaching that bound
 is inconclusive. Jobs and runners have a defensive 100-page bound; API failures,
 malformed collections and pagination gaps are also explicit. Every subprocess
 has a 30-second timeout. Counts and oldest-job claims remain unknown when queue
-enumeration is incomplete. There is no persistence or cross-poll age tracking.
+enumeration is incomplete. There is no persistence or cross-poll age tracking in
+CapacitySnapshot itself; continuity lives in the separate audit store.
 See the [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs)
 and [workflow jobs API](https://docs.github.com/en/rest/actions/workflow-jobs).
 
@@ -141,5 +168,7 @@ concurrency limits, dependencies and approvals are not independently resolved.
 `no_matching_capacity` means no matching capacity in this observation; it does
 not mean no eligible runner exists anywhere. Label matching and active/online
 evidence do not guarantee scheduling or explain every queued job causally.
-Host counts are registry facts, not a claim that it is safe to activate more
-runners. CPU/memory policy and autoscaling decisions are outside this slice.
+Host counts are registry facts, not by themselves a claim that it is safe to
+activate more runners. The read-only autoscale planner adds explicit memory/CPU,
+policy and durable queue-continuity guards before producing a planned decision;
+applying that decision remains outside Slice #70.

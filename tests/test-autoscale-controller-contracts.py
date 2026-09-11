@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from autoscale_controller import run_once  # noqa: E402
+from autoscale_controller import ControllerError, controller_lock, run_once  # noqa: E402
 from autoscale_store import AuditStore, Settings  # noqa: E402
 
 
@@ -315,6 +315,14 @@ class ControllerContracts(unittest.TestCase):
         self.assertEqual(result["action_state"], "failed")
         self.assertEqual(result["diagnostic"], "GITHUB_VERIFICATION_FAILED")
         self.assertEqual(self.start_calls, ["runner-a"])
+
+    def test_controller_lock_rejects_concurrent_mutator(self):
+        lock = self.base / "lock-state" / "autoscale-controller.lock"
+        with controller_lock(lock):
+            with self.assertRaises(ControllerError) as raised:
+                with controller_lock(lock):
+                    pass
+        self.assertEqual(raised.exception.code, "CONTROLLER_BUSY")
 
     def test_duplicate_iteration_over_same_queue_does_not_start_second_runner(self):
         self.seed_queue()

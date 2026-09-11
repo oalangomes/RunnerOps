@@ -323,10 +323,18 @@ def run_once(
 
                 if target_state == "online":
                     if action["state"] == "planned":
-                        action = _transition_existing(
-                            action, "started", at, "RECOVERED_ALREADY_ONLINE", 0
+                        # The target became online without this persisted action ever
+                        # starting. Do not claim credit for an external/manual start.
+                        cancelled = _transition_existing(
+                            action, "cancelled", at, "TARGET_ALREADY_ONLINE", 0
                         )
-                        store.record_action(action)
+                        store.record_action(cancelled)
+                        return _controller_result(
+                            plan_result,
+                            status="noop",
+                            action=cancelled,
+                            diagnostic="RECOVERED_NO_ACTION_REQUIRED",
+                        ), 0
                     succeeded = _transition_existing(
                         action, "succeeded", at, "VERIFIED_ONLINE", 0
                     )

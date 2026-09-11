@@ -27,6 +27,7 @@ class ControllerContracts(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.db = self.base / "state" / "autoscale.db"
         self.now = datetime.now(timezone.utc).replace(microsecond=0)
+        self.job_created_at = self.now - timedelta(hours=1)
         self.start_calls = []
 
     def policy(self, **overrides):
@@ -98,8 +99,8 @@ class ControllerContracts(unittest.TestCase):
                     "run_id": 201,
                     "run_attempt": 1,
                     "status": "queued",
-                    "created_at": (observed_at - timedelta(hours=1)).isoformat(),
-                    "queue_age_seconds": 3600,
+                    "created_at": self.job_created_at.isoformat(),
+                    "queue_age_seconds": int((observed_at - self.job_created_at).total_seconds()),
                     "queue_age_source": "job.created_at",
                     "required_labels": ["self-hosted", "Linux", "X64", "runnerops"],
                     "capacity_status": category,
@@ -294,16 +295,17 @@ class ControllerContracts(unittest.TestCase):
             ["planned", "started", "succeeded"],
         )
 
-    def test_replaying_identical_terminal_plan_never_starts_again(self):
+    def test_duplicate_iteration_over_same_queue_does_not_start_second_runner(self):
         self.seed_queue()
         snapshot = self.snapshot()
         first, first_code = self.run_controller(snapshot)
         second, second_code = self.run_controller(snapshot)
         self.assertEqual(first_code, 0)
         self.assertEqual(second_code, 0)
-        self.assertEqual(first["decision_id"], second["decision_id"])
+        self.assertEqual(first["decision"], "START_LOCAL")
+        self.assertEqual(second["decision"], "HOLD")
+        self.assertIn("COOLDOWN_ACTIVE", second["reason_codes"])
         self.assertEqual(self.start_calls, ["runner-a"])
-        self.assertEqual(second["diagnostic"], "ACTION_ALREADY_TERMINAL")
 
 
 if __name__ == "__main__":

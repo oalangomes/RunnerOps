@@ -220,7 +220,7 @@ def collect_local(records):
         path = Path(record["path"])
         record["local"] = observe_service(path)
         try:
-            registration = json.loads((path / ".runner").read_text())
+            registration = json.loads((path / ".runner").read_text(encoding="utf-8-sig"))
             if (not isinstance(registration, dict) or not positive_id(registration.get("agentId"))
                     or not isinstance(registration.get("agentName"), str)
                     or not registration["agentName"] or not os.access(path / "run.sh", os.X_OK)):

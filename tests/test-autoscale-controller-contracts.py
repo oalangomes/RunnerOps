@@ -337,6 +337,7 @@ class ControllerContracts(unittest.TestCase):
     def test_queue_change_during_revalidation_performs_no_mutation(self):
         self.seed_queue()
         initial = self.snapshot()
+        self.now += timedelta(seconds=1)
         fresh = self.snapshot(queued=False)
         result, code = self.run_controller([initial, fresh])
         self.assertEqual(code, 0)

@@ -10,6 +10,8 @@ RunnerOps é o produto deste repositório. `runnerctl` é sua interface pública
 - systemd é a autoridade de ciclo de vida para runners migrados.
 - `RUNNER_BOOT_POLICY=on-demand` é o padrão, e um runner inativo/com boot desabilitado pode representar capacidade ociosa saudável.
 - `runnerctl` é a CLI pública e estável; scripts internos são detalhes de implementação.
+- Planejamento de autoscale permanece separado de mutação: `autoscale plan` é read-only; controller/provisioning precisam de slices explícitas.
+- `job.created_at`/`queue_age_seconds` são evidência de origem, não relógio de autoscaling; decisões de threshold usam continuidade observada pelo RunnerOps.
 - Prefira Agent Skills neutras de provedor em `skills/<nome>/SKILL.md`.
 - Não introduza cópias específicas de provedor, a menos que um cliente não consiga expressar o comportamento pela skill compartilhada.
 
@@ -30,6 +32,16 @@ bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh 
   ci-watch.sh tests/test-runnerctl-contracts.sh tests/test-runnerctl-routing-contracts.sh \
   tests/test-runner-package-contracts.sh tests/test-ci-watch-contracts.sh tests/test-agent-skills-contracts.sh \
   tests/test-performance-skill-contracts.sh
+```
+
+Para mudanças em capacity/autoscale:
+
+```bash
+python3 -B -m py_compile capacity.py autoscale_contracts.py autoscale_store.py autoscale_audit.py autoscale_planner.py
+python3 -B tests/test-capacity-contracts.py
+python3 -B tests/test-capacity-bom-contract.py
+python3 -B tests/test-autoscale-audit-contracts.py
+python3 -B tests/test-autoscale-planner-contracts.py
 ```
 
 Para Agent Skills:

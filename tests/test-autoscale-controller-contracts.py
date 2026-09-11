@@ -157,7 +157,7 @@ class ControllerContracts(unittest.TestCase):
         self.start_calls.append(target)
         return 0
 
-    def run(self, snapshot=None, **kwargs):
+    def run_controller(self, snapshot=None, **kwargs):
         snapshot = snapshot or self.snapshot()
         return run_once(
             ".",
@@ -181,7 +181,7 @@ class ControllerContracts(unittest.TestCase):
 
     def test_exact_idle_runner_is_started_once_and_audited_end_to_end(self):
         self.seed_queue()
-        result, code = self.run()
+        result, code = self.run_controller()
         self.assertEqual(code, 0)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["decision"], "START_LOCAL")
@@ -200,7 +200,7 @@ class ControllerContracts(unittest.TestCase):
     def test_shared_group_capacity_starts_only_one_exact_deterministic_runner(self):
         self.seed_queue(names=("runner-z", "runner-a"))
         snapshot = self.snapshot(names=("runner-z", "runner-a"))
-        result, code = self.run(snapshot)
+        result, code = self.run_controller(snapshot)
         self.assertEqual(code, 0)
         self.assertEqual(result["target"], "runner-a")
         self.assertEqual(self.start_calls, ["runner-a"])
@@ -209,7 +209,7 @@ class ControllerContracts(unittest.TestCase):
 
     def test_start_command_success_but_github_offline_is_failed_not_success(self):
         self.seed_queue()
-        result, code = self.run(
+        result, code = self.run_controller(
             verify_fn=lambda _repo, _target: (False, "GITHUB_VERIFICATION_FAILED")
         )
         self.assertEqual(code, 1)
@@ -228,7 +228,7 @@ class ControllerContracts(unittest.TestCase):
         def load():
             return policies.pop(0) if policies else self.policy(queue_threshold_seconds=301)
 
-        result, code = self.run(policy_loader=load)
+        result, code = self.run_controller(policy_loader=load)
         self.assertEqual(code, 3)
         self.assertEqual(result["diagnostic"], "POLICY_CHANGED")
         self.assertEqual(self.start_calls, [])
@@ -256,7 +256,7 @@ class ControllerContracts(unittest.TestCase):
     def test_other_planner_decisions_remain_read_only_for_lifecycle(self):
         self.seed_queue(category="busy_capacity", active_local=1)
         snapshot = self.snapshot(category="busy_capacity", active_local=1)
-        result, code = self.run(snapshot)
+        result, code = self.run_controller(snapshot)
         self.assertEqual(code, 0)
         self.assertEqual(result["decision"], "PROVISION_LOCAL")
         self.assertEqual(result["status"], "noop")
@@ -273,19 +273,18 @@ class ControllerContracts(unittest.TestCase):
             raise RuntimeError("simulated process death")
 
         with self.assertRaises(RuntimeError):
-            self.run(idle, start_fn=crash_after_started)
+            self.run_controller(idle, start_fn=crash_after_started)
 
         self.now += timedelta(seconds=1)
         online = self.snapshot(
             category="available_now", active_local=1, observed_at=self.now
         )
-        result, code = self.run(online)
+        result, code = self.run_controller(online)
         self.assertEqual(code, 0)
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["diagnostic"], "RECOVERED_VERIFIED_ACTION")
         self.assertEqual(self.start_calls, ["runner-a"])
         with self.store_factory() as store:
-            explanation = store.explain(result["action_id"].replace("action-", "missing-")) if False else None
             rows = store.history()["decisions"]
             self.assertEqual(len(rows), 1)
             action = store.explain(rows[0]["decision_id"])["actions"][0]
@@ -298,8 +297,8 @@ class ControllerContracts(unittest.TestCase):
     def test_replaying_identical_terminal_plan_never_starts_again(self):
         self.seed_queue()
         snapshot = self.snapshot()
-        first, first_code = self.run(snapshot)
-        second, second_code = self.run(snapshot)
+        first, first_code = self.run_controller(snapshot)
+        second, second_code = self.run_controller(snapshot)
         self.assertEqual(first_code, 0)
         self.assertEqual(second_code, 0)
         self.assertEqual(first["decision_id"], second["decision_id"])

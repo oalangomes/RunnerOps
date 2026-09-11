@@ -4,6 +4,8 @@ The optional audit store records what RunnerOps observed and can retain a suppli
 decision, its reasons, the planned actions and their outcomes. It does not produce
 scaling decisions or perform actions. `capacity` and `autoscale status` remain
 read-only; no polling loop, controller, apply command or cloud provider is added.
+Slice #70 adds a separate read-only planner that may consume retained queue/action
+evidence without writing anything back to this store.
 
 ## Storage and dependency choice
 
@@ -99,9 +101,40 @@ complete observation arrives. No background freshness or retention task exists.
 
 `github_created_at` is optional source evidence. Invalid timestamps become null;
 raw invalid text is discarded. It can include dependency/approval waits and
-must **never alone trigger future autoscaling**. The future planner #70 will use
-RunnerOps-observed episodes with freshness and completeness checks, not substitute
-`queue_age_seconds` from CapacitySnapshot for scheduler wait.
+must **never alone trigger autoscaling**. `runnerctl autoscale plan` uses retained
+RunnerOps-observed episodes with identity, label, freshness and completeness checks;
+it never substitutes `queue_age_seconds` from CapacitySnapshot as a scaling
+threshold source.
+
+## Planner read path — Slice #70
+
+```bash
+runnerctl autoscale plan .
+runnerctl autoscale plan owner/repo --json
+```
+
+The planner first obtains a fresh CapacitySnapshot, then reads the existing store
+in SQLite read-only/query-only mode when queue-duration, cooldown or active-burst
+evidence is required. It does not call `observe`, `record_decision`, `record_action`
+or `prune`, and it never creates a missing database.
+
+The store is optional in the product, but some planner decisions require durable
+cross-poll evidence. This distinction is deliberate:
+
+- no scoped self-hosted work can produce `WAIT` without a database;
+- matching `available_now` capacity can produce `WAIT` without a database;
+- threshold-dependent scaling requires matching `continuous_queued` evidence;
+- a missing/unreadable/incomplete audit read becomes `INCONCLUSIVE` when that
+  evidence is required, never an invented queue duration;
+- retained `planned`/`started` `BURST_CLOUD` actions provide the conservative
+  active-burst count; started scaling actions provide cooldown evidence.
+
+Planner output is an `AutoscalePlan`, not a persisted `Decision` record. `plan`
+therefore does **not** make a subsequent `autoscale explain --decision <plan-id>`
+valid by itself. `explain` only resolves decisions that an internal writer has
+actually stored. A later controller must deliberately project the plan into the
+closed decision-storage contract before recording it; it must not persist the
+public plan payload wholesale.
 
 ## Decision and action input contracts
 
@@ -109,9 +142,10 @@ Decision fields are `decision_id`, `timestamp`, `repository`,
 `policy_fingerprint` (`sha256:` plus 64 lowercase hex characters), `decision`,
 `reason_codes`, `requested_capacity_delta`, and `evidence`. Supported decision
 values are `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED`
-and `INCONCLUSIVE`. These are storage vocabulary, not implemented policies.
+and `INCONCLUSIVE`. Slice #70 uses the same decision vocabulary, while persistence
+remains an explicit internal operation.
 
-Evidence is a deliberately closed structure:
+Evidence accepted by the store is a deliberately closed structure:
 
 - `observed_at`, `queue_status` (`complete`/`inconclusive`), `queued_job_count`;
 - `queue`: at most 100 relevant job references, each with run/job/attempt IDs,
@@ -119,7 +153,7 @@ Evidence is a deliberately closed structure:
   `github_created_at`;
 - `capacity`: `available_now`, `busy_capacity`, `provisioned_idle`, `inconclusive`
   and `active_local_runner_count`;
-- `active_burst_capacity`, reserved for a future producer.
+- `active_burst_capacity`, reserved for producer-supplied evidence.
 
 Counts can be null for unknown evidence. The caller supplies the relevant job
 subset and capacity evidence; the store does not infer policy or invent capacity.
@@ -268,6 +302,7 @@ action outcomes, JSON/human CLI reads, idempotency, migrations, real SQL rollbac
 retention saturation and operation of traditional commands without SQLite.
 No test writes the actual machine registry or production audit database.
 
-Before a later controller ships, revisit polling cadence/gap policy, crash recovery
-of pending actions, and measured lock contention. These are deliberately not
-implemented by this storage slice; #70/#71/#73/#72 remain separate work.
+Before the mutating controller in #71 ships, revisit polling cadence/gap policy,
+crash recovery of pending actions, and measured lock contention. These are
+deliberately not implemented by the read-only planner; #71/#73/#72 remain separate
+work.

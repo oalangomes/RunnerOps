@@ -20,13 +20,7 @@ from pathlib import Path
 
 import capacity
 from autoscale_contracts import AuditError, action_record, timestamp, utcnow
-from autoscale_planner import (
-    PolicyError,
-    collect_host_facts,
-    load_policy,
-    plan,
-    policy_fingerprint,
-)
+from autoscale_planner import PolicyError, collect_host_facts, load_policy, plan, policy_fingerprint
 from autoscale_runtime import decision_from_plan, pending_start_actions, read_planner_evidence
 from autoscale_store import AuditStore, database_path
 
@@ -54,8 +48,6 @@ def _bool_env(name, default=False):
 
 
 def autoscale_enabled():
-    """Mutation is opt-in independently from the read-only planner."""
-
     return _bool_env("RUNNER_AUTOSCALE_ENABLED", False)
 
 
@@ -73,7 +65,6 @@ def _integer_env(name, default, minimum, maximum):
 @contextmanager
 def controller_lock(path=None):
     """One non-blocking autoscale mutator per host/state root."""
-
     lock_path = Path(path) if path is not None else database_path().parent / "autoscale-controller.lock"
     root = lock_path.parent
     try:
@@ -103,13 +94,90 @@ def controller_lock(path=None):
 
 
 def _action_id(decision_id, target):
-    digest = hashlib.sha256(
-        (decision_id + "\0START_LOCAL\0" + target).encode("utf-8")
-    ).hexdigest()
-    return "action-" + digest[:32]
+    basis = decision_id + "\0START_LOCAL\0" + target
+    return "action-" + hashlib.sha256(basis.encode("utf-8")).hexdigest()[:32]
 
 
-def _action(plan_result, state, at, *, previous=None, diagnostic=None, exit_code=None):
+def _registration_id(runner):
+    registration_id = runner.get("registration_id")
+    github = runner.get("github") or {}
+    if type(registration_id) is not int or registration_id <= 0 or github.get("id") != registration_id:
+        return None
+    return registration_id
+
+
+def _target_record(snapshot, target, expected_registration_id=None):
+    if (
+        not isinstance(target, str)
+        or not target
+        or target == "all"
+        or target.startswith("group:")
+        or snapshot.get("sources", {}).get("local") != "complete"
+        or snapshot.get("sources", {}).get("github_runners") != "complete"
+    ):
+        return None
+    matches = [
+        runner for runner in snapshot.get("capacity", {}).get("runners", [])
+        if runner.get("scope") == "local" and runner.get("name") == target
+    ]
+    if len(matches) != 1:
+        return None
+    runner = matches[0]
+    registration_id = _registration_id(runner)
+    if (
+        runner.get("enabled") is not True
+        or registration_id is None
+        or (expected_registration_id is not None and str(registration_id) != str(expected_registration_id))
+    ):
+        return None
+    return runner
+
+
+def _idle_target_identity(snapshot, target, expected_registration_id=None):
+    runner = _target_record(snapshot, target, expected_registration_id)
+    if runner is None:
+        return None
+    local = runner.get("local") or {}
+    github = runner.get("github") or {}
+    if (
+        runner.get("category") != "provisioned_idle"
+        or local.get("state") != "healthy_idle"
+        or github.get("status") != "offline"
+        or github.get("busy") is not False
+    ):
+        return None
+    return str(_registration_id(runner))
+
+
+def _target_state(snapshot, target, expected_registration_id=None):
+    runner = _target_record(snapshot, target, expected_registration_id)
+    if runner is None:
+        return "inconclusive"
+    local = runner.get("local") or {}
+    github = runner.get("github") or {}
+    if (
+        local.get("state") == "active"
+        and github.get("status") == "online"
+        and runner.get("category") in ("available_now", "busy_capacity")
+    ):
+        return "online"
+    if (
+        local.get("state") == "healthy_idle"
+        and github.get("status") == "offline"
+        and github.get("busy") is False
+        and runner.get("category") == "provisioned_idle"
+    ):
+        return "idle"
+    if (
+        runner.get("category") == "inconclusive"
+        or local.get("state") in (None, "unknown", "failed")
+        or github.get("status") not in ("online", "offline")
+    ):
+        return "inconclusive"
+    return "other"
+
+
+def _action(plan_result, state, at, *, previous=None, diagnostic=None, exit_code=None, external_id=None):
     target = plan_result["action"]["target"]
     started_at = previous["started_at"] if previous else None
     finished_at = None
@@ -119,20 +187,20 @@ def _action(plan_result, state, at, *, previous=None, diagnostic=None, exit_code
         if started_at is None:
             raise ControllerError("ACTION_START_TIME_MISSING")
         finished_at = at
-    return action_record(
-        {
-            "action_id": _action_id(plan_result["decision_id"], target),
-            "decision_id": plan_result["decision_id"],
-            "kind": "START_LOCAL",
-            "target": target,
-            "state": state,
-            "timestamp": at,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "external_id": None,
-            "diagnostic": {"code": diagnostic, "exit_code": exit_code},
-        }
-    )
+    if previous is not None:
+        external_id = previous["external_id"]
+    return action_record({
+        "action_id": _action_id(plan_result["decision_id"], target),
+        "decision_id": plan_result["decision_id"],
+        "kind": "START_LOCAL",
+        "target": target,
+        "state": state,
+        "timestamp": at,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "external_id": external_id,
+        "diagnostic": {"code": diagnostic, "exit_code": exit_code},
+    })
 
 
 def _transition_existing(action, state, at, diagnostic, exit_code=None):
@@ -140,56 +208,23 @@ def _transition_existing(action, state, at, diagnostic, exit_code=None):
     if state == "started" and started_at is None:
         started_at = at
     finished_at = at if state in ("succeeded", "failed", "cancelled") else None
-    return action_record(
-        {
-            **action,
-            "state": state,
-            "timestamp": at,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "diagnostic": {"code": diagnostic, "exit_code": exit_code},
-        }
-    )
-
-
-def _target_state(snapshot, target):
-    if (
-        snapshot.get("sources", {}).get("local") != "complete"
-        or snapshot.get("sources", {}).get("github_runners") != "complete"
-    ):
-        return "inconclusive"
-    matches = [
-        runner
-        for runner in snapshot.get("capacity", {}).get("runners", [])
-        if runner.get("scope") == "local" and runner.get("name") == target
-    ]
-    if len(matches) != 1:
-        return "inconclusive"
-    runner = matches[0]
-    local = runner.get("local") or {}
-    github = runner.get("github") or {}
-    if (
-        local.get("state") == "active"
-        and github.get("status") == "online"
-        and runner.get("category") in ("available_now", "busy_capacity")
-    ):
-        return "online"
-    if runner.get("category") == "provisioned_idle" and local.get("state") == "healthy_idle":
-        return "idle"
-    if runner.get("category") == "inconclusive" or local.get("state") in (None, "unknown", "failed"):
-        return "inconclusive"
-    return "other"
+    return action_record({
+        **action,
+        "state": state,
+        "timestamp": at,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "diagnostic": {"code": diagnostic, "exit_code": exit_code},
+    })
 
 
 def start_exact_runner(target):
     """Invoke the existing exact lifecycle boundary; never group/all."""
-
     if not isinstance(target, str) or not target or target == "all" or target.startswith("group:"):
         raise ControllerError("INVALID_START_TARGET", 2)
-    command = [str(Path(__file__).resolve().parent / "runners.sh"), "start", target]
     try:
         result = subprocess.run(
-            command,
+            [str(Path(__file__).resolve().parent / "runners.sh"), "start", target],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -201,36 +236,24 @@ def start_exact_runner(target):
     return result.returncode
 
 
-def verify_exact_runner(repository, target, *, snapshot_fn=capacity.snapshot):
-    """Require local status+health and GitHub online evidence after activation."""
-
-    runner_script = str(Path(__file__).resolve().parent / "runners.sh")
-    for command in ("status", "health"):
-        try:
-            result = subprocess.run(
-                [runner_script, command, target],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False, "LOCAL_VERIFICATION_FAILED"
-        if result.returncode != 0:
-            return False, "LOCAL_VERIFICATION_FAILED"
-
-    timeout_seconds = _integer_env(
-        "RUNNER_AUTOSCALE_VERIFY_TIMEOUT_SECONDS", 20, 1, 300
-    )
-    interval_seconds = _integer_env(
-        "RUNNER_AUTOSCALE_VERIFY_INTERVAL_SECONDS", 1, 1, 30
-    )
+def verify_exact_runner(
+    repository,
+    target,
+    expected_registration_id,
+    *,
+    snapshot_fn=capacity.snapshot,
+    observe_fn=None,
+):
+    """Verify exact local/systemd/registration/GitHub state from CapacitySnapshot."""
+    timeout_seconds = _integer_env("RUNNER_AUTOSCALE_VERIFY_TIMEOUT_SECONDS", 20, 1, 300)
+    interval_seconds = _integer_env("RUNNER_AUTOSCALE_VERIFY_INTERVAL_SECONDS", 1, 1, 30)
     deadline = time.monotonic() + timeout_seconds
     saw_inconclusive = False
     while True:
         observed = snapshot_fn(repository)
-        state = _target_state(observed, target)
+        if observe_fn is not None:
+            observe_fn(observed)
+        state = _target_state(observed, target, expected_registration_id)
         if state == "online":
             return True, "VERIFIED_ONLINE"
         saw_inconclusive = saw_inconclusive or state == "inconclusive"
@@ -239,15 +262,16 @@ def verify_exact_runner(repository, target, *, snapshot_fn=capacity.snapshot):
         time.sleep(interval_seconds)
 
 
-def _controller_result(plan_result=None, *, status, action=None, diagnostic=None):
+def _controller_result(plan_result=None, *, decision=None, status, action=None, diagnostic=None):
+    source = decision or plan_result or {}
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "AutoscaleControllerResult",
         "status": status,
-        "repository": plan_result.get("repository") if plan_result else None,
-        "decision_id": plan_result.get("decision_id") if plan_result else None,
-        "decision": plan_result.get("decision") if plan_result else None,
-        "reason_codes": plan_result.get("reason_codes", []) if plan_result else [],
+        "repository": source.get("repository"),
+        "decision_id": source.get("decision_id"),
+        "decision": source.get("decision"),
+        "reason_codes": source.get("reason_codes", []),
         "action_id": action.get("action_id") if action else None,
         "action_state": action.get("state") if action else None,
         "target": action.get("target") if action else None,
@@ -255,14 +279,146 @@ def _controller_result(plan_result=None, *, status, action=None, diagnostic=None
     }
 
 
-def _cancel_or_fail_pending(store, action, at, code):
-    if action["state"] == "planned":
-        cancelled = _transition_existing(action, "cancelled", at, code, None)
-        store.record_action(cancelled)
-        return cancelled
-    failed = _transition_existing(action, "failed", at, code, 1)
-    store.record_action(failed)
-    return failed
+def _empty_audit(error):
+    return {
+        "status": "inconclusive",
+        "error": error,
+        "queue": [],
+        "active_burst_capacity": None,
+        "last_scaling_action_started_at": None,
+    }
+
+
+def _cancel_pending(store, decision, action, code, clock):
+    terminal = _transition_existing(action, "cancelled", timestamp(clock().isoformat()), code, None)
+    store.record_action(terminal)
+    return _controller_result(
+        decision=decision, status="noop", action=terminal, diagnostic=code
+    ), 0
+
+
+def _finish_start_attempt(store, decision, action, repository, *, start_fn, verify_fn, clock):
+    start_rc = start_fn(action["target"])
+    verified, verify_code = verify_fn(repository, action["target"], action["external_id"])
+    finished_at = timestamp(clock().isoformat())
+    if verified:
+        diagnostic = verify_code if start_rc == 0 else "VERIFIED_ONLINE_AFTER_START_ERROR"
+        terminal = _transition_existing(action, "succeeded", finished_at, diagnostic, start_rc)
+        store.record_action(terminal)
+        return _controller_result(
+            decision=decision, status="ok", action=terminal, diagnostic=diagnostic
+        ), 0
+
+    diagnostic = "START_COMMAND_FAILED" if start_rc != 0 else verify_code
+    terminal = _transition_existing(
+        action, "failed", finished_at, diagnostic, start_rc if start_rc != 0 else 1
+    )
+    store.record_action(terminal)
+    return _controller_result(
+        decision=decision, status="failed", action=terminal, diagnostic=diagnostic
+    ), 1
+
+
+def _recover_pending(
+    store,
+    pending,
+    fresh_snapshot,
+    fresh_plan,
+    fresh_policy,
+    repository,
+    *,
+    start_fn,
+    verify_fn,
+    clock,
+):
+    decision = pending["decision"]
+    action = pending["action"]
+    expected_registration_id = action["external_id"]
+    state = _target_state(fresh_snapshot, action["target"], expected_registration_id)
+    at = timestamp(clock().isoformat())
+
+    if state == "online":
+        if action["state"] == "planned":
+            return _cancel_pending(store, decision, action, "TARGET_ALREADY_ONLINE", clock)
+        terminal = _transition_existing(action, "succeeded", at, "VERIFIED_ONLINE", 0)
+        store.record_action(terminal)
+        return _controller_result(
+            decision=decision,
+            status="ok",
+            action=terminal,
+            diagnostic="RECOVERED_VERIFIED_ACTION",
+        ), 0
+
+    if action["state"] == "started":
+        if state == "inconclusive":
+            return _controller_result(
+                decision=decision,
+                status="inconclusive",
+                action=action,
+                diagnostic="EVIDENCE_INCONCLUSIVE",
+            ), 3
+        # Reconciliation is not a new scaling decision. Do not issue a second
+        # lifecycle start after the process may already have crossed that boundary.
+        verified, code = verify_fn(repository, action["target"], expected_registration_id)
+        terminal = _transition_existing(
+            action,
+            "succeeded" if verified else "failed",
+            timestamp(clock().isoformat()),
+            code,
+            0 if verified else 1,
+        )
+        store.record_action(terminal)
+        return _controller_result(
+            decision=decision,
+            status="ok" if verified else "failed",
+            action=terminal,
+            diagnostic=code,
+        ), 0 if verified else 1
+
+    same_policy = policy_fingerprint(fresh_policy) == decision["policy_fingerprint"]
+    if not same_policy:
+        return _cancel_pending(store, decision, action, "POLICY_CHANGED", clock)
+    if fresh_plan["decision"] == "INCONCLUSIVE":
+        return _controller_result(
+            decision=decision,
+            status="inconclusive",
+            action=action,
+            diagnostic="EVIDENCE_INCONCLUSIVE",
+        ), 3
+    same_plan = (
+        fresh_plan["decision"] == "START_LOCAL"
+        and fresh_plan.get("action", {}).get("target") == action["target"]
+    )
+    registration_id = _idle_target_identity(
+        fresh_snapshot, action["target"], expected_registration_id
+    )
+    if not same_plan:
+        return _cancel_pending(store, decision, action, "PLAN_CHANGED", clock)
+    if registration_id is None:
+        return _cancel_pending(store, decision, action, "TARGET_CHANGED", clock)
+
+    if action["external_id"] is None:
+        started = action_record({
+            **action,
+            "state": "started",
+            "timestamp": at,
+            "started_at": at,
+            "finished_at": None,
+            "external_id": registration_id,
+            "diagnostic": {"code": "START_REQUESTED", "exit_code": None},
+        })
+    else:
+        started = _transition_existing(action, "started", at, "START_REQUESTED", None)
+    store.record_action(started)
+    return _finish_start_attempt(
+        store,
+        decision,
+        started,
+        repository,
+        start_fn=start_fn,
+        verify_fn=verify_fn,
+        clock=clock,
+    )
 
 
 def run_once(
@@ -279,266 +435,187 @@ def run_once(
     clock=utcnow,
 ):
     """Run one governed controller iteration and apply at most one exact START_LOCAL."""
-
     if enabled is None:
         enabled = autoscale_enabled()
     if not enabled:
         return _controller_result(status="disabled", diagnostic="AUTOSCALE_DISABLED"), 0
 
-    policy = policy_loader()
+    initial_policy = policy_loader()
     store_factory = store_factory or (lambda: AuditStore(writable=True))
-    verify_fn = verify_fn or (
-        lambda repo, target: verify_exact_runner(repo, target, snapshot_fn=snapshot_fn)
-    )
+    initial_snapshot = snapshot_fn(repository)
+    canonical = initial_snapshot.get("repository", {}).get("nameWithOwner")
+    if not canonical:
+        result = plan(
+            initial_snapshot,
+            initial_policy,
+            host_collector(initial_policy),
+            _empty_audit("canonical_identity_unavailable"),
+        )
+        return _controller_result(
+            result, status="inconclusive", diagnostic="EVIDENCE_INCONCLUSIVE"
+        ), 3
 
-    with lock_factory():
-        current_snapshot = snapshot_fn(repository)
-        canonical = current_snapshot.get("repository", {}).get("nameWithOwner")
-        if not canonical:
-            result = plan(
-                current_snapshot,
-                policy,
-                host_collector(policy),
-                {"status": "inconclusive", "error": "canonical_identity_unavailable", "queue": [], "active_burst_capacity": None, "last_scaling_action_started_at": None},
-            )
-            return _controller_result(result, status="inconclusive", diagnostic="EVIDENCE_INCONCLUSIVE"), 3
+    initial_decision = None
+    initial_registration_id = None
+    initial_pending = []
 
-        with store_factory() as store:
-            store.observe(current_snapshot)
-            audit = read_planner_evidence(store, canonical)
-            plan_result = plan(current_snapshot, policy, host_collector(policy), audit)
-            pending = pending_start_actions(store, canonical)
-            if len(pending) > 1:
+    # Observe and decide before entering the mutating critical section.
+    with store_factory() as store:
+        store.observe(initial_snapshot)
+        audit = read_planner_evidence(store, canonical)
+        initial_plan = plan(initial_snapshot, initial_policy, host_collector(initial_policy), audit)
+        initial_pending = pending_start_actions(store, canonical)
+
+        if len(initial_pending) > 1:
+            return _controller_result(
+                initial_plan,
+                status="inconclusive",
+                diagnostic="MULTIPLE_PENDING_START_ACTIONS",
+            ), 3
+
+        if not initial_pending:
+            if initial_plan["decision"] == "INCONCLUSIVE":
                 return _controller_result(
-                    plan_result,
-                    status="inconclusive",
-                    diagnostic="MULTIPLE_PENDING_START_ACTIONS",
+                    initial_plan, status="inconclusive", diagnostic="EVIDENCE_INCONCLUSIVE"
+                ), 3
+            if initial_plan["decision"] != "START_LOCAL":
+                return _controller_result(
+                    initial_plan, status="noop", diagnostic="DECISION_NOT_APPLIED_IN_SLICE"
+                ), 0
+
+            target = initial_plan.get("action", {}).get("target")
+            initial_registration_id = _idle_target_identity(initial_snapshot, target)
+            if initial_registration_id is None:
+                return _controller_result(
+                    initial_plan, status="inconclusive", diagnostic="START_TARGET_INCONCLUSIVE"
                 ), 3
 
-            if pending:
-                previous_decision = pending[0]["decision"]
-                action = pending[0]["action"]
-                target_state = _target_state(current_snapshot, action["target"])
-                at = timestamp(clock().isoformat())
+            initial_decision = decision_from_plan(initial_plan)
+            # The decision is durable before lock/action/lifecycle mutation.
+            store.record_decision(initial_decision)
 
-                if target_state == "online":
-                    if action["state"] == "planned":
-                        # The target became online without this persisted action ever
-                        # starting. Do not claim credit for an external/manual start.
-                        cancelled = _transition_existing(
-                            action, "cancelled", at, "TARGET_ALREADY_ONLINE", 0
-                        )
-                        store.record_action(cancelled)
-                        return _controller_result(
-                            plan_result,
-                            status="noop",
-                            action=cancelled,
-                            diagnostic="RECOVERED_NO_ACTION_REQUIRED",
-                        ), 0
-                    succeeded = _transition_existing(
-                        action, "succeeded", at, "VERIFIED_ONLINE", 0
-                    )
-                    store.record_action(succeeded)
+    lock_decision = initial_pending[0]["decision"] if initial_pending else initial_decision
+    try:
+        with lock_factory():
+            with store_factory() as store:
+                fresh_policy = policy_loader()
+                fresh_snapshot = snapshot_fn(repository)
+                fresh_canonical = fresh_snapshot.get("repository", {}).get("nameWithOwner")
+                if not fresh_canonical or fresh_canonical.casefold() != canonical.casefold():
                     return _controller_result(
-                        plan_result,
-                        status="ok",
-                        action=succeeded,
-                        diagnostic="RECOVERED_VERIFIED_ACTION",
-                    ), 0
-
-                # A previously started action is reconciliation work, not a new
-                # scaling decision. Never issue a second start after process restart.
-                if action["state"] == "started":
-                    if target_state == "inconclusive":
-                        return _controller_result(
-                            plan_result,
-                            status="inconclusive",
-                            action=action,
-                            diagnostic="EVIDENCE_INCONCLUSIVE",
-                        ), 3
-                    verified, code = verify_fn(canonical, action["target"])
-                    terminal = _transition_existing(
-                        action,
-                        "succeeded" if verified else "failed",
-                        timestamp(clock().isoformat()),
-                        code,
-                        0 if verified else 1,
-                    )
-                    store.record_action(terminal)
-                    return _controller_result(
-                        plan_result,
-                        status="ok" if verified else "failed",
-                        action=terminal,
-                        diagnostic=code,
-                    ), 0 if verified else 1
-
-                current_policy = policy_loader()
-                same_policy = (
-                    policy_fingerprint(current_policy)
-                    == previous_decision["policy_fingerprint"]
-                )
-                same_plan = (
-                    plan_result["decision"] == "START_LOCAL"
-                    and plan_result.get("action", {}).get("target") == action["target"]
-                )
-                if not same_policy or not same_plan:
-                    terminal = _cancel_or_fail_pending(
-                        store,
-                        action,
-                        at,
-                        "POLICY_CHANGED" if not same_policy else "PLAN_CHANGED",
-                    )
-                    return _controller_result(
-                        plan_result,
-                        status="inconclusive" if action["state"] == "started" else "noop",
-                        action=terminal,
-                        diagnostic="POLICY_CHANGED" if not same_policy else "PLAN_CHANGED",
-                    ), 3 if action["state"] == "started" else 0
-
-                if target_state == "inconclusive":
-                    return _controller_result(
-                        plan_result,
+                        decision=lock_decision,
                         status="inconclusive",
-                        action=action,
+                        diagnostic="REPOSITORY_CHANGED",
+                    ), 3
+
+                store.observe(fresh_snapshot)
+                fresh_audit = read_planner_evidence(store, canonical)
+                fresh_plan = plan(
+                    fresh_snapshot, fresh_policy, host_collector(fresh_policy), fresh_audit
+                )
+                pending = pending_start_actions(store, canonical)
+                if len(pending) > 1:
+                    return _controller_result(
+                        decision=lock_decision,
+                        status="inconclusive",
+                        diagnostic="MULTIPLE_PENDING_START_ACTIONS",
+                    ), 3
+
+                active_verify = verify_fn or (
+                    lambda repo, target, registration_id: verify_exact_runner(
+                        repo,
+                        target,
+                        registration_id,
+                        snapshot_fn=snapshot_fn,
+                        observe_fn=store.observe,
+                    )
+                )
+
+                if pending:
+                    return _recover_pending(
+                        store,
+                        pending[0],
+                        fresh_snapshot,
+                        fresh_plan,
+                        fresh_policy,
+                        canonical,
+                        start_fn=start_fn,
+                        verify_fn=active_verify,
+                        clock=clock,
+                    )
+
+                if initial_decision is None:
+                    return _controller_result(
+                        fresh_plan,
+                        status="inconclusive",
+                        diagnostic="RECOVERY_STATE_CHANGED",
+                    ), 3
+
+                same_policy = (
+                    policy_fingerprint(fresh_policy)
+                    == initial_decision["policy_fingerprint"]
+                )
+                if fresh_plan["decision"] == "INCONCLUSIVE":
+                    return _controller_result(
+                        decision=initial_decision,
+                        status="inconclusive",
                         diagnostic="EVIDENCE_INCONCLUSIVE",
                     ), 3
-
-                if action["state"] == "planned":
-                    action = _transition_existing(
-                        action, "started", at, "START_REQUESTED", None
-                    )
-                    store.record_action(action)
-                start_rc = start_fn(action["target"])
-                if start_rc != 0:
-                    failed = _transition_existing(
-                        action,
-                        "failed",
-                        timestamp(clock().isoformat()),
-                        "START_COMMAND_FAILED",
-                        start_rc,
-                    )
-                    store.record_action(failed)
-                    return _controller_result(
-                        plan_result,
-                        status="failed",
-                        action=failed,
-                        diagnostic="START_COMMAND_FAILED",
-                    ), 1
-
-                verified, code = verify_fn(canonical, action["target"])
-                finished_at = timestamp(clock().isoformat())
-                terminal = _transition_existing(
-                    action,
-                    "succeeded" if verified else "failed",
-                    finished_at,
-                    code,
-                    0 if verified else 1,
+                same_plan = (
+                    fresh_plan["decision"] == "START_LOCAL"
+                    and fresh_plan.get("action", {}).get("target")
+                    == initial_plan["action"]["target"]
                 )
-                store.record_action(terminal)
-                return _controller_result(
-                    plan_result,
-                    status="ok" if verified else "failed",
-                    action=terminal,
-                    diagnostic=code,
-                ), 0 if verified else 1
-
-            if plan_result["decision"] == "INCONCLUSIVE":
-                return _controller_result(
-                    plan_result,
-                    status="inconclusive",
-                    diagnostic="EVIDENCE_INCONCLUSIVE",
-                ), 3
-
-            if plan_result["decision"] != "START_LOCAL":
-                return _controller_result(
-                    plan_result,
-                    status="noop",
-                    diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
-                ), 0
-
-            # A deterministic plan already terminal in the audit journal must
-            # never replay its lifecycle mutation.
-            try:
-                previous = store.explain(plan_result["decision_id"])
-            except AuditError as exc:
-                if exc.code != "decision_not_found":
-                    raise
-            else:
-                expected = _action_id(
-                    plan_result["decision_id"], plan_result["action"]["target"]
+                fresh_registration_id = _idle_target_identity(
+                    fresh_snapshot,
+                    initial_plan["action"]["target"],
+                    initial_registration_id,
                 )
-                matches = [item for item in previous["actions"] if item["action_id"] == expected]
-                if len(matches) != 1 or matches[0]["state"] not in (
-                    "succeeded", "failed", "cancelled"
-                ):
+                if not same_policy:
                     return _controller_result(
-                        plan_result, status="inconclusive", diagnostic="AUDIT_REPLAY_INCONCLUSIVE"
-                    ), 3
-                terminal = matches[0]
-                return _controller_result(
-                    plan_result,
-                    status="ok" if terminal["state"] == "succeeded" else "noop",
-                    action=terminal,
-                    diagnostic="ACTION_ALREADY_TERMINAL",
-                ), 0
+                        decision=initial_decision, status="noop", diagnostic="POLICY_CHANGED"
+                    ), 0
+                if not same_plan:
+                    return _controller_result(
+                        decision=initial_decision, status="noop", diagnostic="PLAN_CHANGED"
+                    ), 0
+                if fresh_registration_id is None:
+                    return _controller_result(
+                        decision=initial_decision, status="noop", diagnostic="TARGET_CHANGED"
+                    ), 0
 
-            # TOCTOU guard: re-read policy after planning and before persisting or
-            # mutating. The controller never executes a plan under a new policy.
-            current_policy = policy_loader()
-            if policy_fingerprint(current_policy) != plan_result["policy_fingerprint"]:
-                return _controller_result(
-                    plan_result,
-                    status="inconclusive",
-                    diagnostic="POLICY_CHANGED",
-                ), 3
-
-            decision = decision_from_plan(plan_result)
-            at = timestamp(clock().isoformat())
-            planned = _action(
-                plan_result,
-                "planned",
-                at,
-                diagnostic="PLANNED",
-                exit_code=None,
-            )
-            store.record_decision(decision, [planned])
-            started = _transition_existing(
-                planned, "started", timestamp(clock().isoformat()), "START_REQUESTED", None
-            )
-            store.record_action(started)
-
-            start_rc = start_fn(started["target"])
-            if start_rc != 0:
-                failed = _transition_existing(
-                    started,
-                    "failed",
+                planned = _action(
+                    initial_plan,
+                    "planned",
                     timestamp(clock().isoformat()),
-                    "START_COMMAND_FAILED",
-                    start_rc,
+                    diagnostic="PLANNED",
+                    exit_code=None,
+                    external_id=initial_registration_id,
                 )
-                store.record_action(failed)
-                return _controller_result(
-                    plan_result,
-                    status="failed",
-                    action=failed,
-                    diagnostic="START_COMMAND_FAILED",
-                ), 1
-
-            verified, code = verify_fn(canonical, started["target"])
-            terminal = _transition_existing(
-                started,
-                "succeeded" if verified else "failed",
-                timestamp(clock().isoformat()),
-                code,
-                0 if verified else 1,
-            )
-            store.record_action(terminal)
-            return _controller_result(
-                plan_result,
-                status="ok" if verified else "failed",
-                action=terminal,
-                diagnostic=code,
-            ), 0 if verified else 1
+                store.record_action(planned)
+                started = _transition_existing(
+                    planned,
+                    "started",
+                    timestamp(clock().isoformat()),
+                    "START_REQUESTED",
+                    None,
+                )
+                store.record_action(started)
+                return _finish_start_attempt(
+                    store,
+                    initial_decision,
+                    started,
+                    canonical,
+                    start_fn=start_fn,
+                    verify_fn=active_verify,
+                    clock=clock,
+                )
+    except ControllerError as exc:
+        if exc.code != "CONTROLLER_BUSY":
+            raise
+        return _controller_result(
+            decision=lock_decision, status="inconclusive", diagnostic="CONTROLLER_BUSY"
+        ), 3
 
 
 def render(result):
@@ -548,9 +625,7 @@ def render(result):
     if result["decision"]:
         print(f"Decision: {result['decision']} id={result['decision_id']}")
     if result["action_id"]:
-        print(
-            f"Action: {result['action_id']} state={result['action_state']} target={result['target']}"
-        )
+        print(f"Action: {result['action_id']} state={result['action_state']} target={result['target']}")
     if result["diagnostic"]:
         print(f"Diagnostic: {result['diagnostic']}")
 

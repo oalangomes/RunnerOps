@@ -295,6 +295,27 @@ class ControllerContracts(unittest.TestCase):
             ["planned", "started", "succeeded"],
         )
 
+    def test_restart_with_started_action_still_offline_never_reissues_start(self):
+        self.seed_queue()
+        idle = self.snapshot()
+
+        def crash_after_started(target):
+            self.start_calls.append(target)
+            raise RuntimeError("simulated process death")
+
+        with self.assertRaises(RuntimeError):
+            self.run_controller(idle, start_fn=crash_after_started)
+
+        self.now += timedelta(seconds=1)
+        result, code = self.run_controller(
+            self.snapshot(observed_at=self.now),
+            verify_fn=lambda _repo, _target: (False, "GITHUB_VERIFICATION_FAILED"),
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(result["action_state"], "failed")
+        self.assertEqual(result["diagnostic"], "GITHUB_VERIFICATION_FAILED")
+        self.assertEqual(self.start_calls, ["runner-a"])
+
     def test_duplicate_iteration_over_same_queue_does_not_start_second_runner(self):
         self.seed_queue()
         snapshot = self.snapshot()

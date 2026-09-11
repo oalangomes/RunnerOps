@@ -338,6 +338,32 @@ def run_once(
                         diagnostic="RECOVERED_VERIFIED_ACTION",
                     ), 0
 
+                # A previously started action is reconciliation work, not a new
+                # scaling decision. Never issue a second start after process restart.
+                if action["state"] == "started":
+                    if target_state == "inconclusive":
+                        return _controller_result(
+                            plan_result,
+                            status="inconclusive",
+                            action=action,
+                            diagnostic="EVIDENCE_INCONCLUSIVE",
+                        ), 3
+                    verified, code = verify_fn(canonical, action["target"])
+                    terminal = _transition_existing(
+                        action,
+                        "succeeded" if verified else "failed",
+                        timestamp(clock().isoformat()),
+                        code,
+                        0 if verified else 1,
+                    )
+                    store.record_action(terminal)
+                    return _controller_result(
+                        plan_result,
+                        status="ok" if verified else "failed",
+                        action=terminal,
+                        diagnostic=code,
+                    ), 0 if verified else 1
+
                 current_policy = policy_loader()
                 same_policy = (
                     policy_fingerprint(current_policy)

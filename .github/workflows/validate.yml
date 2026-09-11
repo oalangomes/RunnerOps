@@ -67,9 +67,11 @@ jobs:
             autoscale_contracts.py \
             autoscale_store.py \
             autoscale_audit.py \
+            autoscale_planner.py \
             .github/scripts/resolve-runner-identity.py \
             tests/test-capacity-contracts.py \
-            tests/test-autoscale-audit-contracts.py
+            tests/test-autoscale-audit-contracts.py \
+            tests/test-autoscale-planner-contracts.py
 
       - name: Validate dogfood identity resolver
         shell: bash
@@ -128,6 +130,7 @@ jobs:
           bash tests/test-noninteractive-runtime-contracts.sh
           python3 -B tests/test-capacity-contracts.py
           python3 -B tests/test-autoscale-audit-contracts.py
+          python3 -B tests/test-autoscale-planner-contracts.py
 
       - name: Validate governed removal plan
         shell: bash

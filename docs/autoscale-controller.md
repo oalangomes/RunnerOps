@@ -5,35 +5,37 @@ autoscale boundary in RunnerOps. It consumes the deterministic planner introduce
 in #70 and may apply **one exact `START_LOCAL` action** for an already provisioned
 local runner.
 
-This slice deliberately does not register new runners and does not contact a cloud
-provider.
+This slice deliberately does not register new runners, provision local capacity or
+contact a cloud provider.
 
 ```text
-GitHub queue + local/systemd capacity
-                ↓
-        CapacitySnapshot
-                ↓
-      SQLite queue continuity
-                ↓
-      deterministic planner
-                ↓
-        AutoscalePlan
-                ↓
-       decision == START_LOCAL ?
-          no  → no lifecycle mutation
-          yes
-           ↓
-     policy fingerprint recheck
-           ↓
-   decision/action audit journal
-           ↓
-      exact runner start
-           ↓
- local status + health verification
-           ↓
- GitHub online verification
-           ↓
-     succeeded / failed
+CapacitySnapshot
+      ↓
+persist/update queue observation
+      ↓
+deterministic planner
+      ↓
+validate exact START_LOCAL target
+      ↓
+persist decision
+      ↓
+acquire host lock
+      ↓
+recover pending action if present
+      ↓
+fresh policy + CapacitySnapshot + queue observation
+      ↓
+re-run deterministic planner
+      ↓
+same policy + same START_LOCAL + same target/registration?
+      ↓
+persist planned -> started
+      ↓
+existing exact runner lifecycle start
+      ↓
+fresh structured CapacitySnapshot verification
+      ↓
+succeeded / failed
 ```
 
 ## Opt-in and usage
@@ -44,57 +46,55 @@ Mutation is disabled by default.
 runnerctl autoscale run-once .
 ```
 
-With no explicit opt-in this returns `status=disabled` and does not collect a
-snapshot, create the SQLite store/controller lock, or invoke runner lifecycle.
+Without explicit opt-in this returns `status=disabled` and does not collect a
+snapshot, create SQLite/controller-lock state or invoke runner lifecycle.
 
-Enable a single invocation with:
+Enable one invocation with:
 
 ```bash
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once owner/repo --json
 ```
 
-The variable is read through the normal RunnerOps runtime environment, so a machine
-configuration may opt in deliberately. Values accepted as true are `1`, `true`,
-`yes` and `on`; false accepts `0`, `false`, `no` and `off`.
+Accepted true values are `1`, `true`, `yes` and `on`; false accepts `0`, `false`,
+`no` and `off`.
 
 ## One-shot first
 
-This delivery exposes `run-once` only. A continuously scheduled systemd controller
-and public `autoscale enable/disable` commands are intentionally deferred until the
-one-shot mutable path is proven on a real host.
+This delivery exposes `run-once` only. Continuous polling, a systemd autoscaler
+service and public `autoscale enable/disable` commands are intentionally deferred.
+The first mutating slice proves the safety boundary before operationalizing it.
 
-That keeps the first mutation boundary small enough to inspect and dogfood:
+The controller is therefore limited to:
 
-- one selected repository per iteration;
+- one repository per invocation;
 - at most one exact local runner start;
-- no background loop hidden from the operator;
+- no hidden background loop;
 - no automatic `runnerctl add`;
-- no cloud/provider execution.
+- no provider/cloud execution.
 
 ## Queue continuity
 
-`run-once` records the current `CapacitySnapshot` through the #69 audit store before
-planning. This is what turns repeated observations into RunnerOps-owned continuous
-queue evidence.
+An enabled `run-once` writes each controller `CapacitySnapshot` through the #69
+audit store. Repeated observations build RunnerOps-owned continuous queue evidence.
 
-The first observation of a newly queued job normally has:
+The first observation of a newly queued job has:
 
 ```text
 first_seen_queued_at == last_seen_queued_at
 observed_queued_seconds = 0
 ```
 
-and therefore normally produces `WAIT` when the queue threshold is positive. A
-later invocation can cross the threshold only if the same `repository + run_id +
-run_attempt + job_id + labels + GitHub creation evidence` remains continuous within
-the configured observation-gap contract.
+and therefore normally produces `WAIT` for a positive queue threshold. A later
+invocation can cross the threshold only when the same queue identity remains
+continuous within the configured observation-gap contract.
 
-GitHub `job.created_at` remains provenance; it never becomes the autoscale clock.
+GitHub `job.created_at` remains provenance. It is never the autoscale threshold
+clock.
 
-The controller uses repository-scoped SQLite reads for open queue continuity,
-latest started scaling action and retained active burst evidence. It does not depend
-on the bounded global `autoscale history` view used for human inspection.
+Controller planning uses repository-scoped SQLite reads for open queue continuity,
+latest started scaling action and retained active-burst evidence instead of the
+bounded global history view intended for human inspection.
 
 ## Exact START_LOCAL boundary
 
@@ -106,44 +106,68 @@ action.kind = START_LOCAL
 action.target = <exact local runner id>
 ```
 
-is executable in this slice.
+can enter the mutating path.
 
-`PROVISION_LOCAL`, `BURST_CLOUD`, `WAIT`, `HOLD` and `BLOCKED` are returned as
-`status=noop`. `INCONCLUSIVE` returns inconclusive and performs no lifecycle
-mutation.
+Before the decision is persisted, the target must exist exactly once in structured
+capacity evidence as:
 
-The target is passed only as an exact runner id to the existing lifecycle boundary:
+- local;
+- enabled;
+- `provisioned_idle`;
+- healthy on-demand systemd capacity;
+- registered in GitHub with a trustworthy registration id.
+
+That registration id is stored as the bounded action `external_id`. Revalidation
+and post-start verification require the same identity, so a runner name cannot be
+silently rebound to another registration between decision and apply.
+
+`PROVISION_LOCAL`, `BURST_CLOUD`, `WAIT`, `HOLD` and `BLOCKED` remain no-op outcomes.
+`INCONCLUSIVE` performs no lifecycle mutation.
+
+The lifecycle call is always:
 
 ```bash
 runners.sh start <exact-runner>
 ```
 
-`all` and `group:*` are rejected by the controller itself even if a malformed plan
-somehow reached the mutation layer.
+`all` and `group:*` are rejected by the controller boundary.
 
-## Concurrency and policy currentness
+## Decision before mutation, action after revalidation
 
-Before reading mutable autoscale state, an enabled invocation acquires a
-non-blocking host lock:
+For an actionable first plan, RunnerOps persists the projected #69 decision before
+trying to enter the mutating critical section. It does **not** create a `planned`
+action yet.
+
+The controller then acquires the non-blocking host lock:
 
 ```text
 ${RUNNER_STATE_ROOT}/autoscale-controller.lock
 ```
 
-The state root must remain private (`0700`) and the lock file is created with mode
-`0600`. A second mutating controller cannot proceed concurrently.
+The state root must remain private (`0700`) and the lock file is created as `0600`.
+Lock contention returns inconclusive, performs no lifecycle mutation and leaves no
+new `planned` action. The already-persisted decision remains valid audit evidence of
+what that invocation observed and intended.
 
-The planner policy is fingerprinted by #70. Immediately before a new action is
-persisted/applied, the controller loads policy again and refuses to execute when the
-fingerprint changed. A stale decision is never silently applied under different
-limits.
+With the lock held, RunnerOps reloads policy, collects a fresh `CapacitySnapshot`,
+updates queue continuity and re-runs the **same deterministic planner**. A new action
+is created only when all of these are still true:
+
+- policy fingerprint is unchanged;
+- planner still returns `START_LOCAL`;
+- exact target is unchanged;
+- target registration identity is unchanged;
+- target is still trustworthy `provisioned_idle` capacity;
+- evidence is conclusive.
+
+The controller does not reimplement cooldown or scaling policy.
 
 ## Durable action lifecycle
 
-For a new applicable plan, SQLite records:
+After successful revalidation, SQLite records:
 
 ```text
-decision
+decision (already durable)
   ↓
 action: planned
   ↓
@@ -151,60 +175,77 @@ action: started
   ↓
 exact lifecycle mutation
   ↓
-verification
+structured verification
   ↓
 action: succeeded | failed
 ```
 
 The action id is deterministically derived from `decision_id + START_LOCAL + target`.
-The controller never records registration tokens, GitHub tokens, environment dumps
-or arbitrary command output.
+No registration token, GitHub token, environment dump or arbitrary subprocess output
+is written to the audit store.
 
-A command exit code of zero is not sufficient for success. After `start`, the
-controller requires:
+## Structured post-start verification
 
-1. exact local `status` success;
-2. exact local `health` success;
-3. a fresh CapacitySnapshot where the same local runner is active and the GitHub
-   registration is `online` (`available_now` or already `busy_capacity`).
+The `runners.sh start` exit code is evidence, not proof of success. Verification is
+performed from fresh `CapacitySnapshot` evidence rather than parsing human
+`status`/`health` output.
 
-Remote verification is bounded by:
+Success requires the exact target to remain:
+
+- local and enabled;
+- the same GitHub registration id authorized before mutation;
+- systemd active/running according to structured local evidence;
+- GitHub `online`.
+
+Both `available_now` and `busy_capacity` are valid successful outcomes. The queued
+job may be assigned immediately after the runner comes online.
+
+Verification is bounded by:
 
 ```text
 RUNNER_AUTOSCALE_VERIFY_TIMEOUT_SECONDS   default 20
 RUNNER_AUTOSCALE_VERIFY_INTERVAL_SECONDS  default 1
 ```
 
-A runner that does not become verifiably online is recorded as failed or
-inconclusive rather than reported as successful.
+A zero start exit with GitHub still offline is not success. Conversely, a non-zero
+start exit may still finish as `succeeded` only when the exact structured
+postcondition is conclusively satisfied; the original exit code remains in the
+action diagnostic.
+
+Verification snapshots are also written through the queue observation API so queue
+episodes can end when work leaves the queue.
 
 ## Restart and replay safety
 
-Before creating a new action, the controller inspects retained pending
-`START_LOCAL` actions for the repository.
+Before creating a new action under the lock, the controller checks retained
+`planned` / `started` `START_LOCAL` actions for the repository.
 
-If a prior invocation died after recording `started` and the target is already
-online, the next invocation marks that action succeeded without starting it again.
-If evidence is inconclusive, it fails closed. Pending plans are cancelled when they
-are no longer valid before execution; actions that had already started are
-reconciled against observed state rather than treated as a fresh action.
+- A `planned` action is revalidated against current policy, planner output, exact
+  target and registration before it may transition to `started`.
+- If a `planned` target became online externally, the action is cancelled rather
+  than claiming credit for a start RunnerOps did not perform.
+- A previously `started` action is reconciliation work. If the target is already
+  online, the existing action is completed as succeeded without another start.
+- If a `started` action is not yet online, the controller verifies/reconciles it and
+  does not create a second action or blindly issue a duplicate lifecycle mutation.
+- Inconclusive recovery evidence fails closed and preserves the non-terminal state
+  when safe recovery cannot be proven.
 
-Completed actions plus planner cooldown prevent immediate duplicate starts over the
-same queue pressure. Deterministic decision/action identifiers also provide a
-stable audit correlation key.
+Planner cooldown plus deterministic action identity prevents immediate duplicate
+starts over the same queue pressure.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | disabled, deterministic no-op, or verified successful `START_LOCAL` |
-| `1` | lifecycle command or post-start verification failed |
-| `2` | invalid CLI argument, planner policy, enable value, or controller setting |
-| `3` | required evidence/store/lock state is inconclusive or unavailable |
+| `1` | post-start/recovery outcome failed |
+| `2` | invalid CLI argument, planner policy, enable value or controller setting |
+| `3` | required evidence/store/lock/recovery state is inconclusive or unavailable |
 
-JSON output uses `kind: "AutoscaleControllerResult"` and includes repository,
+JSON output uses `kind: "AutoscaleControllerResult"` and contains repository,
 decision/reason codes, action id/state/target and a bounded diagnostic code. It does
-not embed raw lifecycle output.
+not embed raw command output.
 
 ## Safety boundaries
 
@@ -218,6 +259,6 @@ The controller does **not**:
 - let an LLM choose whether to mutate or spend cloud money;
 - run automatically merely because the code is installed.
 
-The next autoscale capability may consume `PROVISION_LOCAL`, but it must preserve
-this controller contract: current evidence, deterministic policy, bounded action,
-explicit audit, exact target and verified outcome.
+The acceptance target for #71 is intentionally narrower: prove one exact,
+audit-correlated, revalidated local activation end to end before adding continuous
+operation or another mutation kind.

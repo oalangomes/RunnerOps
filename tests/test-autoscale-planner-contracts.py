@@ -132,15 +132,11 @@ class PlannerContracts(unittest.TestCase):
         }
 
     def audit(self, seconds=600, active_burst=0, last_started=None):
-        minute = 60
-        first_minutes = seconds // minute
-        first = f"2026-09-10T11:{60-first_minutes:02d}:00+00:00" if first_minutes <= 59 else "2026-09-10T11:00:00+00:00"
+        first = "2026-09-10T11:50:00+00:00"
         if seconds == 120:
             first = "2026-09-10T11:58:00+00:00"
         elif seconds == 300:
             first = "2026-09-10T11:55:00+00:00"
-        elif seconds == 600:
-            first = "2026-09-10T11:50:00+00:00"
         return {
             "status": "complete",
             "error": None,
@@ -181,8 +177,6 @@ class PlannerContracts(unittest.TestCase):
 
     def test_matching_healthy_on_demand_idle_runner_starts_exactly_one(self):
         snapshot = self.snapshot(status="provisioned_idle", names=["runner-z", "runner-a"])
-        # Give each local identity a distinct registration id only for fixture readability;
-        # deterministic selection is by stable local name.
         snapshot["capacity"]["runners"][0]["registration_id"] = 2
         snapshot["capacity"]["runners"][1]["registration_id"] = 1
         result = self.decision(snapshot=snapshot)
@@ -267,10 +261,43 @@ class PlannerContracts(unittest.TestCase):
         self.assertEqual(result["decision"], "WAIT")
         self.assertEqual(result["reason_codes"], ["MATCHING_LOCAL_RUNNER_AVAILABLE"])
 
-    def test_label_scope_can_explicitly_block_unselected_self_hosted_work(self):
-        result = self.decision(
-            policy=self.policy(label_scope=["gpu"]),
+    def test_available_capacity_for_one_job_does_not_hide_pressure_for_another(self):
+        snapshot = self.snapshot(status="available_now", names=["runner-ready"])
+        pressure = self.job(
+            status="no_matching_capacity",
+            names=[],
+            labels=["self-hosted", "Linux", "X64", "gpu"],
         )
+        pressure["job_id"] = 102
+        pressure["run_id"] = 202
+        snapshot["queue"]["jobs"].append(pressure)
+        snapshot["queue"]["queued_job_count"] = 2
+        snapshot["queue"]["observed_queued_job_count"] = 2
+
+        audit = self.audit()
+        audit["queue"] = [
+            {
+                "observation_id": "observation-2",
+                "repository": "Example/RunnerOps",
+                "job_id": 102,
+                "run_id": 202,
+                "run_attempt": 1,
+                "first_seen_queued_at": "2026-09-10T11:50:00+00:00",
+                "last_seen_queued_at": self.observed_at,
+                "continuous_queued": True,
+                "required_labels": ["Linux", "X64", "gpu", "self-hosted"],
+                "github_created_at": "2026-09-10T10:00:00+00:00",
+            }
+        ]
+
+        result = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(result["decision"], "PROVISION_LOCAL")
+        self.assertEqual(result["evidence"]["scope"]["scoped_queued_job_count"], 2)
+        self.assertEqual(result["evidence"]["scope"]["pressure_queued_job_count"], 1)
+        self.assertEqual(result["evidence"]["scope"]["pressure_job_ids"], [102])
+
+    def test_label_scope_can_explicitly_block_unselected_self_hosted_work(self):
+        result = self.decision(policy=self.policy(label_scope=["gpu"]))
         self.assertEqual(result["decision"], "BLOCKED")
         self.assertEqual(result["reason_codes"], ["LABEL_SCOPE_BLOCKED"])
 

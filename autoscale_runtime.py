@@ -28,9 +28,9 @@ def _repo_key(repository):
 def read_planner_evidence(store, repository):
     """Read only the retained facts needed by the planner for one repository.
 
-    Unlike ``history(limit=...)``, this query is repository-scoped and therefore
-    does not become inconclusive merely because unrelated repositories filled the
-    bounded global history view.
+    Unlike ``history(limit=...)``, these queries are repository-scoped and target
+    only open queue episodes, active actions and the latest started-action event.
+    Unrelated or old terminal history cannot make controller planning inconclusive.
     """
 
     repository = canonical_repo(repository)
@@ -48,14 +48,27 @@ def read_planner_evidence(store, repository):
         if len(rows) > MAX_PLANNER_QUEUE_ROWS:
             raise AuditError("planner_evidence_too_large")
 
-        action_rows = store.connection.execute(
+        active_action_rows = store.connection.execute(
             """SELECT a.payload
             FROM actions a
             JOIN decisions d USING(decision_id)
             WHERE lower(d.repository)=lower(?)
+              AND a.state IN ('planned','started')
             ORDER BY a.updated_at DESC, a.action_id""",
             (repository,),
         ).fetchall()
+
+        latest_started = store.connection.execute(
+            """SELECT e.timestamp
+            FROM action_events e
+            JOIN actions a USING(action_id)
+            JOIN decisions d USING(decision_id)
+            WHERE lower(d.repository)=lower(?)
+              AND e.state='started'
+            ORDER BY e.timestamp DESC, e.action_id DESC
+            LIMIT 1""",
+            (repository,),
+        ).fetchone()
 
     queue = []
     now = store.clock().astimezone(timezone.utc)
@@ -93,20 +106,19 @@ def read_planner_evidence(store, repository):
         )
 
     active_burst = 0
-    started_at = []
-    for row in action_rows:
+    for row in active_action_rows:
         action = action_record(json.loads(row["payload"]))
-        if action["kind"] == "BURST_CLOUD" and action["state"] in ("planned", "started"):
+        if action["kind"] == "BURST_CLOUD":
             active_burst += 1
-        if action["started_at"] is not None:
-            started_at.append(action["started_at"])
 
     return {
         "status": "complete",
         "error": None,
         "queue": queue,
         "active_burst_capacity": active_burst,
-        "last_scaling_action_started_at": max(started_at) if started_at else None,
+        "last_scaling_action_started_at": (
+            timestamp(latest_started["timestamp"]) if latest_started is not None else None
+        ),
     }
 
 

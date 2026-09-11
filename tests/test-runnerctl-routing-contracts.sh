@@ -39,7 +39,15 @@ set -euo pipefail
 printf 'service:%s\n' "$*" >> "${TEST_CALL_LOG:?}"
 EOF
 
-  chmod +x "$platform/runners.sh" "$platform/runner-services.sh"
+  cat > "$platform/autoscale_planner.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+    log.write("autoscale-plan:" + " ".join(sys.argv[1:]) + "\n")
+EOF
+
+  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py"
 }
 
 run_ctl() {
@@ -109,10 +117,28 @@ test_default_targets_are_explicit() {
   pass "defaults de status/health/plan continuam estáveis"
 }
 
+test_autoscale_plan_routes_to_read_only_planner() {
+  local platform="$TMP_ROOT/autoscale-platform"
+  local log="$TMP_ROOT/autoscale.log"
+
+  make_fake_platform "$platform"
+  : > "$log"
+
+  run_ctl "$platform" "$log" autoscale plan example/repo --json
+
+  assert_eq \
+    'autoscale-plan:example/repo --json' \
+    "$(cat "$log")" \
+    "runnerctl autoscale plan deve encaminhar somente ao planner read-only"
+
+  pass "autoscale plan preserva repo/flags e usa boundary próprio"
+}
+
 main() {
   test_exact_runner_and_group_routing
   test_boot_policy_routing
   test_default_targets_are_explicit
+  test_autoscale_plan_routes_to_read_only_planner
   printf '\nContratos de routing/lifecycle passaram.\n'
 }
 

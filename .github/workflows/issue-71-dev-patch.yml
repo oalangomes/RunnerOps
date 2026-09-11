@@ -1,0 +1,384 @@
+name: Issue 71 integration patch
+
+on:
+  push:
+    branches:
+      - feat/issue-71-governed-controller
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/issue-71-governed-controller
+          fetch-depth: 0
+
+      - name: Apply integration patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              path = Path(path)
+              text = path.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected patch anchor not found in {path}: {old[:80]!r}")
+              path.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "autoscale_controller.py",
+              '''def _cancel_or_fail_pending(store, action, at, code):
+              if action["state"] == "planned":
+                  # Storage requires cancelled actions to carry started_at only when a start
+                  # actually happened, so convert planned -> started only for real starts.
+                  # A never-started planned action is left pending rather than fabricating
+                  # execution evidence; caller must return without mutation.
+                  return action
+              failed = _transition_existing(action, "failed", at, code, 1)
+              store.record_action(failed)
+              return failed
+          ''',
+              '''def _cancel_or_fail_pending(store, action, at, code):
+              if action["state"] == "planned":
+                  cancelled = _transition_existing(action, "cancelled", at, code, None)
+                  store.record_action(cancelled)
+                  return cancelled
+              failed = _transition_existing(action, "failed", at, code, 1)
+              store.record_action(failed)
+              return failed
+          ''',
+          )
+
+          replace_once(
+              "autoscale_controller.py",
+              '''            if plan_result["decision"] != "START_LOCAL":
+                          return _controller_result(
+                              plan_result,
+                              status="noop",
+                              diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
+                          ), 0
+          
+                      # TOCTOU guard: re-read policy after planning and before persisting or
+          ''',
+              '''            if plan_result["decision"] != "START_LOCAL":
+                          return _controller_result(
+                              plan_result,
+                              status="noop",
+                              diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
+                          ), 0
+          
+                      # A repeated identical snapshot must not replay a terminal action. The
+                      # deterministic plan/action ids let us prove that this exact decision was
+                      # already applied without issuing another lifecycle mutation.
+                      try:
+                          previous = store.explain(plan_result["decision_id"])
+                      except AuditError as exc:
+                          if exc.code != "decision_not_found":
+                              raise
+                      else:
+                          expected_action_id = _action_id(
+                              plan_result["decision_id"], plan_result["action"]["target"]
+                          )
+                          matches = [
+                              item for item in previous["actions"]
+                              if item["action_id"] == expected_action_id
+                          ]
+                          if len(matches) != 1 or matches[0]["state"] not in (
+                              "succeeded", "failed", "cancelled"
+                          ):
+                              return _controller_result(
+                                  plan_result,
+                                  status="inconclusive",
+                                  diagnostic="AUDIT_REPLAY_INCONCLUSIVE",
+                              ), 3
+                          terminal = matches[0]
+                          return _controller_result(
+                              plan_result,
+                              status="ok" if terminal["state"] == "succeeded" else "noop",
+                              action=terminal,
+                              diagnostic="ACTION_ALREADY_TERMINAL",
+                          ), 0
+          
+                      # TOCTOU guard: re-read policy after planning and before persisting or
+          ''',
+          )
+
+          replace_once(
+              "tests/test-autoscale-controller-contracts.py",
+              '''        with self.store_factory() as store:
+                      explanation = store.explain(result["action_id"].replace("action-", "missing-")) if False else None
+                      rows = store.history()["decisions"]
+          ''',
+              '''        with self.store_factory() as store:
+                      rows = store.history()["decisions"]
+          ''',
+          )
+
+          replace_once(
+              "runnerctl",
+              '''  runnerctl autoscale plan [owner/repo|.] [--json]
+            runnerctl autoscale history [--since DURATION] [--json]
+          ''',
+              '''  runnerctl autoscale plan [owner/repo|.] [--json]
+            runnerctl autoscale run-once [owner/repo|.] [--json]
+            runnerctl autoscale history [--since DURATION] [--json]
+          ''',
+          )
+          replace_once(
+              "runnerctl",
+              '''        status|plan|history|explain) ;;
+                  *) die "autoscale aceita status, plan, history ou explain (read-only)" ;;
+          ''',
+              '''        status|plan|run-once|history|explain) ;;
+                  *) die "autoscale aceita status, plan, run-once, history ou explain" ;;
+          ''',
+          )
+          replace_once(
+              "runnerctl",
+              '''      if [[ "$sub" != "status" ]]; then
+                  [[ -f "$PLATFORM_HOME/autoscale_audit.py" ]] || die "autoscale_audit.py ausente em: $PLATFORM_HOME"
+          ''',
+              '''      if [[ "$sub" == "run-once" ]]; then
+                  [[ -f "$PLATFORM_HOME/autoscale_controller.py" ]] || die "autoscale_controller.py ausente em: $PLATFORM_HOME"
+                  command -v python3 >/dev/null 2>&1 || die "autoscale run-once exige python3 3.8+ com módulo sqlite3"
+                  python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+                    die "autoscale run-once exige python3 3.8+ com módulo sqlite3"
+                  exec python3 -B "$PLATFORM_HOME/autoscale_controller.py" "$@"
+                fi
+                if [[ "$sub" != "status" ]]; then
+                  [[ -f "$PLATFORM_HOME/autoscale_audit.py" ]] || die "autoscale_audit.py ausente em: $PLATFORM_HOME"
+          ''',
+          )
+
+          replace_once(
+              "tests/test-runnerctl-routing-contracts.sh",
+              '''  cat > "$platform/autoscale_planner.py" <<'EOF'
+            #!/usr/bin/env python3
+            import os
+            import sys
+            with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+                log.write("autoscale-plan:" + " ".join(sys.argv[1:]) + "\\n")
+            EOF
+          
+              chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py"
+          ''',
+              '''  cat > "$platform/autoscale_planner.py" <<'EOF'
+            #!/usr/bin/env python3
+            import os
+            import sys
+            with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+                log.write("autoscale-plan:" + " ".join(sys.argv[1:]) + "\\n")
+            EOF
+          
+              cat > "$platform/autoscale_controller.py" <<'EOF'
+            #!/usr/bin/env python3
+            import os
+            import sys
+            with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+                log.write("autoscale-run-once:" + " ".join(sys.argv[1:]) + "\\n")
+            EOF
+          
+              chmod +x "$platform/runners.sh" "$platform/runner-services.sh" \\
+                "$platform/autoscale_planner.py" "$platform/autoscale_controller.py"
+          ''',
+          )
+          replace_once(
+              "tests/test-runnerctl-routing-contracts.sh",
+              '''  pass "autoscale plan preserva repo/flags e usa boundary próprio"
+            }
+          
+            main() {
+          ''',
+              '''  pass "autoscale plan preserva repo/flags e usa boundary próprio"
+            }
+          
+            test_autoscale_run_once_routes_to_governed_controller() {
+              local platform="$TMP_ROOT/autoscale-controller-platform"
+              local log="$TMP_ROOT/autoscale-controller.log"
+          
+              make_fake_platform "$platform"
+              : > "$log"
+          
+              run_ctl "$platform" "$log" autoscale run-once example/repo --json
+          
+              assert_eq \\
+                'autoscale-run-once:example/repo --json' \\
+                "$(cat "$log")" \\
+                "runnerctl autoscale run-once deve encaminhar somente ao controller governado"
+          
+              pass "autoscale run-once preserva repo/flags e usa boundary mutável isolado"
+            }
+          
+            main() {
+          ''',
+          )
+          replace_once(
+              "tests/test-runnerctl-routing-contracts.sh",
+              '''  test_autoscale_plan_routes_to_read_only_planner
+              printf '\\nContratos de routing/lifecycle passaram.\\n'
+          ''',
+              '''  test_autoscale_plan_routes_to_read_only_planner
+              test_autoscale_run_once_routes_to_governed_controller
+              printf '\\nContratos de routing/lifecycle passaram.\\n'
+          ''',
+          )
+
+          replace_once(
+              ".github/workflows/validate.yml",
+              '''            autoscale_planner.py \\
+                        .github/scripts/resolve-runner-identity.py \\
+          ''',
+              '''            autoscale_planner.py \\
+                        autoscale_runtime.py \\
+                        autoscale_controller.py \\
+                        .github/scripts/resolve-runner-identity.py \\
+          ''',
+          )
+          replace_once(
+              ".github/workflows/validate.yml",
+              '''            tests/test-autoscale-audit-contracts.py \\
+                        tests/test-autoscale-planner-contracts.py
+          ''',
+              '''            tests/test-autoscale-audit-contracts.py \\
+                        tests/test-autoscale-planner-contracts.py \\
+                        tests/test-autoscale-controller-contracts.py
+          ''',
+          )
+          replace_once(
+              ".github/workflows/validate.yml",
+              '''          python3 -B tests/test-autoscale-audit-contracts.py
+                      python3 -B tests/test-autoscale-planner-contracts.py
+          ''',
+              '''          python3 -B tests/test-autoscale-audit-contracts.py
+                      python3 -B tests/test-autoscale-planner-contracts.py
+                      python3 -B tests/test-autoscale-controller-contracts.py
+          ''',
+          )
+
+          replace_once(
+              "README.md",
+              '''permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
+            planejamento read-only e leitura do histórico; ainda não existe `apply`.
+          ''',
+              '''permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
+            planejamento read-only e leitura do histórico. A primeira mutação governada é
+            `autoscale run-once`, limitada a `START_LOCAL` e desabilitada por padrão.
+          ''',
+          )
+          replace_once(
+              "README.md",
+              '''[contrato do planner determinístico](docs/autoscale-planner.md).
+          
+            ### Histórico local de autoscale
+          ''',
+              '''[contrato do planner determinístico](docs/autoscale-planner.md).
+          
+            ### Aplicar uma ativação local governada
+          
+            > Esta capacidade está em `master` e será publicada em uma release posterior à v0.2.2.
+          
+            A mutação permanece opt-in:
+          
+            ```bash
+            RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
+            RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once example/my-api --json
+            ```
+          
+            O controller observa/persiste continuidade de fila, executa o mesmo planner
+            determinístico e pode aplicar **somente `START_LOCAL`**. O alvo precisa ser um
+            runner local exato, já provisionado, saudável e on-demand. `PROVISION_LOCAL` e
+            `BURST_CLOUD` continuam planos sem execução nesta slice.
+          
+            Antes de mutar, o controller exige lock exclusivo por host, revalida o
+            `policy_fingerprint`, grava `decision -> planned -> started` no audit store e usa
+            o lifecycle exato existente. Depois do `start`, exige `status + health` locais e
+            evidência GitHub `online`; sucesso do comando `start` sozinho não basta.
+          
+            `RUNNER_AUTOSCALE_ENABLED` é `false` por padrão. Quando desabilitado,
+            `run-once` não coleta snapshot, não cria SQLite/lock e não toca no lifecycle.
+            Veja [o contrato do controller governado](docs/autoscale-controller.md).
+          
+            ### Histórico local de autoscale
+          ''',
+          )
+          replace_once(
+              "README.md",
+              '''não criam o banco. Observações, decisões e ações são gravadas apenas pela API
+            Python interna; `capacity`, `autoscale status` e `autoscale plan` continuam sem
+            escrita. Banco ausente ou inválido retorna erro explícito nos leitores, inclusive
+          ''',
+              '''não criam o banco. A API Python interna permanece a base de escrita; quando
+            explicitamente habilitado, `autoscale run-once` usa essa mesma API para continuidade
+            de fila e para o lifecycle auditável da ação. `capacity`, `autoscale status` e
+            `autoscale plan` continuam sem escrita. Banco ausente ou inválido retorna erro
+            explícito nos leitores, inclusive
+          ''',
+          )
+          replace_once(
+              "README.md",
+              '''`autoscale plan` não persiste o ID que produz. Portanto, `autoscale explain` só
+            encontra decisões realmente registradas pela API interna; um controller futuro
+            será responsável por persistir deliberadamente a decisão antes de aplicar uma ação.
+          ''',
+              '''`autoscale plan` não persiste o ID que produz. Portanto, `autoscale explain` só
+            encontra decisões realmente registradas. `autoscale run-once`, quando chega a um
+            `START_LOCAL` aplicável, persiste a decisão e a ação antes da mutação e registra o
+            resultado de verificação depois dela.
+          ''',
+          )
+
+          replace_once(
+              "CHANGELOG.md",
+              '''### Added
+          
+            - `runnerctl autoscale plan [owner/repo|.] [--json]` adiciona um planner determinístico e read-only com decisões `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED` e `INCONCLUSIVE`, reason codes estáveis, fingerprint de policy e ID reproduzível para evidência idêntica.
+          ''',
+              '''### Added
+          
+            - `runnerctl autoscale run-once [owner/repo|.] [--json]` introduz a primeira mutação governada do autoscaler, opt-in via `RUNNER_AUTOSCALE_ENABLED=true` e limitada a um `START_LOCAL` exato. O controller usa lock por host, revalida policy, persiste decision/action lifecycle, verifica status+health local e GitHub online e não executa `PROVISION_LOCAL`/cloud.
+            - `runnerctl autoscale plan [owner/repo|.] [--json]` adiciona um planner determinístico e read-only com decisões `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED` e `INCONCLUSIVE`, reason codes estáveis, fingerprint de policy e ID reproduzível para evidência idêntica.
+          ''',
+          )
+
+          replace_once(
+              "AGENTS.md",
+              '''Para Agent Skills:
+          ''',
+              '''Para mudanças de autoscale:
+          
+            ```bash
+            python3 -B tests/test-capacity-contracts.py
+            python3 -B tests/test-autoscale-audit-contracts.py
+            python3 -B tests/test-autoscale-planner-contracts.py
+            python3 -B tests/test-autoscale-controller-contracts.py
+            ```
+          
+            Para Agent Skills:
+          ''',
+          )
+          PY
+
+          rm .github/workflows/issue-71-dev-patch.yml
+
+      - name: Validate patched branch
+        shell: bash
+        run: |
+          bash -n runnerctl tests/test-runnerctl-routing-contracts.sh
+          python3 -B -m py_compile autoscale_runtime.py autoscale_controller.py tests/test-autoscale-controller-contracts.py
+          bash tests/test-runnerctl-routing-contracts.sh
+          python3 -B tests/test-autoscale-controller-contracts.py
+
+      - name: Commit integration patch
+        shell: bash
+        run: |
+          git config user.name "RunnerOps integration bot"
+          git config user.email "52175262+oalangomes@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: wire governed autoscale controller (#71)"
+          git push origin HEAD:feat/issue-71-governed-controller

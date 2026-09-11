@@ -24,6 +24,7 @@ O repositório contém a plataforma de gerenciamento. O inventário real de runn
 - operação por runner, grupo ou frota;
 - health, doctor, logs e planejamento de migração;
 - observabilidade read-only de fila/capacidade e planejamento determinístico de autoscale;
+- ativação local governada e opt-in de capacidade já provisionada;
 - audit store local opcional para continuidade de fila e decisões/ações persistidas internamente;
 - Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
@@ -56,6 +57,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Aguardar resultado do CI | `runnerctl ci watch .` |
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
 | Planejar autoscale (read-only) | `runnerctl autoscale plan .` |
+| Aplicar `START_LOCAL` governado | `runnerctl autoscale run-once .` |
 | Histórico/auditoria de autoscale | `runnerctl autoscale history`, `runnerctl autoscale explain` |
 | Agent Skills | `runnerctl skills list/install` |
 | Autorização de runtime | `runnerctl platform-authorize` |
@@ -90,8 +92,8 @@ Você precisa de:
 - Linux x64 ou arm64 com systemd;
 - Git;
 - GitHub CLI (`gh`);
-- Python 3.8+ para `capacity`, `autoscale status` e `autoscale plan` (somente biblioteca padrão);
-- para o audit store opcional e decisões do planner que dependem de continuidade/cooldown, módulo Python `sqlite3` com SQLite 3.24+; o binário `sqlite3` não é necessário;
+- Python 3.8+ para `capacity` e a família `autoscale` (somente biblioteca padrão);
+- para o audit store e `autoscale run-once`, módulo Python `sqlite3` com SQLite 3.24+; o binário `sqlite3` não é necessário;
 - `tar`;
 - `sha256sum`;
 - `sudo` para setup administrativo e autorização inicial das units systemd; após `runnerctl platform-authorize`, o lifecycle diário é não interativo.
@@ -358,7 +360,8 @@ O JSON preserva o `nameWithOwner` canônico e usa `schema_version: 1`. Evidênci
 ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
-planejamento read-only e leitura do histórico; ainda não existe `apply`.
+planejamento read-only e leitura do histórico. A primeira mutação governada é
+`autoscale run-once`, limitada a `START_LOCAL` e desabilitada por padrão.
 
 ### Planejar autoscale sem aplicar
 
@@ -398,6 +401,35 @@ reason codes e JSON. Evidência necessária ausente/contraditória resulta em
 `INCONCLUSIVE` (exit `3`) em vez de uma ação otimista. Veja o
 [contrato do planner determinístico](docs/autoscale-planner.md).
 
+### Aplicar uma ativação local governada
+
+> Esta capacidade está em `master` e será publicada em uma release posterior à v0.2.2.
+
+```bash
+RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
+RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once example/my-api --json
+```
+
+O controller executa o mesmo planner determinístico e aplica **somente
+`START_LOCAL`** para um runner local exato, já provisionado, saudável e
+on-demand. `PROVISION_LOCAL` e `BURST_CLOUD` continuam sem execução.
+
+Ao chegar a um `START_LOCAL` válido, `run-once` persiste primeiro a decisão e só
+então tenta entrar na seção mutante protegida pelo lock do host. Com o lock adquirido,
+recarrega policy, coleta um novo `CapacitySnapshot`, atualiza a evidência de fila e
+executa novamente o planner. Apenas se policy, decisão, target exato e registration
+identity continuarem válidos o controller persiste `planned -> started` e chama o
+start existente daquele runner. O sucesso é provado por evidência estruturada local
++ GitHub em um snapshot fresco; `status`/`health` permanecem diagnósticos humanos e
+o exit code de `start` isoladamente não prova sucesso.
+
+`RUNNER_AUTOSCALE_ENABLED` é `false` por padrão. Desabilitado, `run-once` não
+coleta snapshot, não cria SQLite/lock e não toca no lifecycle. Esta primeira
+entrega mutável é one-shot; daemon contínuo e `enable/disable` permanecem fora
+até este caminho ser provado.
+
+Veja [o contrato do controller governado](docs/autoscale-controller.md).
+
 ### Histórico local de autoscale
 
 ```bash
@@ -408,9 +440,10 @@ runnerctl autoscale explain --decision decision-example --json
 
 O audit store opcional usa `${RUNNER_STATE_ROOT}/autoscale.db`, cujo padrão é
 `${XDG_STATE_HOME:-$HOME/.local/state}/actions-runners/autoscale.db`. Os leitores
-não criam o banco. Observações, decisões e ações são gravadas apenas pela API
-Python interna; `capacity`, `autoscale status` e `autoscale plan` continuam sem
-escrita. Banco ausente ou inválido retorna erro explícito nos leitores, inclusive
+não criam o banco. A API Python interna permanece a base de escrita; quando
+explicitamente habilitado, `autoscale run-once` usa essa API para continuidade de
+fila e lifecycle auditável da ação. `capacity`, `autoscale status` e `autoscale plan`
+continuam sem escrita. Banco ausente ou inválido retorna erro explícito nos leitores, inclusive
 em JSON.
 
 O histórico mantém `first_seen_queued_at` e `last_seen_queued_at` por episódio de
@@ -419,8 +452,9 @@ a continuidade. A duração observada pelo RunnerOps é distinta da idade calcul
 por `job.created_at`, que pode incluir dependências e aprovações.
 
 `autoscale plan` não persiste o ID que produz. Portanto, `autoscale explain` só
-encontra decisões realmente registradas pela API interna; um controller futuro
-será responsável por persistir deliberadamente a decisão antes de aplicar uma ação.
+encontra decisões realmente registradas. Em `run-once`, um `START_LOCAL` acionável
+persiste a decisão antes da seção mutante; a ação só nasce depois de lock +
+revalidação e registra seu resultado terminal após a verificação.
 
 O schema v1 inclui transações, replay idempotente, limites de crescimento e
 retention padrão de 30 dias. Decisões com ações pendentes são preservadas;
@@ -605,7 +639,7 @@ runnerctl list
 runnerctl health all
 ```
 
-Para contribuidores, o CI valida sintaxe shell/Python, defaults XDG, instalação e routing do `runnerctl`, plano de remoção governada, contratos de `CapacitySnapshot`, audit store e planner determinístico, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
+Para contribuidores, o CI valida sintaxe shell/Python, defaults XDG, instalação e routing do `runnerctl`, plano de remoção governada, contratos de `CapacitySnapshot`, audit store, planner determinístico e controller governado, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
 
 A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. A `v0.2.0` repetiu o gate em WSL2 + systemd, comprovando instalação/upgrade, operação on-demand repo-scoped, workflow real em self-hosted runner e o bridge `ci watch` contra GitHub Actions. Mudanças posteriores em `master` não herdam automaticamente essas provas; cada nova release deve repetir o gate de smoke antes da tag.
 
@@ -627,6 +661,7 @@ O workflow de `master` também dogfooda o produto em um runner dedicado gerencia
 - [Changelog](CHANGELOG.md)
 - [CapacitySnapshot](docs/capacity-snapshot.md)
 - [Planner determinístico de autoscale](docs/autoscale-planner.md)
+- [Controller governado de autoscale](docs/autoscale-controller.md)
 - [Audit store de autoscale](docs/autoscale-audit-store.md)
 - [Processo de release](docs/releasing.md)
 - [Agent Skills](skills/README.md)
@@ -639,6 +674,6 @@ Distribuído sob a licença **Apache License 2.0**. Consulte [LICENSE](LICENSE).
 
 ## Estado do projeto
 
-A direção atual é **systemd-first + on-demand + configuração local por máquina**, com observabilidade e planejamento de autoscale separados da mutação.
+A direção atual é **systemd-first + on-demand + configuração local por máquina**, com observabilidade, decisão determinística e mutação governada separadas em boundaries explícitas.
 
 A compatibilidade com ciclo de vida legado existe apenas para migração; novas instalações devem usar systemd.

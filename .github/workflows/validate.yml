@@ -70,6 +70,7 @@ jobs:
             autoscale_planner.py \
             .github/scripts/resolve-runner-identity.py \
             tests/test-capacity-contracts.py \
+            tests/test-capacity-bom-contract.py \
             tests/test-autoscale-audit-contracts.py \
             tests/test-autoscale-planner-contracts.py
 
@@ -129,6 +130,7 @@ jobs:
           bash tests/test-legacy-diagnostics-contracts.sh
           bash tests/test-noninteractive-runtime-contracts.sh
           python3 -B tests/test-capacity-contracts.py
+          python3 -B tests/test-capacity-bom-contract.py
           python3 -B tests/test-autoscale-audit-contracts.py
           python3 -B tests/test-autoscale-planner-contracts.py
 

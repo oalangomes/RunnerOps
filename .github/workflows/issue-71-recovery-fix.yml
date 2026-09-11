@@ -1,0 +1,107 @@
+name: Issue 71 recovery hardening
+
+on:
+  push:
+    branches:
+      - feat/issue-71-governed-controller
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/issue-71-governed-controller
+          fetch-depth: 0
+
+      - name: Harden started-action recovery
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          controller = Path('autoscale_controller.py')
+          text = controller.read_text()
+          anchor = '''                current_policy = policy_loader()
+                          same_policy = (
+          '''
+          block = '''                # A previously started action is reconciliation work, not a new
+                          # scaling decision. Never issue a second start after process restart.
+                          if action["state"] == "started":
+                              if target_state == "inconclusive":
+                                  return _controller_result(
+                                      plan_result,
+                                      status="inconclusive",
+                                      action=action,
+                                      diagnostic="EVIDENCE_INCONCLUSIVE",
+                                  ), 3
+                              verified, code = verify_fn(canonical, action["target"])
+                              terminal = _transition_existing(
+                                  action,
+                                  "succeeded" if verified else "failed",
+                                  timestamp(clock().isoformat()),
+                                  code,
+                                  0 if verified else 1,
+                              )
+                              store.record_action(terminal)
+                              return _controller_result(
+                                  plan_result,
+                                  status="ok" if verified else "failed",
+                                  action=terminal,
+                                  diagnostic=code,
+                              ), 0 if verified else 1
+          
+                          current_policy = policy_loader()
+                          same_policy = (
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'controller recovery anchor count={text.count(anchor)}')
+          controller.write_text(text.replace(anchor, block, 1))
+
+          tests = Path('tests/test-autoscale-controller-contracts.py')
+          text = tests.read_text()
+          anchor = '''    def test_duplicate_iteration_over_same_queue_does_not_start_second_runner(self):
+          '''
+          block = '''    def test_restart_with_started_action_still_offline_never_reissues_start(self):
+                  self.seed_queue()
+                  idle = self.snapshot()
+          
+                  def crash_after_started(target):
+                      self.start_calls.append(target)
+                      raise RuntimeError("simulated process death")
+          
+                  with self.assertRaises(RuntimeError):
+                      self.run_controller(idle, start_fn=crash_after_started)
+          
+                  self.now += timedelta(seconds=1)
+                  result, code = self.run_controller(
+                      self.snapshot(observed_at=self.now),
+                      verify_fn=lambda _repo, _target: (False, "GITHUB_VERIFICATION_FAILED"),
+                  )
+                  self.assertEqual(code, 1)
+                  self.assertEqual(result["action_state"], "failed")
+                  self.assertEqual(result["diagnostic"], "GITHUB_VERIFICATION_FAILED")
+                  self.assertEqual(self.start_calls, ["runner-a"])
+          
+              def test_duplicate_iteration_over_same_queue_does_not_start_second_runner(self):
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'test anchor count={text.count(anchor)}')
+          tests.write_text(text.replace(anchor, block, 1))
+          PY
+
+          python3 -B -m py_compile autoscale_controller.py tests/test-autoscale-controller-contracts.py
+          python3 -B tests/test-autoscale-controller-contracts.py
+
+      - name: Commit recovery hardening
+        shell: bash
+        run: |
+          git config user.name "RunnerOps integration bot"
+          git config user.email "52175262+oalangomes@users.noreply.github.com"
+          git add autoscale_controller.py tests/test-autoscale-controller-contracts.py
+          git commit -m "fix: make START_LOCAL restart recovery replay-safe"
+          git push origin HEAD:feat/issue-71-governed-controller

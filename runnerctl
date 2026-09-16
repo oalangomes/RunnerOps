@@ -339,7 +339,7 @@ next_available_runner_name_for_add() {
   printf '%s\n' "${requested_name}-${index}"
 }
 
-resolve_runner_package_preview() {
+resolve_runner_package_spec() {
   local requested_version="$1"
   local requested_arch="$2"
   local platform detected_os detected_arch resolved_arch tag resolved_version
@@ -367,6 +367,56 @@ resolve_runner_package_preview() {
   printf '%s|%s|%s\n' "$detected_os" "$resolved_arch" "$resolved_version"
 }
 
+resolve_add_runner_spec() {
+  local repo_arg="$1"
+  local repo="$2"
+  local slug="$3"
+  local source_dir="$4"
+  local profile="$5"
+  local group="$6"
+  local labels="$7"
+  local name="$8"
+  local requested_version="$9"
+  local requested_arch="${10}"
+  local current requested_name effective_name effective_group effective_labels package_spec package_os package_arch package_version
+
+  if [[ "$profile" == "auto" ]]; then
+    if [[ "$repo_arg" == "." || -z "$repo_arg" ]]; then
+      profile="$(infer_profile_from_dir "$source_dir")"
+    else
+      current="$(current_repo || true)"
+      if [[ "$(normalize_repo "$current")" == "$(normalize_repo "$repo")" ]]; then
+        profile="$(infer_profile_from_dir "$source_dir")"
+      else
+        profile="generic"
+      fi
+    fi
+  fi
+
+  requested_name="$(normalize_runner_slug "${name:-$slug}")"
+  effective_name="$(next_available_runner_name_for_add "$requested_name")"
+  if [[ "$group" == "auto" || -z "$group" ]]; then
+    effective_group="$(normalize_runner_slug "$slug")"
+  else
+    effective_group="$(normalize_runner_slug "$group")"
+  fi
+
+  if [[ -z "$labels" ]]; then
+    if [[ "$profile" == "generic" ]]; then
+      labels="$slug,local-runner"
+    else
+      labels="$profile,$slug,local-runner"
+    fi
+  fi
+  effective_labels="$(append_csv_label_for_plan "$labels" "$effective_name")"
+
+  package_spec="$(resolve_runner_package_spec "$requested_version" "$requested_arch")"
+  IFS='|' read -r package_os package_arch package_version <<< "$package_spec"
+
+  printf '%s|%s|%s|%s|%s|%s|%s\n' \
+    "$profile" "$effective_group" "$effective_labels" "$effective_name" "$package_version" "$package_arch" "$package_os"
+}
+
 add_runner() {
   local repo_arg="."
   local profile="auto"
@@ -377,7 +427,7 @@ add_runner() {
   local runner_arch="auto"
   local plan_only=0
   local repo slug source_dir token output runner_name
-  local requested_name effective_name effective_group effective_labels package_preview preview_os preview_arch preview_version
+  local spec runner_os requested_runner_version requested_runner_arch
   local -a args=()
 
   if [[ $# -gt 0 && "$1" != --* ]]; then
@@ -428,58 +478,29 @@ add_runner() {
   slug="$(repo_slug "$repo")"
 
   source_dir="$(pwd)"
-  if [[ "$profile" == "auto" ]]; then
-    if [[ "$repo_arg" == "." || -z "$repo_arg" ]]; then
-      profile="$(infer_profile_from_dir "$source_dir")"
-    else
-      local current=""
-      current="$(current_repo || true)"
-      if [[ "$(normalize_repo "$current")" == "$(normalize_repo "$repo")" ]]; then
-        profile="$(infer_profile_from_dir "$source_dir")"
-      else
-        profile="generic"
-      fi
-    fi
-  fi
-
-  requested_name="$(normalize_runner_slug "${name:-$slug}")"
-  effective_name="$(next_available_runner_name_for_add "$requested_name")"
-  if [[ "$group" == "auto" || -z "$group" ]]; then
-    effective_group="$(normalize_runner_slug "$slug")"
-  else
-    effective_group="$(normalize_runner_slug "$group")"
-  fi
-
-  if [[ -z "$labels" ]]; then
-    if [[ "$profile" == "generic" ]]; then
-      labels="$slug,local-runner"
-    else
-      labels="$profile,$slug,local-runner"
-    fi
-  fi
-  effective_labels="$(append_csv_label_for_plan "$labels" "$effective_name")"
+  requested_runner_version="$runner_version"
+  requested_runner_arch="$runner_arch"
+  spec="$(resolve_add_runner_spec "$repo_arg" "$repo" "$slug" "$source_dir" "$profile" "$group" "$labels" "$name" "$runner_version" "$runner_arch")"
+  IFS='|' read -r profile group labels name runner_version runner_arch runner_os <<< "$spec"
 
   if [[ "$plan_only" -eq 1 ]]; then
-    package_preview="$(resolve_runner_package_preview "$runner_version" "$runner_arch")"
-    IFS='|' read -r preview_os preview_arch preview_version <<< "$package_preview"
-
     echo "Add plan:"
     echo "- operation: PREVIEW"
     echo "- repository: $repo"
     echo "- source directory: $source_dir"
     echo "- profile: $profile"
-    echo "- group: $effective_group"
-    echo "- runner name: $effective_name"
-    echo "- labels: $effective_labels"
-    echo "- runner version: $preview_version (requested: $runner_version)"
-    echo "- runner platform: $preview_os/$preview_arch (requested arch: $runner_arch)"
+    echo "- group: $group"
+    echo "- runner name: $name"
+    echo "- labels: $labels"
+    echo "- runner version: $runner_version (requested: $requested_runner_version)"
+    echo "- runner platform: $runner_os/$runner_arch (requested arch: $requested_runner_arch)"
     echo "- remote registration: NOT REQUESTED"
     echo "- filesystem: NO MUTATION"
     echo "- systemd: NO MUTATION"
     echo "- registry: NO MUTATION"
     echo "Read-only plan: no registration-token request, runner directory, systemd unit, or registry write was performed."
     next_action "run 'runnerctl add ${repo_arg:-.}' with the same flags without --plan to apply"
-    summary "success" "add-plan" "repo=$repo runner=$effective_name"
+    summary "success" "add-plan" "repo=$repo runner=$name"
     return 0
   fi
 
@@ -493,15 +514,15 @@ add_runner() {
     --labels "$labels"
     --runner-version "$runner_version"
     --runner-arch "$runner_arch"
+    --name "$name"
   )
-  [[ -n "$name" ]] && args+=(--name "$name")
 
   echo "Registrando runner para $repo"
   echo "Profile: $profile"
   echo "Group: $group"
   echo "Labels: $labels"
-  echo "Runner version: $runner_version"
-  echo "Runner arch: $runner_arch"
+  echo "Runner version: $runner_version (requested: $requested_runner_version)"
+  echo "Runner arch: $runner_arch (requested: $requested_runner_arch)"
 
   token="$(gh api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
   [[ -n "$token" ]] || die "GitHub não retornou registration token"
@@ -543,7 +564,7 @@ add_runner() {
 
   echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
   summary "success" "add" "runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
-  next_action "runnerctl start $runner_name"
+  next_action "optional for on-demand: runnerctl start $runner_name"
 }
 
 trim_value() {

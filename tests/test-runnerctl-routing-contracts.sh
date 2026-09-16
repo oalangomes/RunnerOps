@@ -22,6 +22,14 @@ assert_eq() {
   }
 }
 
+assert_contains() {
+  local haystack="$1" needle="$2" message="$3"
+  [[ "$haystack" == *"$needle"* ]] || {
+    printf 'missing: %s\noutput:\n%s\n' "$needle" "$haystack" >&2
+    fail "$message"
+  }
+}
+
 make_fake_platform() {
   local platform="$1"
   mkdir -p "$platform"
@@ -106,6 +114,30 @@ test_boot_policy_routing() {
   pass "on-demand e autostart preservam ação e target"
 }
 
+test_lifecycle_mutation_summaries() {
+  local platform="$TMP_ROOT/lifecycle-summary-platform"
+  local log="$TMP_ROOT/lifecycle-summary.log"
+  local output
+
+  make_fake_platform "$platform"
+  : > "$log"
+
+  output="$(run_ctl "$platform" "$log" start alpha)"
+  assert_contains "$output" "[SUMMARY] status=success operation=start target=alpha" "start deve fechar com resumo de sucesso"
+  assert_contains "$output" "[NEXT] runnerctl status alpha && runnerctl health alpha" "start deve orientar verificação limitada"
+
+  output="$(run_ctl "$platform" "$log" restart alpha)"
+  assert_contains "$output" "[SUMMARY] status=success operation=restart target=alpha" "restart deve fechar com resumo de sucesso"
+  assert_contains "$output" "[NEXT] runnerctl status alpha && runnerctl health alpha" "restart deve orientar verificação limitada"
+
+  assert_eq \
+    $'runner:start alpha\nrunner:restart alpha' \
+    "$(cat "$log")" \
+    "summaries não podem trocar o boundary público de lifecycle"
+
+  pass "start/restart preservam boundary e emitem resumo acionável"
+}
+
 test_default_targets_are_explicit() {
   local platform="$TMP_ROOT/default-platform"
   local log="$TMP_ROOT/default.log"
@@ -158,6 +190,7 @@ test_autoscale_run_once_routes_to_governed_controller() {
 main() {
   test_exact_runner_and_group_routing
   test_boot_policy_routing
+  test_lifecycle_mutation_summaries
   test_default_targets_are_explicit
   test_autoscale_plan_routes_to_read_only_planner
   test_autoscale_run_once_routes_to_governed_controller

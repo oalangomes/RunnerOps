@@ -51,7 +51,8 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Ciclo de vida | `runnerctl start/stop/restart/logs` |
 | On-demand / autostart | `runnerctl on-demand`, `runnerctl autostart` |
 | Repositório atual | `runnerctl repo .`, `runnerctl ensure .` |
-| Registrar runner | `runnerctl add .` |
+| Visão do repositório | `runnerctl overview .` |
+| Registrar runner | `runnerctl add .`, `runnerctl add . --plan` |
 | Remover runner | `runnerctl remove <runner> --plan/--yes` |
 | Pacote oficial do runner | `runnerctl package detect/ensure` |
 | Aguardar resultado do CI | `runnerctl ci watch .` |
@@ -191,9 +192,16 @@ Dentro do repositório alvo:
 runnerctl add .
 ```
 
+Para conferir a resolução sem mutar nada:
+
+```bash
+runnerctl add . --plan
+```
+
 O comando:
 
 - resolve o `owner/repo` atual e confirma o `nameWithOwner` canônico no GitHub;
+- em `--plan`, mostra profile, grupo, labels, nome local, versão e arquitetura resolvidos sem pedir registration token, criar diretórios, instalar systemd ou gravar registry;
 - valida systemd e acesso administrativo antes de solicitar qualquer registration token;
 - infere um perfil técnico a partir dos arquivos do projeto;
 - solicita um registration token de curta duração via `gh`;
@@ -348,9 +356,14 @@ Em timeout com job `self-hosted` ainda em fila, o watcher consulta a capacidade 
 runnerctl capacity .
 runnerctl capacity example/my-api --json
 runnerctl autoscale status . --json
+runnerctl overview .
 ```
 
-Os dois comandos consultam a fila do GitHub, os registros de runners e o systemd,
+`overview` compõe a evidência pública de capacidade com a decisão/reason do planner
+de autoscale em uma visão humana curta por repositório. Ele é read-only: não inicia
+runners, não provisiona, não registra, não altera systemd e não grava audit store.
+
+Os comandos de capacidade consultam a fila do GitHub, os registros de runners e o systemd,
 sem iniciar serviços nem gravar estado. O snapshot distingue `available_now`,
 `busy_capacity`, `provisioned_idle` e `inconclusive`, e mostra a capacidade que
 corresponde às labels de cada job em fila. Runners on-demand inativos e válidos

@@ -73,7 +73,21 @@ printf '%s\n' 'Runner configurado com sucesso.'
 printf '%s\n' 'Nome local: projectcase'
 EOF
 
-  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/configure-runner.sh"
+  cat > "$platform/runner-package.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  detect)
+    printf '%s\n' 'linux|x64'
+    ;;
+  *)
+    printf 'unexpected runner-package call: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+EOF
+
+  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/configure-runner.sh" "$platform/runner-package.sh"
 }
 
 make_fake_commands() {
@@ -110,6 +124,10 @@ if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
 fi
 
 if [[ "${1:-}" == "api" ]]; then
+  if [[ "$*" == *"repos/actions/runner/releases/latest"* ]]; then
+    printf '%s\n' 'v2.999.0'
+    exit 0
+  fi
   if [[ "$*" == *"registration-token"* ]]; then
     printf '%s\n' 'test-registration-token'
     exit 0
@@ -181,6 +199,40 @@ test_add_uses_canonical_repository_identity() {
   assert_contains "$(cat "$TMP_ROOT/gh.log")" "repos/Example/ProjectCase/actions/runners/registration-token" "API deve usar identidade canônica"
 
   pass "runnerctl add preserva nameWithOwner canônico até o configure"
+}
+
+test_add_plan_is_read_only_and_skips_registration_token() {
+  local platform="$TMP_ROOT/plan-platform"
+  local output before after
+
+  make_fake_platform "$platform"
+  reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+
+  before="$(sha256sum "$TMP_ROOT/runners.conf" | awk '{print $1}')"
+  output="$(
+    TEST_SUDO_OK=0 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --plan --runner-version latest --runner-arch auto
+  )"
+  after="$(sha256sum "$TMP_ROOT/runners.conf" | awk '{print $1}')"
+
+  assert_contains "$output" "Add plan:" "add --plan deve renderizar preview"
+  assert_contains "$output" "- repository: Example/ProjectCase" "preview deve usar identidade canônica"
+  assert_contains "$output" "- runner name: projectcase-2" "preview deve resolver nome local sem mutar"
+  assert_contains "$output" "- runner version: 2.999.0 (requested: latest)" "preview deve resolver latest sem download"
+  assert_contains "$output" "- runner platform: linux/x64 (requested arch: auto)" "preview deve resolver arquitetura"
+  assert_contains "$output" "remote registration: NOT REQUESTED" "preview deve declarar ausência de registro remoto"
+  assert_contains "$output" "[SUMMARY] status=success operation=add-plan" "preview deve fechar com resumo humano"
+
+  if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
+    fail "add --plan não pode solicitar registration token"
+  fi
+  [[ ! -s "$TMP_ROOT/sudo.log" ]] || fail "add --plan não pode validar sudo"
+  [[ ! -s "$TMP_ROOT/platform.log" ]] || fail "add --plan não pode chamar configure/migrate/doctor"
+  assert_eq "$before" "$after" "add --plan não pode modificar registry"
+
+  pass "runnerctl add --plan resolve preview sem token, sudo ou mutação"
 }
 
 test_migrate_failure_reports_partial_recovery() {
@@ -269,6 +321,7 @@ main() {
   mkdir -p "$TMP_ROOT/systemd-runtime"
   make_fake_commands "$TMP_ROOT/bin"
   test_admin_preflight_blocks_before_registration_token
+  test_add_plan_is_read_only_and_skips_registration_token
   test_add_uses_canonical_repository_identity
   test_migrate_failure_reports_partial_recovery
   test_configure_failure_is_marked_inconclusive

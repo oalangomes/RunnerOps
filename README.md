@@ -205,7 +205,7 @@ O comando:
 - instala o serviço systemd;
 - valida doctor/health.
 
-Se `sudo` exigir autenticação e a execução não tiver terminal interativo, `runnerctl add` falha antes do registro remoto e orienta executar `sudo -v` localmente. Se ocorrer uma falha depois do registro, a CLI reporta o estado como `PARTIAL` ou `INCONCLUSIVE` e informa comandos de recuperação em vez de sugerir repetir `add` às cegas.
+Se `sudo` exigir autenticação e a execução não tiver terminal interativo, `runnerctl add` falha antes do registro remoto e orienta executar o próprio `runnerctl add` em um terminal humano, ou validar `sudo -v` na mesma sessão que executará o cadastro. O cache de `sudo` não atravessa sessões. Se ocorrer uma falha depois do registro, a CLI reporta o estado como `PARTIAL` ou `INCONCLUSIVE` e informa comandos de recuperação em vez de sugerir repetir `add` às cegas.
 
 Sobrescritas continuam disponíveis quando necessário:
 

@@ -172,7 +172,7 @@ preflight_systemd_admin() {
     return 0
   fi
 
-  die "sudo exige autenticação interativa; execute 'sudo -v' em um terminal e repita runnerctl add; nenhum registration token foi solicitado"
+  die "runnerctl add precisa de sudo interativo para instalar o serviço systemd; execute o próprio 'runnerctl add ...' em um terminal humano, ou rode 'sudo -v' na mesma sessão que executará o add; nenhum registration token foi solicitado"
 }
 
 repo_slug() {

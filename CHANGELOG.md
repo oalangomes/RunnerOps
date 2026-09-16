@@ -19,6 +19,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Fixed
 
+- mensagem de primeiro uso de `runnerctl add` quando `sudo` não está disponível de forma não interativa agora orienta executar o cadastro em um terminal humano e explicita que `sudo -v` só vale na mesma sessão, mantendo a garantia de não solicitar registration token antes do preflight administrativo.
 - leitura local de `.runner` em `CapacitySnapshot` aceita UTF-8 com ou sem BOM, alinhando a correlação de capacidade ao formato observado no GitHub Actions runner real.
 - `runnerctl init` passa a proteger `RUNNER_STATE_ROOT` com modo `0700`, inclusive ao reaplicar a configuração sobre um diretório existente, garantindo compatibilidade entre o fluxo oficial de inicialização e o audit store privado.
 - `runnerctl ensure .` deixa de chamar `systemctl start` para runners systemd já ativos; o caminho passa a ser idempotente e não solicita sudo quando nenhuma mutação é necessária.

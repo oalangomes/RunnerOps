@@ -154,8 +154,9 @@ test_admin_preflight_blocks_before_registration_token() {
   set -e
 
   [[ "$rc" -ne 0 ]] || fail "add deve falhar quando sudo não está disponível de forma não interativa"
-  assert_contains "$output" "sudo exige autenticação interativa" "erro deve explicar preflight administrativo"
-  assert_contains "$output" "sudo -v" "erro deve orientar autenticação local mínima"
+  assert_contains "$output" "runnerctl add precisa de sudo interativo" "erro deve explicar preflight administrativo"
+  assert_contains "$output" "terminal humano" "erro deve orientar executar add em uma sessao interativa"
+  assert_contains "$output" "mesma sessão" "erro deve explicar que cache sudo nao atravessa sessoes"
 
   if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
     fail "preflight deve falhar antes de solicitar registration token"

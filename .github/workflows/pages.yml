@@ -39,7 +39,7 @@ jobs:
           grep -F 'runnerctl' site/index.html
           grep -F 'https://github.com/oalangomes/RunnerOps' site/index.html
           grep -F 'https://oalangomes.github.io/RunnerOps/social-preview.jpg' site/index.html
-          grep -F 'RunnerOps v0.2.2' site/index.html
+          grep -F 'RunnerOps v0.3.0' site/index.html
           grep -F 'data-lang="pt-BR"' site/index.html
           grep -F "'pt-BR':" site/i18n.js
 

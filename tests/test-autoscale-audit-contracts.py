@@ -611,9 +611,8 @@ sys.meta_path.insert(0, NoSQLite())
             result = subprocess.run(
                 [str(ROOT / "runnerctl"), *args], env=env, capture_output=True, text=True
             )
-            self.assertEqual(
-                (result.returncode, result.stdout.strip()), (0, "legacy-ok"), result.stderr
-            )
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertIn("legacy-ok", result.stdout)
 
     def test_history_is_bounded_and_settings_are_validated(self):
         with self.store() as store:

@@ -6,7 +6,7 @@
 
 **Website:** https://oalangomes.github.io/RunnerOps/
 
-**Release estável atual:** [v0.2.2](https://github.com/oalangomes/RunnerOps/releases/tag/v0.2.2)
+**Release estável atual:** [v0.3.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.3.0)
 
 **CLI pública:** `runnerctl`
 
@@ -401,8 +401,6 @@ planejamento read-only e leitura do histórico. A primeira mutação governada �
 
 ### Planejar autoscale sem aplicar
 
-> Esta capacidade está em `master` e será publicada em uma release posterior à v0.2.2.
-
 ```bash
 runnerctl autoscale plan .
 runnerctl autoscale plan example/my-api --json
@@ -438,8 +436,6 @@ reason codes e JSON. Evidência necessária ausente/contraditória resulta em
 [contrato do planner determinístico](docs/autoscale-planner.md).
 
 ### Aplicar uma ativação local governada
-
-> Esta capacidade está em `master` e será publicada em uma release posterior à v0.2.2.
 
 ```bash
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
@@ -677,7 +673,7 @@ runnerctl health all
 
 Para contribuidores, o CI valida sintaxe shell/Python, defaults XDG, instalação e routing do `runnerctl`, plano de remoção governada, contratos de `CapacitySnapshot`, audit store, planner determinístico e controller governado, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
 
-A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. A `v0.2.0` repetiu o gate em WSL2 + systemd, comprovando instalação/upgrade, operação on-demand repo-scoped, workflow real em self-hosted runner e o bridge `ci watch` contra GitHub Actions. Mudanças posteriores em `master` não herdam automaticamente essas provas; cada nova release deve repetir o gate de smoke antes da tag.
+A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. A `v0.2.0` repetiu o gate em WSL2 + systemd, comprovando instalação/upgrade, operação on-demand repo-scoped, workflow real em self-hosted runner e o bridge `ci watch` contra GitHub Actions. A `v0.3.0` acrescenta observabilidade de capacidade, audit store, planner determinístico, `START_LOCAL` governado e o novo UX operacional; o controller foi dogfoodado em host real e o workflow completo de `master` permaneceu verde após a consolidação da release candidate.
 
 O workflow de `master` também dogfooda o produto em um runner dedicado gerenciado pelo próprio RunnerOps: PRs continuam no GitHub-hosted por segurança, enquanto pushes confiáveis validam identidade local/remota, `platform-doctor`, status/health/plan e o bridge `ci watch` no host real.
 

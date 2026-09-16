@@ -118,13 +118,18 @@ legacy_logs_runner() {
   local name="$1"
   local path="$2"
   local group="$3"
-  local file diag lines
+  local file diag lines since follow
 
   lines="${RUNNER_LOG_LINES:-200}"
+  since="${RUNNER_LOG_SINCE:-}"
+  follow="${RUNNER_LOG_FOLLOW:-0}"
   file="$(log_file "$name")"
 
   echo "===== $name group=$group backend=legacy ====="
   echo "log: $file"
+  if [[ -n "$since" ]]; then
+    echo "[INFO] --since is only applied to systemd journal logs; legacy logs remain line-bounded"
+  fi
 
   if [[ -s "$file" ]]; then
     tail -n "$lines" "$file"
@@ -147,6 +152,12 @@ legacy_logs_runner() {
   else
     echo
     echo "[INFO] no _diag log found"
+  fi
+
+  if [[ "$follow" == "1" ]]; then
+    echo
+    echo "===== following legacy log ====="
+    tail -n 0 -F "$file"
   fi
 }
 
@@ -226,16 +237,27 @@ systemctl_mutate() {
 journalctl_runner() {
   local unit="$1"
   local lines="${RUNNER_LOG_LINES:-200}"
+  local since="${RUNNER_LOG_SINCE:-}"
+  local follow="${RUNNER_LOG_FOLLOW:-0}"
+  local -a args=()
+
+  args=(-u "$unit" -n "$lines" --no-pager)
+  if [[ -n "$since" ]]; then
+    args+=(--since "-$since")
+  fi
+  if [[ "$follow" == "1" ]]; then
+    args+=(-f)
+  fi
 
   # Decide permission before streaming. A downstream consumer such as
   # `head` may close the pipe early and make journalctl exit with SIGPIPE;
   # that must not be mistaken for a permission failure and retried via sudo.
   if journalctl -u "$unit" -n 1 --no-pager >/dev/null 2>&1; then
-    journalctl -u "$unit" -n "$lines" --no-pager
+    journalctl "${args[@]}"
   elif command -v sudo >/dev/null 2>&1; then
-    sudo journalctl -u "$unit" -n "$lines" --no-pager
+    sudo journalctl "${args[@]}"
   else
-    journalctl -u "$unit" -n "$lines" --no-pager
+    journalctl "${args[@]}"
   fi
 }
 

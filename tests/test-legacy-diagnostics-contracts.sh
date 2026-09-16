@@ -58,6 +58,19 @@ run_logs() {
     "$ROOT/runners.sh" logs "$name"
 }
 
+run_runnerctl_logs() {
+  local registry="$1" name="$2"
+  shift 2
+
+  ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+    ACTIONS_RUNNERS_HOME="$ROOT" \
+    RUNNERS_CONFIG="$registry" \
+    RUNNER_STATE_ROOT="$TMP_ROOT/state" \
+    RUNNER_CACHE_ROOT="$TMP_ROOT/cache" \
+    RUNNER_SYSTEMD_RUNTIME_DIR="$TMP_ROOT/no-systemd" \
+    "$ROOT/runnerctl" logs "$name" "$@"
+}
+
 test_legacy_log_content_and_latest_diag() {
   local fixture runner_dir registry output log_file diag_dir
 
@@ -90,6 +103,33 @@ test_legacy_log_content_and_latest_diag() {
   pass "legacy logs mostram conteúdo bounded e o _diag mais recente"
 }
 
+test_runnerctl_logs_flags_are_public_and_bounded() {
+  local fixture runner_dir registry output log_file diag_dir
+
+  fixture="$(make_fixture flags)"
+  IFS='|' read -r runner_dir registry <<< "$fixture"
+
+  log_file="$TMP_ROOT/state/legacy-logs/flags.log"
+  diag_dir="$runner_dir/_diag"
+  mkdir -p "$(dirname "$log_file")" "$diag_dir"
+
+  printf '%s\n' main-old main-middle main-new > "$log_file"
+  printf '%s\n' diag-one diag-two > "$diag_dir/Runner_flags.log"
+
+  output="$(run_runnerctl_logs "$registry" flags --lines 1 --since 15m)"
+
+  assert_contains "$output" "===== flags group=example backend=legacy =====" "runnerctl logs deve preservar backend legacy"
+  assert_contains "$output" "main-new" "--lines deve controlar o limite público"
+  assert_not_contains "$output" "main-middle" "--lines 1 não deve mostrar linhas antigas do log principal"
+  assert_contains "$output" "--since is only applied to systemd journal logs" "legacy deve explicitar limite de evidência para --since"
+  assert_contains "$output" "diag-two" "diagnóstico legado deve continuar incluindo _diag bounded"
+
+  output="$(run_runnerctl_logs "$registry" flags --lines nope 2>&1 || true)"
+  assert_contains "$output" "--lines deve ser inteiro positivo" "--lines inválido deve falhar cedo"
+
+  pass "runnerctl logs expõe --lines/--since sem inventar filtro temporal legado"
+}
+
 test_empty_and_missing_logs_are_explicit() {
   local fixture runner_dir registry output log_file
 
@@ -114,6 +154,7 @@ test_empty_and_missing_logs_are_explicit() {
 
 main() {
   test_legacy_log_content_and_latest_diag
+  test_runnerctl_logs_flags_are_public_and_bounded
   test_empty_and_missing_logs_are_explicit
   printf '\nContratos de legacy diagnostics passaram.\n'
 }

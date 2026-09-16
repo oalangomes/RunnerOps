@@ -4,7 +4,7 @@ Mudanças relevantes do RunnerOps e de sua CLI pública `runnerctl` são registr
 
 O projeto segue versionamento SemVer enquanto a API pública amadurece. Em versões `0.x`, mudanças incompatíveis continuam sendo evitadas e devem ser explicitadas quando inevitáveis.
 
-## Unreleased
+## v0.3.0 — 2026-09-16
 
 ### Added
 
@@ -36,6 +36,12 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 ### Security
 
 - novo helper root-owned restringe runtime privilegiado a `start|stop|restart` de units `actions.runner.*.service`; não há `NOPASSWD: ALL` nem acesso arbitrário a `systemctl`.
+
+### Validation
+
+- o controller governado de `START_LOCAL` foi validado em dogfood controlado de host real, incluindo persistência da decisão/ação, revalidação antes da mutação, verificação de postcondition e ausência de ativação duplicada.
+- o workflow completo de validação do `master` passou após a entrega das melhorias de UX, incluindo contratos hosted, GitHub API smoke e RunnerOps self-hosted dogfood.
+- `PROVISION_LOCAL` e `BURST_CLOUD` permanecem deliberadamente sem execução nesta release; a v0.3.0 fecha somente o boundary de capacidade já provisionada.
 
 ## v0.2.2 — 2026-09-08
 
@@ -75,7 +81,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - `runnerctl ci watch` para correlacionar GitHub Actions por repositório + SHA ou PR, com saída humana/JSON e exit codes estáveis.
 - diagnóstico de falha de CI separado de falha de infraestrutura/runner no CI feedback bridge.
 - suporte a reruns/`run_attempt`, jobs, steps e identificação de runner/group/labels no feedback estruturado.
-- Agent Skill `analyze-ci-workflow-performance`, read-only por padrão e baseada em evidência `STATIC`, `OBSERVED` e `ESTIMATED`.
+- Agent Skill `analyze-ci-workflow-performance`, read-only por padrão e baseada em evidências `STATIC`, `OBSERVED` e `ESTIMATED`.
 - contratos automatizados para `runnerctl`, routing/lifecycle, runner package, CI watch e Agent Skills.
 - smoke real do CI feedback bridge contra a API do GitHub Actions em pushes para `master`.
 - `runnerctl --version` como identidade explícita da CLI instalada.

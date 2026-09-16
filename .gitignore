@@ -17,3 +17,5 @@ actions-runner-*.tar.gz
 # Local Agent Skills installation
 .codex/skills/
 graphify-out/
+.serena/project.yml
+.serena/.gitignore

@@ -62,18 +62,39 @@ EOF
 set -euo pipefail
 token=""
 IFS= read -r token || true
+runner_name="projectcase"
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "--name" && $((i + 1)) -lt ${#args[@]} ]]; then
+    runner_name="${args[$((i + 1))]}"
+  fi
+done
 printf 'configure:%s\n' "$*" >> "${TEST_PLATFORM_LOG:?}"
 printf 'token:%s\n' "$token" >> "${TEST_PLATFORM_LOG:?}"
-printf '%s\n' 'Runner local: projectcase'
+printf 'Runner local: %s\n' "$runner_name"
 if [[ "${TEST_CONFIGURE_FAIL:-0}" == "1" ]]; then
   printf '%s\n' 'simulated configure failure' >&2
   exit 1
 fi
 printf '%s\n' 'Runner configurado com sucesso.'
-printf '%s\n' 'Nome local: projectcase'
+printf 'Nome local: %s\n' "$runner_name"
 EOF
 
-  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/configure-runner.sh"
+  cat > "$platform/runner-package.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  detect)
+    printf '%s\n' 'linux|x64'
+    ;;
+  *)
+    printf 'unexpected runner-package call: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+EOF
+
+  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/configure-runner.sh" "$platform/runner-package.sh"
 }
 
 make_fake_commands() {
@@ -110,6 +131,10 @@ if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
 fi
 
 if [[ "${1:-}" == "api" ]]; then
+  if [[ "$*" == *"repos/actions/runner/releases/latest"* ]]; then
+    printf '%s\n' 'v2.999.0'
+    exit 0
+  fi
   if [[ "$*" == *"registration-token"* ]]; then
     printf '%s\n' 'test-registration-token'
     exit 0
@@ -154,8 +179,9 @@ test_admin_preflight_blocks_before_registration_token() {
   set -e
 
   [[ "$rc" -ne 0 ]] || fail "add deve falhar quando sudo não está disponível de forma não interativa"
-  assert_contains "$output" "sudo exige autenticação interativa" "erro deve explicar preflight administrativo"
-  assert_contains "$output" "sudo -v" "erro deve orientar autenticação local mínima"
+  assert_contains "$output" "runnerctl add precisa de sudo interativo" "erro deve explicar preflight administrativo"
+  assert_contains "$output" "terminal humano" "erro deve orientar executar add em uma sessao interativa"
+  assert_contains "$output" "mesma sessão" "erro deve explicar que cache sudo nao atravessa sessoes"
 
   if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
     fail "preflight deve falhar antes de solicitar registration token"
@@ -180,6 +206,78 @@ test_add_uses_canonical_repository_identity() {
   assert_contains "$(cat "$TMP_ROOT/gh.log")" "repos/Example/ProjectCase/actions/runners/registration-token" "API deve usar identidade canônica"
 
   pass "runnerctl add preserva nameWithOwner canônico até o configure"
+}
+
+test_add_plan_is_read_only_and_skips_registration_token() {
+  local platform="$TMP_ROOT/plan-platform"
+  local output before after
+
+  make_fake_platform "$platform"
+  reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+
+  before="$(sha256sum "$TMP_ROOT/runners.conf" | awk '{print $1}')"
+  output="$(
+    TEST_SUDO_OK=0 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --plan --runner-version latest --runner-arch auto
+  )"
+  after="$(sha256sum "$TMP_ROOT/runners.conf" | awk '{print $1}')"
+
+  assert_contains "$output" "Add plan:" "add --plan deve renderizar preview"
+  assert_contains "$output" "- repository: Example/ProjectCase" "preview deve usar identidade canônica"
+  assert_contains "$output" "- runner name: projectcase-2" "preview deve resolver nome local sem mutar"
+  assert_contains "$output" "- runner version: 2.999.0 (requested: latest)" "preview deve resolver latest sem download"
+  assert_contains "$output" "- runner platform: linux/x64 (requested arch: auto)" "preview deve resolver arquitetura"
+  assert_contains "$output" "remote registration: NOT REQUESTED" "preview deve declarar ausência de registro remoto"
+  assert_contains "$output" "[SUMMARY] status=success operation=add-plan" "preview deve fechar com resumo humano"
+
+  if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
+    fail "add --plan não pode solicitar registration token"
+  fi
+  [[ ! -s "$TMP_ROOT/sudo.log" ]] || fail "add --plan não pode validar sudo"
+  [[ ! -s "$TMP_ROOT/platform.log" ]] || fail "add --plan não pode chamar configure/migrate/doctor"
+  assert_eq "$before" "$after" "add --plan não pode modificar registry"
+
+  pass "runnerctl add --plan resolve preview sem token, sudo ou mutação"
+}
+
+test_add_plan_and_apply_share_effective_runner_spec() {
+  local platform="$TMP_ROOT/spec-platform"
+  local plan_output apply_output platform_log
+
+  make_fake_platform "$platform"
+  reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+
+  plan_output="$(
+    TEST_SUDO_OK=0 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --plan --labels custom,local-runner --runner-version latest --runner-arch auto
+  )"
+  reset_logs
+  apply_output="$(
+    TEST_SUDO_OK=1 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --labels custom,local-runner --runner-version latest --runner-arch auto
+  )"
+  platform_log="$(cat "$TMP_ROOT/platform.log")"
+
+  assert_contains "$plan_output" "- profile: generic" "preview deve resolver profile efetivo"
+  assert_contains "$platform_log" "--profile generic" "apply deve usar o mesmo profile efetivo"
+  assert_contains "$plan_output" "- group: projectcase" "preview deve resolver group efetivo"
+  assert_contains "$platform_log" "--group projectcase" "apply deve usar o mesmo group efetivo"
+  assert_contains "$plan_output" "- runner name: projectcase-2" "preview deve resolver nome efetivo"
+  assert_contains "$platform_log" "--name projectcase-2" "apply deve usar o mesmo nome efetivo"
+  assert_contains "$plan_output" "- labels: custom,local-runner,projectcase-2" "preview deve resolver labels efetivas"
+  assert_contains "$platform_log" "--labels custom,local-runner,projectcase-2" "apply deve usar as mesmas labels efetivas"
+  assert_contains "$plan_output" "- runner version: 2.999.0 (requested: latest)" "preview deve resolver versão efetiva"
+  assert_contains "$platform_log" "--runner-version 2.999.0" "apply deve usar a mesma versão efetiva"
+  assert_contains "$plan_output" "- runner platform: linux/x64 (requested arch: auto)" "preview deve resolver arquitetura efetiva"
+  assert_contains "$platform_log" "--runner-arch x64" "apply deve usar a mesma arquitetura efetiva"
+  assert_contains "$apply_output" "[OK] runner=projectcase-2 repo=Example/ProjectCase" "apply deve concluir com o nome efetivo"
+
+  pass "add --plan e add compartilham a mesma spec efetiva"
 }
 
 test_migrate_failure_reports_partial_recovery() {
@@ -268,6 +366,8 @@ main() {
   mkdir -p "$TMP_ROOT/systemd-runtime"
   make_fake_commands "$TMP_ROOT/bin"
   test_admin_preflight_blocks_before_registration_token
+  test_add_plan_is_read_only_and_skips_registration_token
+  test_add_plan_and_apply_share_effective_runner_spec
   test_add_uses_canonical_repository_identity
   test_migrate_failure_reports_partial_recovery
   test_configure_failure_is_marked_inconclusive

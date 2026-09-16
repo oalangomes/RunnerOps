@@ -15,15 +15,19 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - `runnerctl autoscale history [--since DURATION] [--json]` e `runnerctl autoscale explain --decision ID [--json]` consultam o histórico sem criar ou modificar o banco em `RUNNER_STATE_ROOT/autoscale.db`.
 - duração de fila observada pelo RunnerOps usa `first_seen_queued_at`/`last_seen_queued_at` e interrompe continuidade em lacunas, falhas de coleta e saída da fila; `job.created_at` permanece apenas evidência de origem.
 - `runnerctl capacity [owner/repo|.] [--json]` e `runnerctl autoscale status` adicionam observabilidade read-only de fila e capacidade com `CapacitySnapshot` v1, preservando identidade canônica, labels, estados local/remoto e evidência inconclusiva sem mutação.
+- `runnerctl overview [owner/repo|.]` adiciona uma visão read-only curta por repositório, compondo fila, capacidade, runners e decisão/reason do planner de autoscale sem nova semântica de planejamento.
+- `runnerctl add [owner/repo|.] --plan` mostra a resolução de repositório, profile, grupo, labels, nome local, versão e arquitetura sem solicitar registration token e sem mutar filesystem, systemd ou registry.
 - a capacidade opcional usa Python 3.8+ somente com biblioteca padrão; `platform-doctor` reporta essa capability sem torná-la requisito para os comandos tradicionais do RunnerOps.
 
 ### Fixed
 
+- mensagem de primeiro uso de `runnerctl add` quando `sudo` não está disponível de forma não interativa agora orienta executar o cadastro em um terminal humano e explicita que `sudo -v` só vale na mesma sessão, mantendo a garantia de não solicitar registration token antes do preflight administrativo.
 - leitura local de `.runner` em `CapacitySnapshot` aceita UTF-8 com ou sem BOM, alinhando a correlação de capacidade ao formato observado no GitHub Actions runner real.
 - `runnerctl init` passa a proteger `RUNNER_STATE_ROOT` com modo `0700`, inclusive ao reaplicar a configuração sobre um diretório existente, garantindo compatibilidade entre o fluxo oficial de inicialização e o audit store privado.
 - `runnerctl ensure .` deixa de chamar `systemctl start` para runners systemd já ativos; o caminho passa a ser idempotente e não solicita sudo quando nenhuma mutação é necessária.
 - lifecycle runtime (`ensure/start/stop/restart`) deixa de abrir prompt interativo de sudo: mutações usam autorização one-time via `runnerctl platform-authorize` e falham rápido quando ela não existe.
 - lifecycle systemd desconhecido/query-error continua fail-safe e não dispara mutação privilegiada.
+- `runnerctl add`, `runnerctl start`, `runnerctl restart` e `runnerctl remove` passam a fechar com resumos humanos acionáveis de sucesso, parcialidade, inconclusão ou falha, incluindo próximo passo limitado quando há recuperação.
 
 ### Security
 

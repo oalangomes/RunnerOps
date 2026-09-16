@@ -175,6 +175,17 @@ class CapacityContracts(unittest.TestCase):
         self.assertIn('available now=1', output)
         self.assertIn('Example/MixedCase', output)
 
+    def test_overview_composes_capacity_and_autoscale_read_only(self):
+        self.runner()
+        self.job()
+        output = self.invoke('overview', '.', text=True)
+        self.assertIn('Overview: Example/MixedCase (complete)', output)
+        self.assertIn('Queue: status=complete queued=1 observed=1', output)
+        self.assertIn('Matching capacity: available_now=1', output)
+        self.assertIn('runner-1: available_now', output)
+        self.assertIn('Autoscale: decision=WAIT', output)
+        self.assertIn('Read-only overview: no lifecycle, provisioning, registration, systemd, or audit-store mutation was performed.', output)
+
     def test_unmatched_labels(self):
         self.runner()
         self.job(required=['self-hosted', 'GPU'])

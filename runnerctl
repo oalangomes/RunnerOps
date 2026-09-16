@@ -39,6 +39,7 @@ Uso:
   runnerctl on-demand <runner|group:<group>|all>
   runnerctl autostart <runner|group:<group>|all>
   runnerctl repo [owner/repo|.]
+  runnerctl overview [owner/repo|.]
   runnerctl capacity [owner/repo|.] [--json]
   runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl autoscale plan [owner/repo|.] [--json]
@@ -47,7 +48,7 @@ Uso:
   runnerctl autoscale explain --decision ID [--json]
   runnerctl ensure [owner/repo|.]
   runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
-                 [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64]
+                 [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64] [--plan]
   runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
   runnerctl package detect
   runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
@@ -143,21 +144,56 @@ canonical_repo() {
   printf '%s\n' "$canonical"
 }
 
+summary() {
+  local status="$1" operation="$2"
+  shift 2
+  echo "[SUMMARY] status=$status operation=$operation${*:+ $*}"
+}
+
+next_action() {
+  echo "[NEXT] $*"
+}
+
+require_github_cli() {
+  local operation="$1"
+
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "[ERROR] status=failure operation=$operation reason=gh_missing" >&2
+    next_action "instale GitHub CLI, rode 'gh auth login' e repita $operation" >&2
+    die "GitHub CLI (gh) é obrigatório para $operation"
+  fi
+
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "[ERROR] status=failure operation=$operation reason=gh_unauthenticated" >&2
+    next_action "rode 'gh auth login' e repita $operation" >&2
+    die "GitHub CLI não está autenticado"
+  fi
+}
+
 preflight_systemd_admin() {
   local runtime_dir="${RUNNER_SYSTEMD_RUNTIME_DIR:-/run/systemd/system}"
 
-  command -v systemctl >/dev/null 2>&1 ||
+  command -v systemctl >/dev/null 2>&1 || {
+    echo "[ERROR] status=failure operation=add reason=systemctl_missing" >&2
+    next_action "habilite systemd/systemctl neste host antes de repetir runnerctl add" >&2
     die "runnerctl add exige systemctl antes de registrar o runner"
-  [[ -d "$runtime_dir" ]] ||
+  }
+  [[ -d "$runtime_dir" ]] || {
+    echo "[ERROR] status=failure operation=add reason=systemd_inactive" >&2
+    next_action "inicie um ambiente Linux com systemd ativo antes de repetir runnerctl add" >&2
     die "runnerctl add exige systemd ativo antes de registrar o runner"
+  }
 
   if [[ "$(id -u)" -eq 0 ]]; then
     echo "[OK] preflight systemd/admin: root"
     return 0
   fi
 
-  command -v sudo >/dev/null 2>&1 ||
+  command -v sudo >/dev/null 2>&1 || {
+    echo "[ERROR] status=failure operation=add reason=sudo_missing" >&2
+    next_action "instale/configure sudo ou execute runnerctl add como root; nenhum registration token foi solicitado" >&2
     die "runnerctl add exige sudo para instalar o serviço systemd"
+  }
 
   if sudo -n true >/dev/null 2>&1; then
     echo "[OK] preflight systemd/admin: sudo disponível"
@@ -172,7 +208,9 @@ preflight_systemd_admin() {
     return 0
   fi
 
-  die "sudo exige autenticação interativa; execute 'sudo -v' em um terminal e repita runnerctl add; nenhum registration token foi solicitado"
+  echo "[ERROR] status=failure operation=add reason=sudo_interactive_required" >&2
+  next_action "execute o próprio 'runnerctl add ...' em um terminal humano, ou rode 'sudo -v' na mesma sessão; nenhum registration token foi solicitado" >&2
+  die "runnerctl add precisa de sudo interativo para instalar o serviço systemd; execute o próprio 'runnerctl add ...' em um terminal humano, ou rode 'sudo -v' na mesma sessão que executará o add; nenhum registration token foi solicitado"
 }
 
 repo_slug() {
@@ -239,6 +277,146 @@ infer_profile_from_dir() {
   fi
 }
 
+normalize_runner_slug() {
+  local value="${1,,}"
+  value="$(printf '%s' "$value" | tr -c 'a-z0-9._-' '-')"
+  value="${value#-}"
+  value="${value%-}"
+  [[ -n "$value" ]] || value="generic"
+  printf '%s\n' "$value"
+}
+
+append_csv_label_for_plan() {
+  local current_labels="$1"
+  local required_label="$2"
+  local result=""
+  local item
+  local found=0
+  local -a label_items=()
+
+  IFS=',' read -r -a label_items <<< "$current_labels"
+  for item in "${label_items[@]}"; do
+    item="$(trim_value "$item")"
+    [[ -n "$item" ]] || continue
+    if [[ "${item,,}" == "${required_label,,}" ]]; then
+      found=1
+    fi
+    result+="${result:+,}$item"
+  done
+
+  if [[ "$found" -eq 0 ]]; then
+    result+="${result:+,}$required_label"
+  fi
+
+  printf '%s\n' "$result"
+}
+
+runner_name_exists_for_add() {
+  local runner_name="$1"
+
+  if [[ -f "$RUNNERS_CONFIG" ]] &&
+      awk -F '|' -v runner_name="$runner_name" '$1 == runner_name { found=1 } END { exit(found ? 0 : 1) }' "$RUNNERS_CONFIG"; then
+    return 0
+  fi
+
+  [[ -e "$RUNNER_DATA_ROOT/$runner_name" ]]
+}
+
+next_available_runner_name_for_add() {
+  local requested_name="$1"
+  local candidate="$requested_name"
+  local index=2
+
+  if ! runner_name_exists_for_add "$candidate"; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  while runner_name_exists_for_add "${requested_name}-${index}"; do
+    index=$((index + 1))
+  done
+
+  printf '%s\n' "${requested_name}-${index}"
+}
+
+resolve_runner_package_spec() {
+  local requested_version="$1"
+  local requested_arch="$2"
+  local platform detected_os detected_arch resolved_arch tag resolved_version
+
+  [[ -x "$PLATFORM_HOME/runner-package.sh" ]] ||
+    die "runner-package.sh ausente ou não executável"
+
+  platform="$("$PLATFORM_HOME/runner-package.sh" detect)"
+  IFS='|' read -r detected_os detected_arch <<< "$platform"
+  resolved_arch="$requested_arch"
+  [[ "$resolved_arch" == "auto" ]] && resolved_arch="$detected_arch"
+  case "$resolved_arch" in
+    x64|arm64) ;;
+    *) die "arch inválida: $requested_arch" ;;
+  esac
+
+  if [[ "$requested_version" == "latest" ]]; then
+    tag="$(gh api repos/actions/runner/releases/latest --jq .tag_name)"
+    [[ -n "$tag" ]] || die "não foi possível resolver a release latest de actions/runner"
+    resolved_version="${tag#v}"
+  else
+    resolved_version="${requested_version#v}"
+  fi
+
+  printf '%s|%s|%s\n' "$detected_os" "$resolved_arch" "$resolved_version"
+}
+
+resolve_add_runner_spec() {
+  local repo_arg="$1"
+  local repo="$2"
+  local slug="$3"
+  local source_dir="$4"
+  local profile="$5"
+  local group="$6"
+  local labels="$7"
+  local name="$8"
+  local requested_version="$9"
+  local requested_arch="${10}"
+  local current requested_name effective_name effective_group effective_labels package_spec package_os package_arch package_version
+
+  if [[ "$profile" == "auto" ]]; then
+    if [[ "$repo_arg" == "." || -z "$repo_arg" ]]; then
+      profile="$(infer_profile_from_dir "$source_dir")"
+    else
+      current="$(current_repo || true)"
+      if [[ "$(normalize_repo "$current")" == "$(normalize_repo "$repo")" ]]; then
+        profile="$(infer_profile_from_dir "$source_dir")"
+      else
+        profile="generic"
+      fi
+    fi
+  fi
+
+  requested_name="$(normalize_runner_slug "${name:-$slug}")"
+  effective_name="$(next_available_runner_name_for_add "$requested_name")"
+  if [[ "$group" == "auto" || -z "$group" ]]; then
+    effective_group="$(normalize_runner_slug "$slug")"
+  else
+    effective_group="$(normalize_runner_slug "$group")"
+  fi
+
+  if [[ -z "$labels" ]]; then
+    if [[ "$profile" == "generic" ]]; then
+      labels="$slug,local-runner"
+    else
+      labels="$profile,$slug,local-runner"
+    fi
+  fi
+  effective_labels="$(append_csv_label_for_plan "$labels" "$effective_name")"
+
+  package_spec="$(resolve_runner_package_spec "$requested_version" "$requested_arch")"
+  IFS='|' read -r package_os package_arch package_version <<< "$package_spec"
+
+  printf '%s|%s|%s|%s|%s|%s|%s\n' \
+    "$profile" "$effective_group" "$effective_labels" "$effective_name" "$package_version" "$package_arch" "$package_os"
+}
+
 add_runner() {
   local repo_arg="."
   local profile="auto"
@@ -247,7 +425,9 @@ add_runner() {
   local name=""
   local runner_version="latest"
   local runner_arch="auto"
+  local plan_only=0
   local repo slug source_dir token output runner_name
+  local spec runner_os requested_runner_version requested_runner_arch
   local -a args=()
 
   if [[ $# -gt 0 && "$1" != --* ]]; then
@@ -281,6 +461,10 @@ add_runner() {
         runner_arch="${2:-}"
         shift 2
         ;;
+      --plan)
+        plan_only=1
+        shift
+        ;;
       *)
         die "opção desconhecida em add: $1"
         ;;
@@ -289,35 +473,38 @@ add_runner() {
 
   repo="$(resolve_repo "$repo_arg")"
 
-  command -v gh >/dev/null 2>&1 || die "GitHub CLI (gh) é obrigatório para runnerctl add"
-  gh auth status >/dev/null 2>&1 || die "GitHub CLI não está autenticado"
+  require_github_cli "runnerctl add"
   repo="$(canonical_repo "$repo")"
   slug="$(repo_slug "$repo")"
 
-  preflight_systemd_admin
-
   source_dir="$(pwd)"
-  if [[ "$profile" == "auto" ]]; then
-    if [[ "$repo_arg" == "." || -z "$repo_arg" ]]; then
-      profile="$(infer_profile_from_dir "$source_dir")"
-    else
-      local current=""
-      current="$(current_repo || true)"
-      if [[ "$(normalize_repo "$current")" == "$(normalize_repo "$repo")" ]]; then
-        profile="$(infer_profile_from_dir "$source_dir")"
-      else
-        profile="generic"
-      fi
-    fi
+  requested_runner_version="$runner_version"
+  requested_runner_arch="$runner_arch"
+  spec="$(resolve_add_runner_spec "$repo_arg" "$repo" "$slug" "$source_dir" "$profile" "$group" "$labels" "$name" "$runner_version" "$runner_arch")"
+  IFS='|' read -r profile group labels name runner_version runner_arch runner_os <<< "$spec"
+
+  if [[ "$plan_only" -eq 1 ]]; then
+    echo "Add plan:"
+    echo "- operation: PREVIEW"
+    echo "- repository: $repo"
+    echo "- source directory: $source_dir"
+    echo "- profile: $profile"
+    echo "- group: $group"
+    echo "- runner name: $name"
+    echo "- labels: $labels"
+    echo "- runner version: $runner_version (requested: $requested_runner_version)"
+    echo "- runner platform: $runner_os/$runner_arch (requested arch: $requested_runner_arch)"
+    echo "- remote registration: NOT REQUESTED"
+    echo "- filesystem: NO MUTATION"
+    echo "- systemd: NO MUTATION"
+    echo "- registry: NO MUTATION"
+    echo "Read-only plan: no registration-token request, runner directory, systemd unit, or registry write was performed."
+    next_action "run 'runnerctl add ${repo_arg:-.}' with the same flags without --plan to apply"
+    summary "success" "add-plan" "repo=$repo runner=$name"
+    return 0
   fi
 
-  if [[ -z "$labels" ]]; then
-    if [[ "$profile" == "generic" ]]; then
-      labels="$slug,local-runner"
-    else
-      labels="$profile,$slug,local-runner"
-    fi
-  fi
+  preflight_systemd_admin
 
   args=(
     --repo-url "https://github.com/$repo"
@@ -327,15 +514,15 @@ add_runner() {
     --labels "$labels"
     --runner-version "$runner_version"
     --runner-arch "$runner_arch"
+    --name "$name"
   )
-  [[ -n "$name" ]] && args+=(--name "$name")
 
   echo "Registrando runner para $repo"
   echo "Profile: $profile"
   echo "Group: $group"
   echo "Labels: $labels"
-  echo "Runner version: $runner_version"
-  echo "Runner arch: $runner_arch"
+  echo "Runner version: $runner_version (requested: $requested_runner_version)"
+  echo "Runner arch: $runner_arch (requested: $requested_runner_arch)"
 
   token="$(gh api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
   [[ -n "$token" ]] || die "GitHub não retornou registration token"
@@ -345,6 +532,7 @@ add_runner() {
     printf '%s\n' "$output" >&2
     runner_name="$(printf '%s\n' "$output" | awk -F': ' '/^Runner local: /{print $2}' | tail -n 1)"
     echo "[INCONCLUSIVE] runner=${runner_name:-unknown} repo=$repo phase=configure remote-registration=unknown" >&2
+    summary "inconclusive" "add" "runner=${runner_name:-unknown} repo=$repo phase=configure remote-registration=unknown" >&2
     if [[ -n "$runner_name" ]]; then
       echo "[RECOVERY] runnerctl doctor $runner_name" >&2
     fi
@@ -359,6 +547,7 @@ add_runner() {
 
   if ! "$PLATFORM_HOME/runner-services.sh" migrate "$runner_name"; then
     echo "[PARTIAL] runner=$runner_name repo=$repo phase=systemd-migrate remote-registration=present" >&2
+    summary "partial" "add" "runner=$runner_name repo=$repo phase=systemd-migrate" >&2
     echo "[RECOVERY] runnerctl doctor $runner_name" >&2
     echo "[RECOVERY] runnerctl migrate $runner_name" >&2
     return 1
@@ -366,6 +555,7 @@ add_runner() {
 
   if ! "$PLATFORM_HOME/runners.sh" doctor "$runner_name"; then
     echo "[PARTIAL] runner=$runner_name repo=$repo phase=post-migrate-doctor remote-registration=present" >&2
+    summary "partial" "add" "runner=$runner_name repo=$repo phase=post-migrate-doctor" >&2
     echo "[RECOVERY] runnerctl doctor $runner_name" >&2
     return 1
   fi
@@ -373,6 +563,8 @@ add_runner() {
   "$PLATFORM_HOME/runners.sh" health "$runner_name"
 
   echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
+  summary "success" "add" "runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
+  next_action "optional for on-demand: runnerctl start $runner_name"
 }
 
 trim_value() {
@@ -573,6 +765,7 @@ remove_runner() {
   fi
 
   if [[ "$plan_only" -eq 1 ]]; then
+    summary "success" "remove-plan" "runner=$runner repo=${repo:-unknown}"
     return 0
   fi
 
@@ -580,6 +773,7 @@ remove_runner() {
     echo
     echo "Nenhuma alteração aplicada."
     echo "Revise o plano e rode novamente com --yes."
+    summary "success" "remove-plan" "runner=$runner repo=${repo:-unknown}"
     return 0
   fi
 
@@ -591,8 +785,7 @@ remove_runner() {
     [[ -n "$remote_name" ]] ||
       die "$runner: agentName não encontrado em $runner_file; use --keep-remote para detach local"
 
-    command -v gh >/dev/null 2>&1 || die "gh é obrigatório para remoção remota"
-    gh auth status >/dev/null 2>&1 || die "GitHub CLI não está autenticado"
+    require_github_cli "runnerctl remove"
 
     remote_row="$(
       gh api "repos/$repo/actions/runners" --paginate \
@@ -609,25 +802,69 @@ remove_runner() {
     fi
   fi
 
-  "$PLATFORM_HOME/runners.sh" stop "$runner"
-  "$PLATFORM_HOME/runner-services.sh" uninstall "$runner"
+  if ! "$PLATFORM_HOME/runners.sh" stop "$runner"; then
+    summary "failure" "remove" "runner=$runner phase=stop" >&2
+    next_action "rode 'runnerctl doctor $runner' antes de repetir a remoção" >&2
+    return 1
+  fi
+  if ! "$PLATFORM_HOME/runner-services.sh" uninstall "$runner"; then
+    summary "partial" "remove" "runner=$runner phase=systemd-uninstall local-service=unknown" >&2
+    next_action "rode 'runnerctl doctor $runner' e depois 'runnerctl remove $runner --yes' quando a evidência estiver clara" >&2
+    return 1
+  fi
 
   if [[ "$keep_remote" -eq 0 && -n "$remote_row" ]]; then
-    gh api --method DELETE "repos/$repo/actions/runners/$remote_id"
+    if ! gh api --method DELETE "repos/$repo/actions/runners/$remote_id"; then
+      summary "partial" "remove" "runner=$runner phase=remote-delete local-service=uninstalled registry=present" >&2
+      next_action "verifique o runner remoto no GitHub antes de repetir 'runnerctl remove $runner --yes'" >&2
+      return 1
+    fi
     echo "[OK] registration remota removida: $repo/$remote_name ($remote_id)"
   fi
 
-  remove_registry_entry "$runner"
+  if ! remove_registry_entry "$runner"; then
+    summary "partial" "remove" "runner=$runner phase=registry-remove local-service=uninstalled" >&2
+    next_action "corrija o registry local em $RUNNERS_CONFIG antes de repetir qualquer remoção" >&2
+    return 1
+  fi
   echo "[OK] registry removido: $runner"
 
   if [[ "$delete_dir" -eq 1 ]]; then
-    rm -rf -- "$safe_delete_path"
+    if ! rm -rf -- "$safe_delete_path"; then
+      summary "partial" "remove" "runner=$runner phase=delete-dir registry=removed" >&2
+      next_action "remova manualmente o diretório validado quando não houver processos usando-o: $safe_delete_path" >&2
+      return 1
+    fi
     echo "[OK] diretório local removido: $safe_delete_path"
   else
     echo "[KEEP] diretório local preservado: $path"
   fi
 
   echo "[OK] runner removido da plataforma local: $runner"
+  summary "success" "remove" "runner=$runner repo=${repo:-unknown}"
+  next_action "runnerctl status all"
+}
+
+lifecycle_mutation() {
+  local cmd="$1"
+  shift
+  local target="${1:-}"
+  local rc
+
+  if "$PLATFORM_HOME/runners.sh" "$cmd" "$@"; then
+    summary "success" "$cmd" "target=$target"
+    next_action "runnerctl status $target && runnerctl health $target"
+    return 0
+  fi
+
+  rc=$?
+  if [[ "$rc" -eq 3 ]]; then
+    summary "inconclusive" "$cmd" "target=$target" >&2
+  else
+    summary "failure" "$cmd" "target=$target" >&2
+  fi
+  next_action "runnerctl doctor $target" >&2
+  return "$rc"
 }
 
 ci_watch() {
@@ -775,7 +1012,11 @@ case "$cmd" in
     ;;
   start|stop|restart|logs)
     [[ $# -ge 1 ]] || die "$cmd exige runner, group:<group> ou all"
-    exec "$PLATFORM_HOME/runners.sh" "$cmd" "$@"
+    if [[ "$cmd" == "start" || "$cmd" == "restart" ]]; then
+      lifecycle_mutation "$cmd" "$@"
+    else
+      exec "$PLATFORM_HOME/runners.sh" "$cmd" "$@"
+    fi
     ;;
   plan|migrate|on-demand|autostart)
     target="${1:-all}"
@@ -783,6 +1024,13 @@ case "$cmd" in
     ;;
   repo)
     resolve_repo "${1:-.}"
+    ;;
+  overview)
+    [[ -f "$PLATFORM_HOME/overview.py" ]] || die "overview.py ausente em: $PLATFORM_HOME"
+    command -v python3 >/dev/null 2>&1 || die "overview exige python3 3.8+"
+    python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+      die "overview exige python3 3.8+"
+    exec python3 -B "$PLATFORM_HOME/overview.py" "$@"
     ;;
   capacity|autoscale)
     if [[ "$cmd" == "autoscale" ]]; then

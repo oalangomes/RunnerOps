@@ -164,6 +164,26 @@ EOF
   assert_contains "$output" "- runner: ci-remove" "plano deve nomear runner exato"
   assert_contains "$output" "- GitHub registration: REMOVE" "plano deve declarar remoção remota"
   assert_contains "$output" "- local directory: KEEP" "diretório local deve ser preservado por padrão"
+  assert_contains "$output" "[SUMMARY] status=success operation=remove-plan" "remove --plan deve fechar com resumo"
+
+  : > "$log"
+  output="$(
+    TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    RUNNERS_CONFIG="$registry" \
+    "$ROOT/runnerctl" remove ci-remove --yes --keep-remote
+  )"
+  assert_contains "$output" "[OK] registry removido: ci-remove" "remove --yes deve remover registry"
+  assert_contains "$output" "[SUMMARY] status=success operation=remove runner=ci-remove" "remove --yes deve fechar com resumo de sucesso"
+  assert_contains "$output" "[NEXT] runnerctl status all" "remove deve orientar próxima verificação limitada"
+  assert_eq \
+    $'stop ci-remove\nservice:uninstall ci-remove' \
+    "$(cat "$log")" \
+    "remove --yes deve usar boundaries públicos de lifecycle/service"
+  if grep -Fq '^ci-remove|' "$registry"; then
+    fail "remove --yes deve remover entrada do registry"
+  fi
 
   if TEST_CALL_LOG="$log" ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" ACTIONS_RUNNERS_HOME="$platform" RUNNERS_CONFIG="$registry" \
       "$ROOT/runnerctl" remove all --plan >/dev/null 2>&1; then

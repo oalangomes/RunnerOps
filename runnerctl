@@ -24,47 +24,233 @@ runnerctl — local GitHub Actions runner control plane
 
 Uso:
   runnerctl --version
+  runnerctl help [command]
+
+Bootstrap:
   runnerctl init
+
+Inventory and diagnostics:
   runnerctl list
   runnerctl groups
   runnerctl status [runner|group:<group>|all]
   runnerctl health [runner|group:<group>|all]
   runnerctl doctor [runner|group:<group>|all]
+  runnerctl logs <runner|group:<group>|all> [--lines N] [--since DURATION] [--follow]
+
+Lifecycle:
   runnerctl start <runner|group:<group>|all>
   runnerctl stop <runner|group:<group>|all>
   runnerctl restart <runner|group:<group>|all>
-  runnerctl logs <runner>
   runnerctl plan [runner|group:<group>|all]
   runnerctl migrate <runner|group:<group>|all>
   runnerctl on-demand <runner|group:<group>|all>
   runnerctl autostart <runner|group:<group>|all>
+
+Repository operations:
   runnerctl repo [owner/repo|.]
   runnerctl overview [owner/repo|.]
+  runnerctl ensure [owner/repo|.]
+  runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
+                 [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64] [--plan]
+  runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
+
+Capacity and autoscale:
   runnerctl capacity [owner/repo|.] [--json]
   runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl autoscale plan [owner/repo|.] [--json]
   runnerctl autoscale run-once [owner/repo|.] [--json]
   runnerctl autoscale history [--since DURATION] [--json]
   runnerctl autoscale explain --decision ID [--json]
-  runnerctl ensure [owner/repo|.]
-  runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
-                 [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64] [--plan]
-  runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
+
+Packages, CI and skills:
   runnerctl package detect
   runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
   runnerctl ci watch [owner/repo|.] [--sha SHA | --pr NUMERO] [--json] [--timeout SEGUNDOS] [--interval SEGUNDOS]
   runnerctl skills list
   runnerctl skills install [codex|copilot|claude|agents|all]
+
+Platform:
   runnerctl platform-home
   runnerctl platform-authorize
   runnerctl platform-doctor
+  runnerctl completion <bash|zsh|fish>
+  runnerctl completion install <bash|zsh|fish>
 
 Notas:
   - on-demand é a policy padrão.
   - "ensure ." inicia somente os runners habilitados mapeados ao repositório atual.
   - lifecycle runtime (ensure/start/stop/restart) nunca solicita sudo interativamente; rode "runnerctl platform-authorize" uma vez para autorizar mutações systemd.
   - "add" usa GitHub CLI autenticado, não persiste o registration token e o envia ao helper interno por stdin; o config.sh oficial recebe o token somente durante o registro.
+  - use "runnerctl help <command>" para exemplos e flags de um comando.
 EOF
+}
+
+command_help() {
+  local topic="${1:-}"
+
+  case "$topic" in
+    ""|runnerctl|help)
+      usage
+      ;;
+    init)
+      cat <<'EOF'
+Uso:
+  runnerctl init
+
+Bootstrap local idempotente. Cria ou ajusta configuração, dados, cache e state
+nos diretórios XDG/RUNNER_*; não grava inventário da máquina no checkout Git.
+
+Exemplos:
+  runnerctl init
+  XDG_CONFIG_HOME=/srv/runnerops/config runnerctl init
+EOF
+      ;;
+    logs)
+      cat <<'EOF'
+Uso:
+  runnerctl logs <runner|group:<group>|all> [--lines N] [--since DURATION] [--follow]
+
+Mostra logs bounded por padrão. Runners systemd usam journalctl; runners legados
+mostram o log local e o _diag mais recente quando disponível.
+
+Flags:
+  --lines N          número de linhas finais; default 200
+  --since DURATION  filtra journal systemd desde DURATION, como 10m, 2h ou 1d
+  --follow          acompanha novas linhas
+
+Exemplos:
+  runnerctl logs my-api
+  runnerctl logs my-api --lines 50
+  runnerctl logs my-api --since 30m --follow
+EOF
+      ;;
+    add)
+      cat <<'EOF'
+Uso:
+  runnerctl add [owner/repo|.] [--profile PROFILE] [--group GROUP] [--labels CSV] [--name NAME]
+                [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64] [--plan]
+
+Registra um runner local via GitHub CLI autenticado. O preflight administrativo
+acontece antes de solicitar registration token. Falhas após registro preservam
+PARTIAL/INCONCLUSIVE e orientam recuperação sem retry cego.
+
+Flags:
+  --plan                    preview read-only; não solicita token nem muta estado
+  --profile PROFILE         auto, generic, node, python, flutter, java, go, dotnet
+  --group GROUP             grupo operacional; default usa o slug do repo
+  --labels CSV              labels GitHub; o nome local é sempre incluído
+  --name NAME               nome local desejado; resolve colisões com sufixo
+  --runner-version VERSION  versão actions/runner; default latest
+  --runner-arch ARCH        auto, x64 ou arm64
+
+Exemplos:
+  runnerctl add .
+  runnerctl add owner/repo --plan
+  runnerctl add . --profile node --labels node,local-runner
+EOF
+      ;;
+    remove)
+      cat <<'EOF'
+Uso:
+  runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
+
+Remove um runner exato. all/group:* são rejeitados para preservar segurança.
+
+Exemplos:
+  runnerctl remove my-api --plan
+  runnerctl remove my-api --yes
+  runnerctl remove my-api --yes --keep-remote
+EOF
+      ;;
+    start|stop|restart)
+      cat <<EOF
+Uso:
+  runnerctl $topic <runner|group:<group>|all>
+
+Lifecycle operacional. start/restart fecham com [SUMMARY] e [NEXT] curtos.
+
+Exemplos:
+  runnerctl $topic my-api
+  runnerctl $topic group:my-team
+EOF
+      ;;
+    status|health|doctor)
+      cat <<EOF
+Uso:
+  runnerctl $topic [runner|group:<group>|all]
+
+Diagnóstico read-only do estado local conhecido.
+
+Exemplos:
+  runnerctl $topic all
+  runnerctl $topic my-api
+EOF
+      ;;
+    overview|capacity|repo|ensure)
+      cat <<EOF
+Uso:
+  runnerctl $topic [owner/repo|.]
+
+Opera no repositório informado ou no repositório Git atual quando usado com ".".
+
+Exemplos:
+  runnerctl $topic .
+  runnerctl $topic owner/repo
+EOF
+      ;;
+    autoscale)
+      cat <<'EOF'
+Uso:
+  runnerctl autoscale status [owner/repo|.] [--json]
+  runnerctl autoscale plan [owner/repo|.] [--json]
+  runnerctl autoscale run-once [owner/repo|.] [--json]
+  runnerctl autoscale history [--since DURATION] [--json]
+  runnerctl autoscale explain --decision ID [--json]
+
+status/plan são read-only. run-once é governado por RUNNER_AUTOSCALE_ENABLED=true
+e executa somente ações locais explicitamente suportadas.
+
+Exemplos:
+  runnerctl autoscale plan .
+  RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
+EOF
+      ;;
+    completion)
+      cat <<'EOF'
+Uso:
+  runnerctl completion <bash|zsh|fish>
+  runnerctl completion install <bash|zsh|fish>
+
+Gera completion para stdout ou instala em um diretório padrão do shell.
+
+Exemplos:
+  runnerctl completion bash > ~/.local/share/bash-completion/completions/runnerctl
+  runnerctl completion install fish
+EOF
+      ;;
+    package)
+      "$PLATFORM_HOME/runner-package.sh" --help
+      ;;
+    ci)
+      cat <<'EOF'
+Uso:
+  runnerctl ci watch [owner/repo|.] [--sha SHA | --pr NUMERO] [--json] [--timeout SEGUNDOS] [--interval SEGUNDOS]
+
+Aguarda workflows do SHA/PR alvo e preserva exit codes sem confundir falhas de CI
+com falhas de infraestrutura.
+EOF
+      ;;
+    skills)
+      cat <<'EOF'
+Uso:
+  runnerctl skills list
+  runnerctl skills install [codex|copilot|claude|agents|all]
+EOF
+      ;;
+    *)
+      die "help desconhecido: $topic"
+      ;;
+  esac
 }
 
 resolve_platform_home() {
@@ -154,6 +340,21 @@ next_action() {
   echo "[NEXT] $*"
 }
 
+progress_enabled() {
+  [[ -t 1 && -z "${RUNNERCTL_NO_PROGRESS:-}" ]]
+}
+
+progress_step() {
+  local step="$1" total="$2"
+  shift 2
+  progress_enabled || return 0
+  printf '[%s/%s] %s\n' "$step" "$total" "$*" >&2
+}
+
+is_positive_integer() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
 require_github_cli() {
   local operation="$1"
 
@@ -168,6 +369,147 @@ require_github_cli() {
     next_action "rode 'gh auth login' e repita $operation" >&2
     die "GitHub CLI não está autenticado"
   fi
+}
+
+completion_words() {
+  printf '%s\n' \
+    help init list groups status health doctor logs \
+    start stop restart plan migrate on-demand autostart \
+    repo overview ensure add remove capacity autoscale \
+    package ci skills platform-home platform-authorize platform-doctor \
+    completion --version
+}
+
+generate_completion() {
+  local shell="$1"
+  local words
+  words="$(completion_words)"
+
+  case "$shell" in
+    bash)
+      cat <<EOF
+_runnerctl_completion() {
+  local cur
+  cur="\${COMP_WORDS[COMP_CWORD]}"
+  COMPREPLY=( \$(compgen -W "$words" -- "\$cur") )
+}
+complete -F _runnerctl_completion runnerctl
+EOF
+      ;;
+    zsh)
+      cat <<EOF
+#compdef runnerctl
+_runnerctl() {
+  local -a commands
+  commands=(${words//$'\n'/ })
+  _describe 'runnerctl command' commands
+}
+_runnerctl "\$@"
+EOF
+      ;;
+    fish)
+      while read -r word; do
+        [[ -n "$word" ]] || continue
+        printf 'complete -c runnerctl -f -a %q\n' "$word"
+      done <<< "$words"
+      ;;
+    *)
+      die "completion aceita bash, zsh ou fish"
+      ;;
+  esac
+}
+
+install_completion() {
+  local shell="$1"
+  local target_dir target
+
+  case "$shell" in
+    bash)
+      target_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
+      target="$target_dir/runnerctl"
+      ;;
+    zsh)
+      target_dir="${ZDOTDIR:-$HOME}/.zfunc"
+      target="$target_dir/_runnerctl"
+      ;;
+    fish)
+      target_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
+      target="$target_dir/runnerctl.fish"
+      ;;
+    *)
+      die "completion install aceita bash, zsh ou fish"
+      ;;
+  esac
+
+  mkdir -p "$target_dir"
+  generate_completion "$shell" > "$target"
+  echo "installed: $target"
+}
+
+completion_command() {
+  local sub="${1:-}"
+
+  case "$sub" in
+    bash|zsh|fish)
+      generate_completion "$sub"
+      ;;
+    install)
+      shift || true
+      [[ $# -ge 1 ]] || die "completion install exige bash, zsh ou fish"
+      install_completion "$1"
+      ;;
+    ""|-h|--help|help)
+      command_help completion
+      ;;
+    *)
+      die "completion aceita bash, zsh, fish ou install"
+      ;;
+  esac
+}
+
+runner_logs() {
+  local target="${1:-}"
+  local lines="${RUNNER_LOG_LINES:-200}"
+  local since=""
+  local follow=0
+
+  if [[ "$target" == "-h" || "$target" == "--help" || "$target" == "help" ]]; then
+    command_help logs
+    return 0
+  fi
+  [[ -n "$target" ]] || die "logs exige runner, group:<group> ou all"
+  shift
+
+  while (($#)); do
+    case "$1" in
+      --lines)
+        lines="${2:-}"
+        is_positive_integer "$lines" || die "--lines deve ser inteiro positivo"
+        shift 2
+        ;;
+      --since)
+        since="${2:-}"
+        [[ -n "$since" && "$since" != --* ]] || die "--since exige duração"
+        shift 2
+        ;;
+      --follow)
+        follow=1
+        shift
+        ;;
+      -h|--help)
+        command_help logs
+        return 0
+        ;;
+      *)
+        die "opção desconhecida em logs: $1"
+        ;;
+    esac
+  done
+
+  RUNNER_LOG_LINES="$lines" \
+  RUNNER_LOG_SINCE="$since" \
+  RUNNER_LOG_FOLLOW="$follow" \
+    exec "$PLATFORM_HOME/runners.sh" logs "$target"
 }
 
 preflight_systemd_admin() {
@@ -471,8 +813,10 @@ add_runner() {
     esac
   done
 
+  progress_step 1 6 "resolving repository and runner spec"
   repo="$(resolve_repo "$repo_arg")"
 
+  progress_step 2 6 "checking GitHub CLI and runner package"
   require_github_cli "runnerctl add"
   repo="$(canonical_repo "$repo")"
   slug="$(repo_slug "$repo")"
@@ -499,11 +843,12 @@ add_runner() {
     echo "- systemd: NO MUTATION"
     echo "- registry: NO MUTATION"
     echo "Read-only plan: no registration-token request, runner directory, systemd unit, or registry write was performed."
-    next_action "run 'runnerctl add ${repo_arg:-.}' with the same flags without --plan to apply"
+    next_action "run the same command without --plan to apply"
     summary "success" "add-plan" "repo=$repo runner=$name"
     return 0
   fi
 
+  progress_step 3 6 "checking systemd/admin access before remote registration"
   preflight_systemd_admin
 
   args=(
@@ -524,9 +869,11 @@ add_runner() {
   echo "Runner version: $runner_version (requested: $requested_runner_version)"
   echo "Runner arch: $runner_arch (requested: $requested_runner_arch)"
 
+  progress_step 4 6 "requesting short-lived registration token"
   token="$(gh api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
   [[ -n "$token" ]] || die "GitHub não retornou registration token"
 
+  progress_step 5 6 "configuring local runner"
   if ! output="$(printf '%s\n' "$token" | "$PLATFORM_HOME/configure-runner.sh" "${args[@]}" 2>&1)"; then
     unset token
     printf '%s\n' "$output" >&2
@@ -545,6 +892,7 @@ add_runner() {
   runner_name="$(printf '%s\n' "$output" | awk -F': ' '/^Nome local: /{print $2}' | tail -n 1)"
   [[ -n "$runner_name" ]] || die "runner foi configurado, mas o nome local não pôde ser resolvido"
 
+  progress_step 6 6 "migrating and validating lifecycle"
   if ! "$PLATFORM_HOME/runner-services.sh" migrate "$runner_name"; then
     echo "[PARTIAL] runner=$runner_name repo=$repo phase=systemd-migrate remote-registration=present" >&2
     summary "partial" "add" "runner=$runner_name repo=$repo phase=systemd-migrate" >&2
@@ -564,7 +912,11 @@ add_runner() {
 
   echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
   summary "success" "add" "runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
-  next_action "optional for on-demand: runnerctl start $runner_name"
+  if [[ "$RUNNER_BOOT_POLICY" == "on-demand" ]]; then
+    next_action "runnerctl start $runner_name"
+  else
+    next_action "runnerctl status $runner_name && runnerctl health $runner_name"
+  fi
 }
 
 trim_value() {
@@ -982,12 +1334,27 @@ platform_doctor() {
   return "$rc"
 }
 
+init_machine() {
+  if ! progress_enabled; then
+    exec "$PLATFORM_HOME/init-machine-config.sh" "$@"
+  fi
+
+  progress_step 1 3 "checking platform home"
+  [[ -x "$PLATFORM_HOME/init-machine-config.sh" ]] ||
+    die "init-machine-config.sh ausente em: $PLATFORM_HOME"
+
+  progress_step 2 3 "initializing config, data, cache and state roots"
+  "$PLATFORM_HOME/init-machine-config.sh" "$@"
+
+  progress_step 3 3 "bootstrap finished"
+}
+
 cmd="${1:-help}"
 shift || true
 
 case "$cmd" in
   help|-h|--help)
-    usage
+    command_help "${1:-}"
     ;;
   platform-home)
     printf '%s\n' "$PLATFORM_HOME"
@@ -1001,7 +1368,7 @@ case "$cmd" in
     platform_doctor
     ;;
   init)
-    exec "$PLATFORM_HOME/init-machine-config.sh" "$@"
+    init_machine "$@"
     ;;
   list|groups)
     exec "$PLATFORM_HOME/runners.sh" "$cmd" "$@"
@@ -1010,13 +1377,18 @@ case "$cmd" in
     target="${1:-all}"
     exec "$PLATFORM_HOME/runners.sh" "$cmd" "$target"
     ;;
-  start|stop|restart|logs)
+  start|stop|restart)
     [[ $# -ge 1 ]] || die "$cmd exige runner, group:<group> ou all"
-    if [[ "$cmd" == "start" || "$cmd" == "restart" ]]; then
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+      command_help "$cmd"
+    elif [[ "$cmd" == "start" || "$cmd" == "restart" ]]; then
       lifecycle_mutation "$cmd" "$@"
     else
       exec "$PLATFORM_HOME/runners.sh" "$cmd" "$@"
     fi
+    ;;
+  logs)
+    runner_logs "$@"
     ;;
   plan|migrate|on-demand|autostart)
     target="${1:-all}"
@@ -1097,10 +1469,18 @@ case "$cmd" in
     esac
     ;;
   add)
-    add_runner "$@"
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+      command_help add
+    else
+      add_runner "$@"
+    fi
     ;;
   remove)
-    remove_runner "$@"
+    if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+      command_help remove
+    else
+      remove_runner "$@"
+    fi
     ;;
   skills)
     sub="${1:-list}"
@@ -1117,6 +1497,9 @@ case "$cmd" in
         die "skills aceita list ou install"
         ;;
     esac
+    ;;
+  completion)
+    completion_command "$@"
     ;;
   *)
     die "comando desconhecido: $cmd"

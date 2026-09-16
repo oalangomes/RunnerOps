@@ -63,6 +63,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Agent Skills | `runnerctl skills list/install` |
 | Autorização de runtime | `runnerctl platform-authorize` |
 | Diagnóstico da plataforma | `runnerctl platform-doctor` |
+| Ajuda e completion | `runnerctl help <command>`, `runnerctl completion install bash|zsh|fish` |
 
 ## Modelo
 
@@ -131,6 +132,9 @@ Depois, inicialize o estado local da máquina:
 ```bash
 runnerctl init
 ```
+
+Em um terminal humano, `init` mostra progresso curto por fases. Em execução
+capturada/não interativa, a saída permanece adequada para automação.
 
 Isso cria, por padrão:
 
@@ -215,6 +219,9 @@ O comando:
 
 Se `sudo` exigir autenticação e a execução não tiver terminal interativo, `runnerctl add` falha antes do registro remoto e orienta executar o próprio `runnerctl add` em um terminal humano, ou validar `sudo -v` na mesma sessão que executará o cadastro. O cache de `sudo` não atravessa sessões. Se ocorrer uma falha depois do registro, a CLI reporta o estado como `PARTIAL` ou `INCONCLUSIVE` e informa comandos de recuperação em vez de sugerir repetir `add` às cegas.
 
+Em TTY humano, o cadastro real também mostra progresso por fases (`[1/6]` ...
+`[6/6]`). O modo `--plan` e execuções não interativas não recebem essas linhas.
+
 Sobrescritas continuam disponíveis quando necessário:
 
 ```bash
@@ -280,6 +287,8 @@ runnerctl start my-api
 runnerctl stop my-api
 runnerctl restart my-api
 runnerctl logs my-api
+runnerctl logs my-api --lines 100
+runnerctl logs my-api --since 30m --follow
 
 runnerctl remove my-api --plan
 ```
@@ -299,7 +308,20 @@ runnerctl ensure .
 
 Evite `start all` no uso normal. O modelo recomendado é acordar apenas a capacidade necessária.
 
-No backend legado, `runnerctl logs <runner>` mostra as últimas linhas do log local e também o `_diag` mais recente quando disponível; log vazio ou ausente é reportado explicitamente. Em runners systemd, o comando continua usando o journal da unit.
+`runnerctl logs <runner>` é bounded por padrão e aceita `--lines N`,
+`--since DURATION` e `--follow`. Em runners systemd, essas opções são aplicadas
+ao journal da unit. No backend legado, o comando mostra as últimas linhas do log
+local e também o `_diag` mais recente quando disponível; log vazio ou ausente é
+reportado explicitamente, e `--since` é sinalizado como limitação do backend
+legado em vez de inventar filtro temporal.
+
+Para descobrir flags e exemplos sem abrir a documentação:
+
+```bash
+runnerctl help add
+runnerctl help logs
+runnerctl completion install bash
+```
 
 ### Aguardar o CI do commit atual
 

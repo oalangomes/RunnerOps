@@ -30,6 +30,14 @@ assert_contains() {
   }
 }
 
+assert_not_contains() {
+  local haystack="$1" needle="$2" message="$3"
+  [[ "$haystack" != *"$needle"* ]] || {
+    printf 'unexpected: %s\noutput:\n%s\n' "$needle" "$haystack" >&2
+    fail "$message"
+  }
+}
+
 make_fake_platform() {
   local platform="$1"
   mkdir -p "$platform"
@@ -208,6 +216,33 @@ test_add_uses_canonical_repository_identity() {
   pass "runnerctl add preserva nameWithOwner canônico até o configure"
 }
 
+test_add_progress_is_tty_only() {
+  local platform="$TMP_ROOT/progress-platform"
+  local output tty_log command
+
+  make_fake_platform "$platform"
+  reset_logs
+
+  output="$(TEST_SUDO_OK=1 run_add "$platform")"
+  assert_not_contains "$output" "[1/6]" "progress não deve poluir saída capturada/non-TTY"
+
+  if ! command -v script >/dev/null 2>&1; then
+    pass "progress TTY ignorado porque script(1) não está disponível"
+    return 0
+  fi
+
+  reset_logs
+  tty_log="$TMP_ROOT/add-tty.log"
+  command="PATH=$TMP_ROOT/bin:\$PATH ACTIONS_RUNNERS_HOME=$platform ACTIONS_RUNNERS_ENV=$TMP_ROOT/missing.env RUNNER_SYSTEMD_RUNTIME_DIR=$TMP_ROOT/systemd-runtime TEST_GH_LOG=$TMP_ROOT/gh.log TEST_SUDO_LOG=$TMP_ROOT/sudo.log TEST_PLATFORM_LOG=$TMP_ROOT/platform.log TEST_SUDO_OK=1 $ROOT/runnerctl add example/projectcase --profile generic"
+  script -q -e -c "$command" "$tty_log" >/dev/null
+  output="$(cat "$tty_log")"
+
+  assert_contains "$output" "[1/6] resolving repository and runner spec" "TTY deve mostrar primeira fase de add"
+  assert_contains "$output" "[6/6] migrating and validating lifecycle" "TTY deve mostrar fase final de add"
+
+  pass "runnerctl add emite progress humano apenas quando há TTY"
+}
+
 test_add_plan_is_read_only_and_skips_registration_token() {
   local platform="$TMP_ROOT/plan-platform"
   local output before after
@@ -231,6 +266,7 @@ test_add_plan_is_read_only_and_skips_registration_token() {
   assert_contains "$output" "- runner platform: linux/x64 (requested arch: auto)" "preview deve resolver arquitetura"
   assert_contains "$output" "remote registration: NOT REQUESTED" "preview deve declarar ausência de registro remoto"
   assert_contains "$output" "[SUMMARY] status=success operation=add-plan" "preview deve fechar com resumo humano"
+  assert_not_contains "$output" "[1/6]" "add --plan não deve emitir progress de apply"
 
   if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
     fail "add --plan não pode solicitar registration token"
@@ -369,6 +405,7 @@ main() {
   test_add_plan_is_read_only_and_skips_registration_token
   test_add_plan_and_apply_share_effective_runner_spec
   test_add_uses_canonical_repository_identity
+  test_add_progress_is_tty_only
   test_migrate_failure_reports_partial_recovery
   test_configure_failure_is_marked_inconclusive
   test_configure_persists_canonical_repo_case

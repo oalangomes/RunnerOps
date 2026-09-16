@@ -85,7 +85,7 @@ test_exact_runner_and_group_routing() {
   run_ctl "$platform" "$log" status alpha
   run_ctl "$platform" "$log" start group:backend
   run_ctl "$platform" "$log" restart alpha
-  run_ctl "$platform" "$log" logs alpha
+  run_ctl "$platform" "$log" logs alpha --lines 50 --since 10m
 
   assert_eq \
     $'runner:status alpha\nrunner:start group:backend\nrunner:restart alpha\nrunner:logs alpha' \

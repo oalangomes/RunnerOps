@@ -116,7 +116,9 @@ mostram o log local e o _diag mais recente quando disponível.
 Flags:
   --lines N          número de linhas finais; default 200
   --since DURATION  filtra journal systemd desde duração positiva: 30s, 10m, 2h ou 1d
-  --follow          acompanha novas linhas
+  --follow          acompanha novas linhas; exige um runner exato
+
+`--follow` não aceita `group:*` ou `all`, porque o backend não multiplexa streams.
 
 Exemplos:
   runnerctl logs my-api
@@ -586,6 +588,10 @@ runner_logs() {
         ;;
     esac
   done
+
+  if [[ "$follow" -eq 1 && ( "$target" == "all" || "$target" == group:* ) ]]; then
+    die "--follow exige um runner exato; group:* e all não são suportados"
+  fi
 
   RUNNER_LOG_LINES="$lines" \
   RUNNER_LOG_SINCE="$since" \

@@ -239,7 +239,14 @@ EOF
 test_help_and_completion_contracts() {
   local platform="$TMP_ROOT/help-platform"
   local log="$TMP_ROOT/help-calls.log"
-  local output completion_file
+  local output completion_file command
+  local -a public_commands=(
+    help init list groups status health doctor logs
+    start stop restart plan migrate on-demand autostart
+    repo overview ensure add remove capacity autoscale
+    package ci skills platform-home platform-authorize platform-doctor
+    completion --version
+  )
 
   make_fake_platform "$platform"
   : > "$log"
@@ -273,6 +280,16 @@ test_help_and_completion_contracts() {
   )"
   assert_contains "$output" "--plan" "help add deve documentar preview read-only"
   assert_contains "$output" "PARTIAL/INCONCLUSIVE" "help add deve preservar semântica fail-safe"
+
+  for command in "${public_commands[@]}"; do
+    output="$(
+      TEST_CALL_LOG="$log" \
+      ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+      ACTIONS_RUNNERS_HOME="$platform" \
+      "$ROOT/runnerctl" help "$command"
+    )"
+    assert_contains "$output" "Uso:" "runnerctl help $command deve existir"
+  done
 
   output="$(
     TEST_CALL_LOG="$log" \

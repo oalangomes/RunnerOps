@@ -309,11 +309,12 @@ runnerctl ensure .
 Evite `start all` no uso normal. O modelo recomendado é acordar apenas a capacidade necessária.
 
 `runnerctl logs <runner>` é bounded por padrão e aceita `--lines N`,
-`--since DURATION` e `--follow`. Em runners systemd, essas opções são aplicadas
-ao journal da unit. No backend legado, o comando mostra as últimas linhas do log
-local e também o `_diag` mais recente quando disponível; log vazio ou ausente é
-reportado explicitamente, e `--since` é sinalizado como limitação do backend
-legado em vez de inventar filtro temporal.
+`--since DURATION` e `--follow`; `DURATION` usa inteiro positivo com unidade
+`s`, `m`, `h` ou `d`, como `30s`, `10m`, `2h` ou `1d`. Em runners systemd, essas
+opções são aplicadas ao journal da unit. No backend legado, o comando mostra as
+últimas linhas do log local e também o `_diag` mais recente quando disponível;
+log vazio ou ausente é reportado explicitamente, e `--since` é sinalizado como
+limitação do backend legado em vez de inventar filtro temporal.
 
 Para descobrir flags e exemplos sem abrir a documentação:
 

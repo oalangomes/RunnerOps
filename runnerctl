@@ -115,7 +115,7 @@ mostram o log local e o _diag mais recente quando disponível.
 
 Flags:
   --lines N          número de linhas finais; default 200
-  --since DURATION  filtra journal systemd desde DURATION, como 10m, 2h ou 1d
+  --since DURATION  filtra journal systemd desde duração positiva: 30s, 10m, 2h ou 1d
   --follow          acompanha novas linhas
 
 Exemplos:
@@ -228,8 +228,85 @@ Exemplos:
   runnerctl completion install fish
 EOF
       ;;
+    list|groups)
+      cat <<EOF
+Uso:
+  runnerctl $topic
+
+Consulta read-only do inventário local conhecido.
+
+Exemplos:
+  runnerctl $topic
+EOF
+      ;;
+    plan|migrate)
+      cat <<EOF
+Uso:
+  runnerctl $topic [runner|group:<group>|all]
+
+Opera no boundary systemd/migration existente. "plan" é read-only; "migrate"
+instala/reativa o serviço systemd para runners já registrados.
+
+Exemplos:
+  runnerctl $topic all
+  runnerctl $topic my-api
+EOF
+      ;;
+    on-demand|autostart)
+      cat <<EOF
+Uso:
+  runnerctl $topic [runner|group:<group>|all]
+
+Ajusta a política de boot systemd de runners já migrados sem alterar registration
+remota. on-demand deixa boot desabilitado; autostart habilita boot e inicia.
+
+Exemplos:
+  runnerctl $topic my-api
+  runnerctl $topic group:my-team
+EOF
+      ;;
+    platform-home)
+      cat <<'EOF'
+Uso:
+  runnerctl platform-home
+
+Mostra o checkout RunnerOps resolvido pela CLI instalada.
+EOF
+      ;;
+    platform-authorize)
+      cat <<'EOF'
+Uso:
+  runnerctl platform-authorize
+
+Instala/atualiza a autorização local para lifecycle systemd não interativo.
+Rode em um terminal humano quando a máquina ainda não estiver autorizada.
+EOF
+      ;;
+    platform-doctor)
+      cat <<'EOF'
+Uso:
+  runnerctl platform-doctor
+
+Diagnostica dependências e paths da plataforma local sem mutar runners.
+EOF
+      ;;
     package)
-      "$PLATFORM_HOME/runner-package.sh" --help
+      cat <<'EOF'
+Uso:
+  runnerctl package detect
+  runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
+
+Detecta plataforma Linux suportada ou garante o pacote oficial actions/runner
+no cache local.
+EOF
+      ;;
+    --version|version)
+      cat <<'EOF'
+Uso:
+  runnerctl --version
+
+Mostra a versão da CLI pública instalada.
+EOF
       ;;
     ci)
       cat <<'EOF'
@@ -353,6 +430,10 @@ progress_step() {
 
 is_positive_integer() {
   [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
+is_log_duration() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*[smhd]$ ]]
 }
 
 require_github_cli() {
@@ -489,7 +570,7 @@ runner_logs() {
         ;;
       --since)
         since="${2:-}"
-        [[ -n "$since" && "$since" != --* ]] || die "--since exige duração"
+        is_log_duration "$since" || die "--since deve usar duração como 30s, 10m, 2h ou 1d"
         shift 2
         ;;
       --follow)
@@ -813,10 +894,14 @@ add_runner() {
     esac
   done
 
-  progress_step 1 6 "resolving repository and runner spec"
+  if [[ "$plan_only" -eq 0 ]]; then
+    progress_step 1 6 "resolving repository and runner spec"
+  fi
   repo="$(resolve_repo "$repo_arg")"
 
-  progress_step 2 6 "checking GitHub CLI and runner package"
+  if [[ "$plan_only" -eq 0 ]]; then
+    progress_step 2 6 "checking GitHub CLI and runner package"
+  fi
   require_github_cli "runnerctl add"
   repo="$(canonical_repo "$repo")"
   slug="$(repo_slug "$repo")"
@@ -913,7 +998,7 @@ add_runner() {
   echo "[OK] runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
   summary "success" "add" "runner=$runner_name repo=$repo policy=$RUNNER_BOOT_POLICY"
   if [[ "$RUNNER_BOOT_POLICY" == "on-demand" ]]; then
-    next_action "runnerctl start $runner_name"
+    next_action "optional now: runnerctl start $runner_name"
   else
     next_action "runnerctl status $runner_name && runnerctl health $runner_name"
   fi

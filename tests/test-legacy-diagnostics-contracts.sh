@@ -127,6 +127,15 @@ test_runnerctl_logs_flags_are_public_and_bounded() {
   output="$(run_runnerctl_logs "$registry" flags --lines nope 2>&1 || true)"
   assert_contains "$output" "--lines deve ser inteiro positivo" "--lines inválido deve falhar cedo"
 
+  output="$(run_runnerctl_logs "$registry" flags --since yesterday 2>&1 || true)"
+  assert_contains "$output" "--since deve usar duração como 30s, 10m, 2h ou 1d" "--since inválido deve falhar cedo"
+
+  output="$(run_runnerctl_logs "$registry" flags --since 0m 2>&1 || true)"
+  assert_contains "$output" "--since deve usar duração como 30s, 10m, 2h ou 1d" "--since zero deve ser rejeitado"
+
+  output="$(run_runnerctl_logs "$registry" flags --since 15 2>&1 || true)"
+  assert_contains "$output" "--since deve usar duração como 30s, 10m, 2h ou 1d" "--since sem unidade deve ser rejeitado"
+
   pass "runnerctl logs expõe --lines/--since sem inventar filtro temporal legado"
 }
 

@@ -210,6 +210,7 @@ test_add_uses_canonical_repository_identity() {
 
   assert_contains "$output" "Registrando runner para Example/ProjectCase" "add deve expor nome canônico"
   assert_contains "$output" "[OK] runner=projectcase repo=Example/ProjectCase" "conclusão deve preservar nome canônico"
+  assert_contains "$output" "[NEXT] optional now: runnerctl start projectcase" "on-demand deve deixar claro que start é opcional para disponibilidade imediata"
   assert_contains "$(cat "$TMP_ROOT/platform.log")" "--repo-url https://github.com/Example/ProjectCase" "configure deve receber URL canônica"
   assert_contains "$(cat "$TMP_ROOT/gh.log")" "repos/Example/ProjectCase/actions/runners/registration-token" "API deve usar identidade canônica"
 
@@ -232,6 +233,23 @@ test_add_progress_is_tty_only() {
   fi
 
   reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+  tty_log="$TMP_ROOT/add-plan-tty.log"
+  command="PATH=$TMP_ROOT/bin:\$PATH ACTIONS_RUNNERS_HOME=$platform ACTIONS_RUNNERS_ENV=$TMP_ROOT/missing.env RUNNER_SYSTEMD_RUNTIME_DIR=$TMP_ROOT/systemd-runtime RUNNERS_CONFIG=$TMP_ROOT/runners.conf TEST_GH_LOG=$TMP_ROOT/gh.log TEST_SUDO_LOG=$TMP_ROOT/sudo.log TEST_PLATFORM_LOG=$TMP_ROOT/platform.log TEST_SUDO_OK=0 $ROOT/runnerctl add example/projectcase --profile generic --plan --runner-version latest --runner-arch auto"
+  script -q -e -c "$command" "$tty_log" >/dev/null
+  output="$(cat "$tty_log")"
+
+  assert_contains "$output" "Add plan:" "TTY plan deve renderizar preview"
+  assert_not_contains "$output" "[1/6]" "TTY add --plan não deve mostrar fase de apply"
+  assert_not_contains "$output" "[2/6]" "TTY add --plan não deve mostrar progresso de apply"
+  if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
+    fail "TTY add --plan não pode solicitar registration token"
+  fi
+  [[ ! -s "$TMP_ROOT/sudo.log" ]] || fail "TTY add --plan não pode validar sudo"
+  [[ ! -s "$TMP_ROOT/platform.log" ]] || fail "TTY add --plan não pode chamar configure/migrate/doctor"
+
+  reset_logs
+  rm -f "$TMP_ROOT/runners.conf"
   tty_log="$TMP_ROOT/add-tty.log"
   command="PATH=$TMP_ROOT/bin:\$PATH ACTIONS_RUNNERS_HOME=$platform ACTIONS_RUNNERS_ENV=$TMP_ROOT/missing.env RUNNER_SYSTEMD_RUNTIME_DIR=$TMP_ROOT/systemd-runtime TEST_GH_LOG=$TMP_ROOT/gh.log TEST_SUDO_LOG=$TMP_ROOT/sudo.log TEST_PLATFORM_LOG=$TMP_ROOT/platform.log TEST_SUDO_OK=1 $ROOT/runnerctl add example/projectcase --profile generic"
   script -q -e -c "$command" "$tty_log" >/dev/null

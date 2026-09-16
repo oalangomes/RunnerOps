@@ -236,6 +236,85 @@ EOF
   pass "--delete-dir protege RUNNER_DATA_ROOT"
 }
 
+test_help_and_completion_contracts() {
+  local platform="$TMP_ROOT/help-platform"
+  local log="$TMP_ROOT/help-calls.log"
+  local output completion_file command
+  local -a public_commands=(
+    help init list groups status health doctor logs
+    start stop restart plan migrate on-demand autostart
+    repo overview ensure add remove capacity autoscale
+    package ci skills platform-home platform-authorize platform-doctor
+    completion --version
+  )
+
+  make_fake_platform "$platform"
+  : > "$log"
+
+  output="$(
+    TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    "$ROOT/runnerctl" --help
+  )"
+  assert_contains "$output" "Bootstrap:" "--help deve organizar comandos por categoria"
+  assert_contains "$output" "Lifecycle:" "--help deve manter categoria lifecycle"
+  assert_contains "$output" "Capacity and autoscale:" "--help deve expor categoria capacity/autoscale"
+  assert_contains "$output" "runnerctl help [command]" "--help deve anunciar help hierárquico"
+
+  output="$(
+    TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    "$ROOT/runnerctl" help logs
+  )"
+  assert_contains "$output" "--lines N" "help logs deve documentar --lines"
+  assert_contains "$output" "--since DURATION" "help logs deve documentar --since"
+  assert_contains "$output" "--follow" "help logs deve documentar --follow"
+
+  output="$(
+    TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    "$ROOT/runnerctl" help add
+  )"
+  assert_contains "$output" "--plan" "help add deve documentar preview read-only"
+  assert_contains "$output" "PARTIAL/INCONCLUSIVE" "help add deve preservar semântica fail-safe"
+
+  for command in "${public_commands[@]}"; do
+    output="$(
+      TEST_CALL_LOG="$log" \
+      ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+      ACTIONS_RUNNERS_HOME="$platform" \
+      "$ROOT/runnerctl" help "$command"
+    )"
+    assert_contains "$output" "Uso:" "runnerctl help $command deve existir"
+  done
+
+  output="$(
+    TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    "$ROOT/runnerctl" completion bash
+  )"
+  assert_contains "$output" "complete -F _runnerctl_completion runnerctl" "completion bash deve ser gerada sem dependência externa"
+  assert_contains "$output" "autoscale" "completion deve listar comandos públicos"
+
+  output="$(
+    TEST_CALL_LOG="$log" \
+    ACTIONS_RUNNERS_ENV="$ISOLATED_ACTIONS_RUNNERS_ENV" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    XDG_CONFIG_HOME="$TMP_ROOT/completion-config" \
+    "$ROOT/runnerctl" completion install fish
+  )"
+  completion_file="$TMP_ROOT/completion-config/fish/completions/runnerctl.fish"
+  assert_contains "$output" "installed: $completion_file" "completion install deve reportar path"
+  [[ -f "$completion_file" ]] || fail "completion fish deve ser instalada no XDG_CONFIG_HOME"
+  assert_contains "$(cat "$completion_file")" "complete -c runnerctl" "completion fish instalada deve conter regras"
+
+  pass "help hierárquico e shell completion têm contrato público estável"
+}
+
 test_install_and_xdg_from_arbitrary_checkout() {
   local platform="$TMP_ROOT/arbitrary/path/runnerctl-source"
   local config="$TMP_ROOT/xdg/config"
@@ -310,6 +389,7 @@ main() {
   test_ensure_is_repo_scoped
   test_remove_contracts
   test_delete_dir_guards
+  test_help_and_completion_contracts
   test_install_and_xdg_from_arbitrary_checkout
   printf '\nTodos os contratos runnerctl deste slice passaram.\n'
 }

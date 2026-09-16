@@ -17,6 +17,9 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - `runnerctl capacity [owner/repo|.] [--json]` e `runnerctl autoscale status` adicionam observabilidade read-only de fila e capacidade com `CapacitySnapshot` v1, preservando identidade canônica, labels, estados local/remoto e evidência inconclusiva sem mutação.
 - `runnerctl overview [owner/repo|.]` adiciona uma visão read-only curta por repositório, compondo fila, capacidade, runners e decisão/reason do planner de autoscale sem nova semântica de planejamento.
 - `runnerctl add [owner/repo|.] --plan` mostra a resolução de repositório, profile, grupo, labels, nome local, versão e arquitetura sem solicitar registration token e sem mutar filesystem, systemd ou registry.
+- `runnerctl --help` passa a organizar comandos por categoria e `runnerctl help <command>` documenta exemplos/flags dos comandos públicos principais.
+- `runnerctl logs <runner|group:<group>|all>` aceita `--lines N`, `--since DURATION` e `--follow`, preservando saída bounded por padrão e a distinção entre journal systemd e diagnostics legados.
+- `runnerctl completion <bash|zsh|fish>` gera completion simples e `runnerctl completion install <bash|zsh|fish>` instala nos diretórios padrão do shell sem dependência externa.
 - a capacidade opcional usa Python 3.8+ somente com biblioteca padrão; `platform-doctor` reporta essa capability sem torná-la requisito para os comandos tradicionais do RunnerOps.
 
 ### Fixed
@@ -28,6 +31,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 - lifecycle runtime (`ensure/start/stop/restart`) deixa de abrir prompt interativo de sudo: mutações usam autorização one-time via `runnerctl platform-authorize` e falham rápido quando ela não existe.
 - lifecycle systemd desconhecido/query-error continua fail-safe e não dispara mutação privilegiada.
 - `runnerctl add`, `runnerctl start`, `runnerctl restart` e `runnerctl remove` passam a fechar com resumos humanos acionáveis de sucesso, parcialidade, inconclusão ou falha, incluindo próximo passo limitado quando há recuperação.
+- `runnerctl init` e o fluxo mutável de `runnerctl add` exibem progresso curto por fases apenas em TTY humano, sem poluir `--plan`, JSON ou execução não interativa.
 
 ### Security
 

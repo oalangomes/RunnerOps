@@ -95,6 +95,37 @@ test_exact_runner_and_group_routing() {
   pass "targets exatos e group:* são encaminhados sem expansão indevida"
 }
 
+test_logs_follow_requires_exact_runner() {
+  local platform="$TMP_ROOT/log-follow-platform"
+  local log="$TMP_ROOT/log-follow.log"
+  local output
+
+  make_fake_platform "$platform"
+  : > "$log"
+
+  run_ctl "$platform" "$log" logs alpha --follow
+  assert_eq \
+    'runner:logs alpha' \
+    "$(cat "$log")" \
+    "logs --follow deve encaminhar runner exato ao backend"
+
+  : > "$log"
+  if output="$(run_ctl "$platform" "$log" logs group:backend --follow 2>&1)"; then
+    fail "logs group:* --follow deve ser rejeitado"
+  fi
+  assert_contains "$output" "--follow exige um runner exato" "group:* --follow deve falhar com razão explícita"
+  assert_eq "" "$(cat "$log")" "group:* --follow deve falhar antes do backend"
+
+  : > "$log"
+  if output="$(run_ctl "$platform" "$log" logs all --follow 2>&1)"; then
+    fail "logs all --follow deve ser rejeitado"
+  fi
+  assert_contains "$output" "--follow exige um runner exato" "all --follow deve falhar com razão explícita"
+  assert_eq "" "$(cat "$log")" "all --follow deve falhar antes do backend"
+
+  pass "logs --follow exige runner exato e não tenta multiplexar group/all"
+}
+
 test_boot_policy_routing() {
   local platform="$TMP_ROOT/policy-platform"
   local log="$TMP_ROOT/policy.log"
@@ -189,6 +220,7 @@ test_autoscale_run_once_routes_to_governed_controller() {
 
 main() {
   test_exact_runner_and_group_routing
+  test_logs_follow_requires_exact_runner
   test_boot_policy_routing
   test_lifecycle_mutation_summaries
   test_default_targets_are_explicit

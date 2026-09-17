@@ -1016,6 +1016,11 @@ def plan(snapshot, policy, host, audit):
         )
     else:
         reasons.extend(["LOCAL_CAPACITY_TARGET_REACHED", "LOCAL_CAPACITY_SATURATED"])
+        if policy.get("local_provision") is None:
+            # Legacy direct planner callers used max-active as their only local
+            # bound and named that state LOCAL_POOL_AT_MAX. Keep that frozen
+            # internal contract without leaking the old meaning into production.
+            reasons.append("LOCAL_POOL_AT_MAX")
 
     if not policy["burst_enabled"]:
         return decide("BLOCKED", *(reasons + ["BURST_DISABLED"]))

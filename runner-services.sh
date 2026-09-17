@@ -10,6 +10,9 @@ CACHE_ENV_PATH="$BASE_DIR/runner-cache-env.sh"
 SERVICE_ENV_DIR="$RUNNER_STATE_ROOT/service-env"
 SERVICE_USER="${RUNNER_SERVICE_USER:-${SUDO_USER:-$USER}}"
 LOG_LINES="${RUNNER_SERVICE_LOG_LINES:-200}"
+RUNNEROPS_SYSTEMCTL_HELPER="${RUNNEROPS_SYSTEMCTL_HELPER:-/usr/local/libexec/runnerops-systemctl}"
+AUTOSCALE_SERVICE_USER="$(id -un)"
+AUTOSCALE_TEMPLATE_UNIT="actions.runner.runnerops-${AUTOSCALE_SERVICE_USER}@.service"
 
 usage() {
   cat <<'USAGE'
@@ -76,6 +79,40 @@ infer_group() {
 require_systemd() {
   command -v systemctl >/dev/null 2>&1 || die "systemctl nao encontrado"
   [[ -d /run/systemd/system ]] || die "systemd nao esta ativo; no WSL habilite systemd em /etc/wsl.conf"
+}
+
+authorized_runtime_available() {
+  [[ -x "$RUNNEROPS_SYSTEMCTL_HELPER" ]] || return 1
+  systemctl cat "$AUTOSCALE_TEMPLATE_UNIT" >/dev/null 2>&1 || return 1
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$RUNNEROPS_SYSTEMCTL_HELPER" check >/dev/null 2>&1
+  else
+    command -v sudo >/dev/null 2>&1 || return 1
+    sudo -n "$RUNNEROPS_SYSTEMCTL_HELPER" check >/dev/null 2>&1
+  fi
+}
+
+authorized_unit_for_runner() {
+  local name="$1"
+  [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || die "runner nao suportado pela unit template: $name"
+  printf 'actions.runner.runnerops-%s@%s.service\n' "$AUTOSCALE_SERVICE_USER" "$name"
+}
+
+is_authorized_template_unit() {
+  local unit="$1"
+  [[ "$unit" == "actions.runner.runnerops-${AUTOSCALE_SERVICE_USER}@"*.service ]]
+}
+
+authorized_systemctl() {
+  local action="$1" unit="$2"
+  is_authorized_template_unit "$unit" || die "recusando unit fora do template RunnerOps: $unit"
+
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$RUNNEROPS_SYSTEMCTL_HELPER" "$action" "$unit"
+  else
+    sudo -n "$RUNNEROPS_SYSTEMCTL_HELPER" "$action" "$unit"
+  fi
 }
 
 service_unit() {
@@ -196,6 +233,11 @@ install_cache_dropin() {
   [[ -f "$env_file" ]] || return 0
 
   unit="$(service_unit "$path")"
+  if is_authorized_template_unit "$unit"; then
+    # The root-owned template already references this exact per-runner env file.
+    return 0
+  fi
+
   tmp="$(mktemp)"
   cat > "$tmp" <<EOF
 [Service]
@@ -227,6 +269,10 @@ migrate_runner() {
     if registration_deleted "$unit"; then
       die "$name: registro remoto do GitHub foi deletado; reconfigure o runner antes de migrar/iniciar"
     fi
+  elif authorized_runtime_available; then
+    unit="$(authorized_unit_for_runner "$name")"
+    printf '%s\n' "$unit" > "$path/.service"
+    echo "[MIGRATE] usando template RunnerOps autorizado para $name como usuario $AUTOSCALE_SERVICE_USER"
   else
     echo "[MIGRATE] instalando $name como usuario $SERVICE_USER"
     (cd "$path" && sudo ./svc.sh install "$SERVICE_USER")
@@ -236,21 +282,37 @@ migrate_runner() {
   install_cache_dropin "$name" "$path" "$profile" "$repo" "$group"
 
   if [[ "$BOOT_POLICY" == "on-demand" ]]; then
-    sudo systemctl disable "$unit" >/dev/null 2>&1 || true
-    sudo systemctl start "$unit"
-    sleep "${RUNNER_SYSTEMD_START_SETTLE_SECONDS:-3}"
-    if ! systemctl is-active --quiet "$unit"; then
-      sudo systemctl status "$unit" --no-pager || true
-      die "$name nao permaneceu ativo durante validacao on-demand"
+    if is_authorized_template_unit "$unit"; then
+      authorized_systemctl disable "$unit" >/dev/null 2>&1 || true
+      authorized_systemctl start "$unit"
+      sleep "${RUNNER_SYSTEMD_START_SETTLE_SECONDS:-3}"
+      if ! systemctl is-active --quiet "$unit"; then
+        systemctl status "$unit" --no-pager || true
+        die "$name nao permaneceu ativo durante validacao on-demand"
+      fi
+      authorized_systemctl stop "$unit"
+    else
+      sudo systemctl disable "$unit" >/dev/null 2>&1 || true
+      sudo systemctl start "$unit"
+      sleep "${RUNNER_SYSTEMD_START_SETTLE_SECONDS:-3}"
+      if ! systemctl is-active --quiet "$unit"; then
+        sudo systemctl status "$unit" --no-pager || true
+        die "$name nao permaneceu ativo durante validacao on-demand"
+      fi
+      sudo systemctl stop "$unit"
     fi
-    sudo systemctl stop "$unit"
     echo "[OK] $name -> $unit policy=on-demand boot=disabled state=idle"
   else
-    sudo systemctl enable --now "$unit" >/dev/null
+    if is_authorized_template_unit "$unit"; then
+      authorized_systemctl enable "$unit" >/dev/null
+      authorized_systemctl start "$unit"
+    else
+      sudo systemctl enable --now "$unit" >/dev/null
+    fi
     if systemctl is-active --quiet "$unit"; then
       echo "[OK] $name -> $unit policy=auto"
     else
-      sudo systemctl status "$unit" --no-pager || true
+      systemctl status "$unit" --no-pager || true
       die "$name nao ficou ativo"
     fi
   fi
@@ -265,17 +327,27 @@ set_boot_policy_runner() {
 
   case "$mode" in
     on-demand)
-      sudo systemctl disable "$unit" >/dev/null 2>&1 || true
-      sudo systemctl stop "$unit" >/dev/null 2>&1 || true
+      if is_authorized_template_unit "$unit"; then
+        authorized_systemctl disable "$unit" >/dev/null 2>&1 || true
+        authorized_systemctl stop "$unit" >/dev/null 2>&1 || true
+      else
+        sudo systemctl disable "$unit" >/dev/null 2>&1 || true
+        sudo systemctl stop "$unit" >/dev/null 2>&1 || true
+      fi
       echo "[OK] $name policy=on-demand state=idle boot=$(systemctl is-enabled "$unit" 2>/dev/null || true)"
       ;;
     autostart)
-      sudo systemctl enable --now "$unit" >/dev/null
+      if is_authorized_template_unit "$unit"; then
+        authorized_systemctl enable "$unit" >/dev/null
+        authorized_systemctl start "$unit"
+      else
+        sudo systemctl enable --now "$unit" >/dev/null
+      fi
       sleep "${RUNNER_SYSTEMD_START_SETTLE_SECONDS:-3}"
       if systemctl is-active --quiet "$unit"; then
         echo "[OK] $name policy=auto state=active boot=enabled"
       else
-        sudo systemctl status "$unit" --no-pager || true
+        systemctl status "$unit" --no-pager || true
         return 1
       fi
       ;;
@@ -291,9 +363,15 @@ uninstall_runner() {
     return 0
   }
 
-  sudo systemctl stop "$unit" 2>/dev/null || true
-  sudo systemctl disable "$unit" 2>/dev/null || true
-  (cd "$path" && sudo ./svc.sh uninstall)
+  if is_authorized_template_unit "$unit"; then
+    authorized_systemctl stop "$unit" >/dev/null 2>&1 || true
+    authorized_systemctl disable "$unit" >/dev/null 2>&1 || true
+    rm -f "$path/.service"
+  else
+    sudo systemctl stop "$unit" 2>/dev/null || true
+    sudo systemctl disable "$unit" 2>/dev/null || true
+    (cd "$path" && sudo ./svc.sh uninstall)
+  fi
   rm -f "$SERVICE_ENV_DIR/$name.env"
   echo "[OK] $name removido do systemd; runner GitHub preservado"
 }
@@ -306,7 +384,11 @@ operate_runner() {
 
   case "$action" in
     start)
-      sudo systemctl start "$unit"
+      if is_authorized_template_unit "$unit"; then
+        authorized_systemctl start "$unit"
+      else
+        sudo systemctl start "$unit"
+      fi
       sleep "${RUNNER_SYSTEMD_START_SETTLE_SECONDS:-3}"
       if systemctl is-active --quiet "$unit"; then
         echo "[OK] $name state=active policy=$BOOT_POLICY unit=$unit"
@@ -316,13 +398,21 @@ operate_runner() {
       fi
       ;;
     stop|restart)
-      sudo systemctl "$action" "$unit"
+      if is_authorized_template_unit "$unit"; then
+        authorized_systemctl "$action" "$unit"
+      else
+        sudo systemctl "$action" "$unit"
+      fi
       ;;
     status)
-      printf '%-24s %-12s %-10s %s\n'         "$name"         "$(systemctl is-active "$unit" 2>/dev/null || true)"         "$(systemctl is-enabled "$unit" 2>/dev/null || true)"         "$unit"
+      printf '%-24s %-12s %-10s %s\n' \
+        "$name" \
+        "$(systemctl is-active "$unit" 2>/dev/null || true)" \
+        "$(systemctl is-enabled "$unit" 2>/dev/null || true)" \
+        "$unit"
       ;;
     logs)
-      sudo journalctl -u "$unit" -n "$LOG_LINES" --no-pager
+      journalctl -u "$unit" -n "$LOG_LINES" --no-pager
       ;;
   esac
 }

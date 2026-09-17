@@ -13,6 +13,7 @@ from pathlib import Path
 
 import capacity
 from autoscale_contracts import AuditError, canonical_repo, label_list, timestamp
+from autoscale_pressure import read_pressure_evidence
 
 SCHEMA_VERSION = 1
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -184,6 +185,7 @@ def _empty_audit(status, error):
         "status": status,
         "error": error,
         "queue": [],
+        "aggregate_pressure": [],
         "active_burst_capacity": None,
         "last_scaling_action_started_at": None,
         "last_scaling_action_kind": None,
@@ -200,14 +202,19 @@ def load_audit_evidence(repository):
             if history.get("truncated"):
                 return _empty_audit("inconclusive", "audit_history_truncated")
 
-            # Retain completed episodes as well as open ones.  The planner uses
-            # their bounded, RunnerOps-observed intervals to prove aggregate
-            # pressure when individual queued jobs churn.
             queue = [
                 row
                 for row in history["queue_observations"]
                 if row.get("repository", "").casefold() == repository.casefold()
             ]
+            with store._read_transaction():
+                aggregate_pressure = read_pressure_evidence(
+                    store.connection,
+                    canonical_repo(repository).lower(),
+                    current_only=True,
+                    limit=1000,
+                )
+
             active_burst = 0
             started = []
             for decision in history["decisions"]:
@@ -229,6 +236,7 @@ def load_audit_evidence(repository):
             "status": "complete",
             "error": None,
             "queue": queue,
+            "aggregate_pressure": aggregate_pressure,
             "active_burst_capacity": active_burst,
             "last_scaling_action_started_at": latest_started[0],
             "last_scaling_action_kind": latest_started[1],
@@ -379,17 +387,11 @@ def _queue_evidence(jobs, audit, observed_at):
     )
 
 
-def _aggregate_queue_evidence(jobs, audit, observed_at):
-    """Prove sustained pressure per exact normalized label scope.
+def _legacy_aggregate_queue_evidence(jobs, audit, observed_at):
+    """Compatibility for frozen pure-planner fixtures that predate audit schema v2.
 
-    A governed controller observes and persists at the same timestamp before it
-    plans. The standalone read-only planner does not. For that path, a fresh
-    CapacitySnapshot may be slightly newer than the latest persisted queue
-    observation. We allow a bounded projection only when an exact job identity
-    from the persisted episode is still present in the fresh snapshot and the
-    retained row is still marked continuous/fresh by the audit reader.
-
-    The unobserved T0->T1 lag is never added to observed queued duration.
+    Runtime readers always provide ``aggregate_pressure``. This path exists only
+    for direct callers/tests that construct the old internal audit dictionary.
     """
     if audit.get("status") != "complete" or not isinstance(audit.get("queue"), list):
         return None
@@ -476,9 +478,154 @@ def _aggregate_queue_evidence(jobs, audit, observed_at):
                 "read_only_projection_lag_seconds": lag_seconds,
                 "observed_queued_seconds": int((window[1] - window[0]).total_seconds()),
                 "current_observed_job_ids": sorted(row["job_id"] for row in current),
+                "qualification_id": None,
+                "qualification_state": "legacy",
+                "resume_count": 0,
+                "last_resume_at": None,
+                "last_unknown_seconds": None,
+                "start_reason": "legacy_fixture",
+                "segments": [],
             }
         )
     return sorted(result, key=lambda row: (row["required_labels"], row["first_seen_queued_at"]))
+
+
+def _aggregate_queue_evidence(jobs, audit, observed_at):
+    """Consume durable segmented pressure qualification for each exact label scope."""
+    aggregate = audit.get("aggregate_pressure")
+    if aggregate is None:
+        return _legacy_aggregate_queue_evidence(jobs, audit, observed_at)
+    if audit.get("status") != "complete" or not isinstance(aggregate, list):
+        return None
+
+    try:
+        observed_dt = datetime.fromisoformat(observed_at)
+        current_by_scope = {}
+        for job in jobs:
+            scope = _normalized_label_scope(job["required_labels"])
+            identity = _queue_identity(job)
+            if scope is None or identity is None:
+                return None
+            current_by_scope.setdefault(scope, {"identities": set(), "job_ids": []})
+            current_by_scope[scope]["identities"].add(identity)
+            current_by_scope[scope]["job_ids"].append(job["job_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not current_by_scope:
+        return None
+
+    exact_by_scope = {scope: [] for scope in current_by_scope}
+    if not isinstance(audit.get("queue"), list):
+        return None
+    for raw in audit["queue"]:
+        normalized = _audit_queue_row(raw, observed_dt)
+        if normalized is None:
+            return None
+        scope = _normalized_label_scope(normalized["required_labels"])
+        if scope in exact_by_scope:
+            exact_by_scope[scope].append(normalized)
+
+    result = []
+    seen_scopes = set()
+    for row in aggregate:
+        if not isinstance(row, dict):
+            return None
+        scope = _normalized_label_scope(row.get("required_labels"))
+        if scope not in current_by_scope:
+            continue
+        if scope in seen_scopes:
+            return None
+        seen_scopes.add(scope)
+        if row.get("state") != "active":
+            continue
+
+        try:
+            first = timestamp(row["first_observed_at"])
+            last = timestamp(row["last_observed_at"])
+            first_dt = datetime.fromisoformat(first)
+            last_dt = datetime.fromisoformat(last)
+            proven = row["proven_queued_seconds"]
+            max_gap = row["max_gap_seconds"]
+            resume_count = row["resume_count"]
+            last_unknown = row.get("last_unknown_seconds")
+            segments = row["segments"]
+        except (AuditError, KeyError, TypeError, ValueError):
+            return None
+        if (
+            first_dt > last_dt
+            or last_dt > observed_dt
+            or type(proven) is not int
+            or proven < 0
+            or type(max_gap) is not int
+            or max_gap <= 0
+            or type(resume_count) is not int
+            or resume_count < 0
+            or (last_unknown is not None and (type(last_unknown) is not int or last_unknown < 0))
+            or not isinstance(segments, list)
+            or not segments
+        ):
+            return None
+
+        segment_total = 0
+        for segment in segments:
+            try:
+                segment_first = datetime.fromisoformat(timestamp(segment["first_observed_at"]))
+                segment_last = datetime.fromisoformat(timestamp(segment["last_observed_at"]))
+                segment_seconds = segment["observed_seconds"]
+                observation_count = segment["observation_count"]
+            except (AuditError, KeyError, TypeError, ValueError):
+                return None
+            if (
+                segment_first > segment_last
+                or segment_last > last_dt
+                or type(segment_seconds) is not int
+                or segment_seconds != int((segment_last - segment_first).total_seconds())
+                or type(observation_count) is not int
+                or observation_count <= 0
+            ):
+                return None
+            segment_total += segment_seconds
+        if segment_total != proven:
+            return None
+
+        lag_seconds = int((observed_dt - last_dt).total_seconds())
+        if lag_seconds < 0 or lag_seconds > max_gap:
+            continue
+
+        if lag_seconds > 0:
+            identities = current_by_scope[scope]["identities"]
+            anchors = [
+                exact
+                for exact in exact_by_scope[scope]
+                if exact["continuous_queued"]
+                and (exact["run_id"], exact["run_attempt"], exact["job_id"]) in identities
+                and datetime.fromisoformat(exact["last_seen_queued_at"]) == last_dt
+            ]
+            if not anchors:
+                continue
+            gaps = [anchor["max_gap_seconds"] for anchor in anchors]
+            if any(gap is None for gap in gaps) or lag_seconds > min(gaps):
+                continue
+
+        result.append(
+            {
+                "required_labels": list(scope),
+                "first_seen_queued_at": first,
+                "last_seen_queued_at": last,
+                "current_observed_at": observed_at,
+                "read_only_projection_lag_seconds": lag_seconds,
+                "observed_queued_seconds": proven,
+                "current_observed_job_ids": sorted(current_by_scope[scope]["job_ids"]),
+                "qualification_id": row.get("qualification_id"),
+                "qualification_state": row.get("state"),
+                "resume_count": resume_count,
+                "last_resume_at": row.get("last_resume_at"),
+                "last_unknown_seconds": last_unknown,
+                "start_reason": row.get("start_reason"),
+                "segments": segments,
+            }
+        )
+    return sorted(result, key=lambda item: (item["required_labels"], item["first_seen_queued_at"]))
 
 
 def _local_capacity_evidence(scoped_jobs, pressure_jobs, snapshot):
@@ -665,8 +812,6 @@ def plan(snapshot, policy, host, audit):
     if any(status == "inconclusive" or status not in KNOWN_CAPACITY_STATUSES for status in statuses):
         return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
 
-    # Available capacity only settles the jobs it actually matches. Other scoped
-    # jobs can still represent pressure with different labels/capabilities.
     pressure_jobs = [
         job for job in scoped_jobs if job.get("capacity_status") != "available_now"
     ]
@@ -710,10 +855,7 @@ def plan(snapshot, policy, host, audit):
         for row in aggregate_queue
         if row["observed_queued_seconds"] >= policy["queue_threshold_seconds"]
     ]
-    qualified_labels = {
-        tuple(row["required_labels"])
-        for row in qualified_scopes
-    }
+    qualified_labels = {tuple(row["required_labels"]) for row in qualified_scopes}
     qualified_pressure_jobs = [
         job
         for job in pressure_jobs
@@ -737,6 +879,8 @@ def plan(snapshot, policy, host, audit):
         return decide("WAIT", "QUEUE_BELOW_THRESHOLD")
 
     reasons = ["OBSERVED_QUEUE_THRESHOLD_MET", "SUSTAINED_QUEUE_PRESSURE"]
+    if any(row.get("resume_count", 0) > 0 for row in qualified_scopes):
+        reasons.append("PRESSURE_QUALIFICATION_RESUMED")
 
     local_capacity = _local_capacity_evidence(
         qualified_pressure_jobs, qualified_pressure_jobs, snapshot

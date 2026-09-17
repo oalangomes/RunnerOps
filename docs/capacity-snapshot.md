@@ -1,8 +1,9 @@
 # Queue and capacity observability
 
 `runnerctl capacity [owner/repo|.] [--json]` and
-`runnerctl autoscale status [owner/repo|.] [--json]` produce the same read-only
-`CapacitySnapshot`. Omitted repository means the current Git repository.
+`runnerctl autoscale status [owner/repo|.] [--json]` preserves every read-only
+`CapacitySnapshot` field and adds a `scheduler` object for the optional continuous
+autoscale timer. Omitted repository means the current Git repository.
 Explicit targets accept `owner/repo`. Lookup and registry matching ignore case;
 `repository.nameWithOwner` preserves the identity returned by GitHub. If lookup
 fails, this field is `null`; a normalized requested slug or Git origin can still

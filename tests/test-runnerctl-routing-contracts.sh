@@ -63,7 +63,15 @@ with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
     log.write("autoscale-run-once:" + " ".join(sys.argv[1:]) + "\n")
 EOF
 
-  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py" "$platform/autoscale_controller.py"
+  cat > "$platform/autoscale_scheduler.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+    log.write("autoscale-scheduler:" + " ".join(sys.argv[1:]) + "\n")
+EOF
+
+  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py" "$platform/autoscale_controller.py" "$platform/autoscale_scheduler.py"
 }
 
 run_ctl() {
@@ -218,6 +226,23 @@ test_autoscale_run_once_routes_to_governed_controller() {
   pass "autoscale run-once preserva repo/flags e usa boundary mutável isolado"
 }
 
+test_autoscale_scheduler_routes_to_scheduler_boundary() {
+  local platform="$TMP_ROOT/autoscale-scheduler-platform"
+  local log="$TMP_ROOT/autoscale-scheduler.log"
+  make_fake_platform "$platform"
+  : > "$log"
+
+  run_ctl "$platform" "$log" autoscale enable example/repo
+  run_ctl "$platform" "$log" autoscale status example/repo --json
+  run_ctl "$platform" "$log" autoscale disable example/repo
+
+  assert_eq \
+    $'autoscale-scheduler:enable example/repo\nautoscale-scheduler:status example/repo --json\nautoscale-scheduler:disable example/repo' \
+    "$(cat "$log")" \
+    "autoscale enable/status/disable devem usar apenas o boundary do scheduler"
+  pass "autoscale scheduler preserva repo/flags e não toca lifecycle diretamente"
+}
+
 main() {
   test_exact_runner_and_group_routing
   test_logs_follow_requires_exact_runner
@@ -226,6 +251,7 @@ main() {
   test_default_targets_are_explicit
   test_autoscale_plan_routes_to_read_only_planner
   test_autoscale_run_once_routes_to_governed_controller
+  test_autoscale_scheduler_routes_to_scheduler_boundary
   printf '\nContratos de routing/lifecycle passaram.\n'
 }
 

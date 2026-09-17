@@ -51,6 +51,12 @@ if tool == 'gh':
     print(json.dumps(payload)); sys.exit(0)
 if tool == 'systemctl':
     if data.get('systemd_fail'): sys.exit(1)
+    if args[:1] == ['--user']:
+        assert args[1] == 'show', args
+        print('UnitFileState=disabled')
+        print('ActiveState=inactive')
+        print('NextElapseUSecRealtime=n/a')
+        sys.exit(0)
     if args[0] == 'list-unit-files':
         for name in data['services']: print(name, 'disabled')
         sys.exit(0)
@@ -134,7 +140,9 @@ class CapacityContracts(unittest.TestCase):
             if call[0] == 'gh':
                 self.assertTrue(call[1:3] == ['repo', 'view'] or call[1:4] == ['api', '--method', 'GET'], call)
             elif call[0] == 'systemctl':
-                self.assertIn(call[1], ('show', 'list-unit-files'))
+                self.assertTrue(
+                    call[1] in ('show', 'list-unit-files') or call[1:3] == ['--user', 'show'], call
+                )
             else:
                 self.assertEqual(call, ['git', 'remote', 'get-url', 'origin'])
         return result.stdout if text else json.loads(result.stdout)
@@ -171,6 +179,9 @@ class CapacityContracts(unittest.TestCase):
         self.assertEqual(result['capacity']['counts']['available_now'], 1)
         self.assertEqual(result['queue']['jobs'][0]['capacity_status'], 'available_now')
         self.assertEqual(result['repository']['match_key'], 'example/mixedcase')
+        self.assertIn('scheduler', result)
+        self.assertEqual(result['scheduler']['interval_seconds'], 60)
+        self.assertFalse(result['scheduler']['enabled'])
         output = self.invoke('capacity', '.', text=True)
         self.assertIn('available now=1', output)
         self.assertIn('Example/MixedCase', output)

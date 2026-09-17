@@ -192,7 +192,7 @@ class ProvisionRunOnceContracts(unittest.TestCase):
         self.provision_calls.append((repository, target, policy["max_local_runners"]))
         return {"status": "ok", "code": "PROVISION_ADD_COMPLETED", "exit_code": 0}
 
-    def run(self, snapshots, **kwargs):
+    def run_controller(self, snapshots, **kwargs):
         return run_once(
             ".",
             enabled=True,
@@ -220,7 +220,7 @@ class ProvisionRunOnceContracts(unittest.TestCase):
         self.seed_pressure()
         absent = self.snapshot()
         ready = self.snapshot(provisioned=True)
-        result, code = self.run([absent, absent, ready])
+        result, code = self.run_controller([absent, absent, ready])
 
         self.assertEqual(code, 0)
         self.assertEqual(result["decision"], "PROVISION_LOCAL")
@@ -244,7 +244,7 @@ class ProvisionRunOnceContracts(unittest.TestCase):
         self.seed_pressure(jobs=3)
         absent = self.snapshot(jobs=3)
         ready = self.snapshot(jobs=3, provisioned=True)
-        result, code = self.run([absent, absent, ready])
+        result, code = self.run_controller([absent, absent, ready])
 
         self.assertEqual(code, 0)
         self.assertEqual(len(self.provision_calls), 1)
@@ -260,7 +260,9 @@ class ProvisionRunOnceContracts(unittest.TestCase):
             self.provision_calls.append((repository, target, policy["max_local_runners"]))
             return {"status": "inconclusive", "code": "PROVISION_PARTIAL", "exit_code": 1}
 
-        first, first_code = self.run([absent, absent, absent], provision_fn=uncertain)
+        first, first_code = self.run_controller(
+            [absent, absent, absent], provision_fn=uncertain
+        )
         self.assertEqual(first_code, 3)
         self.assertEqual(first["action_state"], "started")
         self.assertEqual(len(self.provision_calls), 1)
@@ -271,7 +273,7 @@ class ProvisionRunOnceContracts(unittest.TestCase):
         def forbidden(*_args):
             self.fail("started PROVISION_LOCAL must not call add again")
 
-        second, second_code = self.run(
+        second, second_code = self.run_controller(
             [second_absent, second_absent], provision_fn=forbidden
         )
         self.assertEqual(second_code, 3)
@@ -283,13 +285,13 @@ class ProvisionRunOnceContracts(unittest.TestCase):
         self.seed_pressure()
         absent = self.snapshot()
         ready = self.snapshot(provisioned=True)
-        first, first_code = self.run([absent, absent, ready])
+        first, first_code = self.run_controller([absent, absent, ready])
         self.assertEqual(first_code, 0)
         self.assertEqual(first["decision"], "PROVISION_LOCAL")
 
         self.now += timedelta(seconds=31)
         idle = self.snapshot(observed_at=self.now, provisioned=True, matching=True)
-        second, second_code = self.run([idle, idle])
+        second, second_code = self.run_controller([idle, idle])
         self.assertEqual(second_code, 0)
         self.assertEqual(second["decision"], "START_LOCAL")
         self.assertEqual(second["target"], "runnerops-auto-01")

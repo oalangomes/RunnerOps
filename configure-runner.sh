@@ -19,6 +19,7 @@ PROFILE="auto"
 GROUP="auto"
 ENABLED="true"
 REPLACE=0
+EXACT_NAME="${RUNNEROPS_EXACT_NAME:-}"
 
 usage() {
   cat <<'USAGE'
@@ -315,6 +316,22 @@ done
 validate_profile "$PROFILE"
 ENABLED="$(normalize_bool "$ENABLED")"
 
+# Internal RunnerOps autoscale contract. Manual configure/add keeps its existing
+# auto-increment behavior. In exact mode the requested local identity is immutable.
+if [[ -n "$EXACT_NAME" ]]; then
+  [[ -n "$NAME" ]] || die "RUNNEROPS_EXACT_NAME exige --name"
+  EXACT_NAME="$(normalize_slug "$EXACT_NAME")"
+  REQUESTED_EXACT_NAME="$(normalize_slug "$NAME")"
+  [[ "$REQUESTED_EXACT_NAME" == "$EXACT_NAME" ]] ||
+    die "exact runner name difere de --name: $EXACT_NAME != $REQUESTED_EXACT_NAME"
+  EXACT_CONFIG_PATH="$(realpath -m "$RUNNERS_CONFIG")"
+  EXACT_RUNNER_ROOT="$(realpath -m "$RUNNER_ROOT")"
+  if runner_name_exists "$EXACT_CONFIG_PATH" "$EXACT_RUNNER_ROOT" "$EXACT_NAME"; then
+    echo "[EXACT-NAME-COLLISION] runner=$EXACT_NAME phase=pre-token-consume" >&2
+    die "runner exato já existe: $EXACT_NAME"
+  fi
+fi
+
 TOKEN=""
 if [[ -n "$GITHUB_LINE" ]]; then
   step "Lendo linha copiada do GitHub"
@@ -370,7 +387,11 @@ else
 fi
 
 if [[ "$REPLACE" -eq 0 ]]; then
-  NAME="$(next_available_runner_name "$CONFIG_PATH" "$RUNNER_ROOT" "$REQUESTED_NAME")"
+  if [[ -n "$EXACT_NAME" ]]; then
+    NAME="$REQUESTED_NAME"
+  else
+    NAME="$(next_available_runner_name "$CONFIG_PATH" "$RUNNER_ROOT" "$REQUESTED_NAME")"
+  fi
 fi
 
 # A label exclusiva da instancia acompanha exatamente o identificador/pasta final.
@@ -418,11 +439,18 @@ fi
 step "Criando pasta do runner"
 
 mkdir -p "$RUNNER_ROOT"
-if [[ -d "$RUNNER_DIR" && "$REPLACE" -eq 1 ]]; then
+if [[ -n "$EXACT_NAME" && "$REPLACE" -eq 0 ]]; then
+  if ! mkdir "$RUNNER_DIR" 2>/dev/null; then
+    echo "[EXACT-NAME-COLLISION] runner=$NAME phase=atomic-directory-reservation" >&2
+    die "runner exato deixou de estar disponível: $NAME"
+  fi
+elif [[ -d "$RUNNER_DIR" && "$REPLACE" -eq 1 ]]; then
   echo "Removendo pasta existente: $RUNNER_DIR"
   rm -rf "$RUNNER_DIR"
+  mkdir -p "$RUNNER_DIR"
+else
+  mkdir -p "$RUNNER_DIR"
 fi
-mkdir -p "$RUNNER_DIR"
 
 step "Extraindo tarball"
 

@@ -23,6 +23,7 @@ from autoscale_contracts import (  # noqa: E402 - standalone test entrypoint
 from autoscale_store import (  # noqa: E402
     APPLICATION_ID,
     MIGRATIONS,
+    SCHEMA_VERSION,
     AuditStore,
     Settings,
     database_path,
@@ -202,12 +203,15 @@ class AuditContracts(unittest.TestCase):
     def test_bootstrap_schema_permissions_and_default_path(self):
         with self.store() as store:
             connection = store.connection
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
             self.assertEqual(
                 connection.execute("PRAGMA application_id").fetchone()[0], APPLICATION_ID
             )
             self.assertEqual(
-                connection.execute("SELECT version FROM schema_migrations").fetchone()[0], 1
+                [row[0] for row in connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                )],
+                list(range(1, SCHEMA_VERSION + 1)),
             )
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "delete")
             self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone()[0], 2000)
@@ -598,7 +602,10 @@ sys.meta_path.insert(0, NoSQLite())
         )
         for name in ("runners.sh", "runner-services.sh", "ci-watch.sh"):
             script = platform / name
-            script.write_text('#!/bin/sh\nprintf "legacy-ok\\n"\n')
+            script.write_text('#!/bin/sh\
+printf "legacy-ok\\\
+"\
+')
             script.chmod(0o755)
         env["ACTIONS_RUNNERS_HOME"] = str(platform)
         for args in [

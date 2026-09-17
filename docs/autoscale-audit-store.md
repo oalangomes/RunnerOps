@@ -1,315 +1,376 @@
-# Autoscale audit store — Slice #69
+# Autoscale audit store
 
-The optional audit store records what RunnerOps observed and can retain a supplied
-decision, its reasons, the planned actions and their outcomes. It does not produce
-scaling decisions or perform actions. `capacity` and `autoscale status` remain
-read-only; no polling loop, controller, apply command or cloud provider is added.
-Slice #70 adds a separate read-only planner that may consume retained queue/action
-evidence without writing anything back to this store.
+RunnerOps persists autoscale evidence locally so decisions can be based on observations it actually made instead of reconstructing state from GitHub job age.
 
-## Storage and dependency choice
+The store records four related kinds of evidence:
 
-The database is `RUNNER_STATE_ROOT/autoscale.db`. The existing runtime configuration
-defaults to `${XDG_STATE_HOME:-$HOME/.local/state}/actions-runners/autoscale.db`.
-All existing `actions-runners` config/data/cache/state namespaces are preserved.
-Relative state roots and paths resolving inside the platform checkout are rejected.
+1. exact queue observations;
+2. aggregate capability-pressure qualifications;
+3. deterministic decisions;
+4. governed action state and action events.
 
-The implementation uses Python 3.8+ and its optional `sqlite3` module linked against
-SQLite 3.24+. It requires no separate `sqlite3` executable or external server.
-`platform-doctor` reports the capability; history/explain preflight reports missing
-or unsupported SQLite explicitly. Traditional lifecycle, diagnostics and CI watch
-commands do not import or depend on SQLite. Capacity observation also works without
-the module.
+It is an evidence and audit component. It does not independently decide policy or perform runner lifecycle actions.
 
-Python's [SQLite interface](https://docs.python.org/3/library/sqlite3.html) supplies
-bound SQL parameters, exceptions, transaction control and structured rows directly.
-A subprocess-based SQLite CLI would add a binary dependency and another quoting,
-serialization and error-parsing boundary. No ORM or third-party Python package is
-needed. The implementation uses APIs available in Python 3.8, including explicit
-SQL transaction boundaries rather than newer Python autocommit arguments.
+## Storage boundary
 
-Writers use `BEGIN IMMEDIATE`, foreign keys, `synchronous=FULL`, and bounded
-`busy_timeout`. The journal mode is **DELETE**, deliberately: this slice has short
-transactions and no continuous writer. It allows `mode=ro`/`query_only` readers
-without WAL/SHM creation or maintenance. SQLite's
-[WAL documentation](https://www.sqlite.org/wal.html) explains the sidecars and
-read-only opening constraints. WAL can be reconsidered with measured contention
-in a future controller; it is not necessary for this audit contract.
+The database lives at:
 
-Only an explicit internal writer opens/creates a database and applies migrations.
-Creation uses a private state directory (`0700`) and file (`0600`). The canonical
-`runnerctl init` path creates or tightens `RUNNER_STATE_ROOT` to `0700`, including
-existing RunnerOps state roots created under a permissive umask. The audit writer
-still rejects an unsafe state root when reached outside that initialization path;
-it never weakens the permission check itself. Read commands never create the state
-directory, initialize schema, prune records or repair corruption.
-
-## Schema v1
-
-`PRAGMA user_version=1`, a RunnerOps `application_id`, and `schema_migrations`
-identify the format. `MIGRATIONS[1]` in `autoscale_store.py` is the explicit 0→1
-bootstrap. Schema creation, version advancement and migration receipts commit
-together. Reopen is safe; newer/foreign schemas and failed integrity checks return
-errors. Future migrations must be separate numbered entries, never implicit
-opportunistic column creation on reads.
-
-| Table | Durable purpose |
-| --- | --- |
-| `schema_migrations` | Applied schema version and timestamp |
-| `repository_observations` | One checkpoint per repository: canonical identity, latest observation time, completeness and sanitized digest |
-| `queue_observations` | One row per queued episode, keyed by repository/run/attempt/job/first-seen time; consecutive polls update this row |
-| `decisions` | Immutable validated decision payload, ID, canonical repository, decision time and latest action update time |
-| `actions` | One current record per action ID, linked to a decision by foreign key |
-| `action_events` | Immutable per-state receipts, linked to the action; exact event replay never rolls current state backward |
-
-Repository matching is case-insensitive. Canonical casing is supplied by the
-CapacitySnapshot or decision producer and preserved. The store does not call
-GitHub itself to resolve identity. When a subsequent lookup fails but a known
-`match_key` is available, the prior canonical identity is kept and continuity is
-broken. An unresolved identity without a prior checkpoint is rejected.
-
-## Queue duration means observed samples
-
-Each queued episode contains:
-
-- `observation_id`, canonical repository, `job_id`, `run_id`, `run_attempt`;
-- `first_seen_queued_at`, `last_seen_queued_at`, `observation_count`;
-- `github_created_at`, bounded `required_labels`, `max_gap_seconds`;
-- `ended_at` and `end_reason`, or null while the stored episode remains open.
-
-Consecutive complete observations of the same identity preserve first-seen and
-advance last-seen. The derived `observed_queued_seconds` is **last-seen minus
-first-seen**. It never uses GitHub creation time, adds time since the last poll, or
-claims uninterrupted scheduler wait between samples. A single sample has duration
-zero. The episode can continue across a process restart if samples remain within
-the configured maximum gap.
-
-An episode closes on `left_queue`, `inconclusive_observation`, `observation_gap`, or
-`evidence_changed` (labels/GitHub creation evidence changed). Reruns have distinct
-run attempts and cannot share episodes. A later appearance starts at the new
-observation time. Partial pagination/API failure closes existing episodes and
-does not seed new continuous episodes from a partial job list. Capacity evidence
-may be inconclusive while queue enumeration is complete; that alone does not
-invalidate observed queue membership.
-
-Reads derive `continuous_queued=false` for closed or stale episodes, even if no
-writer has subsequently closed them. The last observed duration remains visible
-as historical evidence. Lowering the gap setting is applied conservatively on
-the next observation; increasing it does not revive a previously stale gap under
-an older episode's limit. A disappeared job is known absent only when the next
-complete observation arrives. No background freshness or retention task exists.
-
-`github_created_at` is optional source evidence. Invalid timestamps become null;
-raw invalid text is discarded. It can include dependency/approval waits and
-must **never alone trigger autoscaling**. `runnerctl autoscale plan` uses retained
-RunnerOps-observed episodes with identity, label, freshness and completeness checks;
-it never substitutes `queue_age_seconds` from CapacitySnapshot as a scaling
-threshold source.
-
-## Planner read path — Slice #70
-
-```bash
-runnerctl autoscale plan .
-runnerctl autoscale plan owner/repo --json
+```text
+RUNNER_STATE_ROOT/autoscale.db
 ```
 
-The planner first obtains a fresh CapacitySnapshot, then reads the existing store
-in SQLite read-only/query-only mode when queue-duration, cooldown or active-burst
-evidence is required. It does not call `observe`, `record_decision`, `record_action`
-or `prune`, and it never creates a missing database.
+The default path is:
 
-The store is optional in the product, but some planner decisions require durable
-cross-poll evidence. This distinction is deliberate:
+```text
+${XDG_STATE_HOME:-$HOME/.local/state}/actions-runners/autoscale.db
+```
 
-- no scoped self-hosted work can produce `WAIT` without a database;
-- matching `available_now` capacity can produce `WAIT` without a database;
-- threshold-dependent scaling requires matching `continuous_queued` evidence;
-- a missing/unreadable/incomplete audit read becomes `INCONCLUSIVE` when that
-  evidence is required, never an invented queue duration;
-- retained `planned`/`started` `BURST_CLOUD` actions provide the conservative
-  active-burst count; started scaling actions provide cooldown evidence.
+RunnerOps uses Python's built-in `sqlite3` module and SQLite 3.24+.
 
-Planner output is an `AutoscalePlan`, not a persisted `Decision` record. `plan`
-therefore does **not** make a subsequent `autoscale explain --decision <plan-id>`
-valid by itself. `explain` only resolves decisions that an internal writer has
-actually stored. A later controller must deliberately project the plan into the
-closed decision-storage contract before recording it; it must not persist the
-public plan payload wholesale.
+Writable access uses:
 
-## Decision and action input contracts
+- `BEGIN IMMEDIATE` transactions;
+- foreign keys;
+- `synchronous=FULL`;
+- bounded `busy_timeout`;
+- DELETE journal mode;
+- a private state directory (`0700`);
+- a private database file (`0600`).
 
-Decision fields are `decision_id`, `timestamp`, `repository`,
-`policy_fingerprint` (`sha256:` plus 64 lowercase hex characters), `decision`,
-`reason_codes`, `requested_capacity_delta`, and `evidence`. Supported decision
-values are `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED`
-and `INCONCLUSIVE`. Slice #70 uses the same decision vocabulary, while persistence
-remains an explicit internal operation.
+Relative state roots, unsafe permissions, and state paths resolving inside the RunnerOps checkout are rejected.
 
-Evidence accepted by the store is a deliberately closed structure:
+Read-only consumers open the database with SQLite `mode=ro` and `query_only=ON`. They never create directories, initialize schema, prune records, repair corruption, or migrate schema.
 
-- `observed_at`, `queue_status` (`complete`/`inconclusive`), `queued_job_count`;
-- `queue`: at most 100 relevant job references, each with run/job/attempt IDs,
-  first/last observed times and `continuous_queued`, optionally labels and
-  `github_created_at`;
-- `capacity`: `available_now`, `busy_capacity`, `provisioned_idle`, `inconclusive`
-  and `active_local_runner_count`;
-- `active_burst_capacity`, reserved for producer-supplied evidence.
+## Schema v2
 
-Counts can be null for unknown evidence. The caller supplies the relevant job
-subset and capacity evidence; the store does not infer policy or invent capacity.
-Decision/evidence time ordering is checked. Decisions are immutable: exact replay
-is a no-op, conflicting payloads under one ID fail with `idempotency_conflict`.
+The current store format is:
 
-The richer #104 planner scope (aggregate pressure windows, qualified label scopes,
-desired local capacity and capacity deficit) is not projected into this v1
-decision-evidence structure. Queue episodes remain durable and can be inspected
-through history, but `autoscale explain` cannot by itself reconstruct the scoped
-capacity arithmetic. A future extension must version the closed allowlist rather
-than attaching arbitrary metadata to a decision record.
+```text
+PRAGMA user_version = 2
+```
 
-An action has `action_id`, `decision_id`, `kind`, `target`, `state`, `timestamp`,
-`started_at`, `finished_at`, `external_id`, and `diagnostic`. Kinds are
-`START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`. Diagnostics contain only a bounded
-uppercase `code` and nullable integer `exit_code`; no free-form message or command
-output is accepted. IDs/targets/provider IDs are bounded identifiers, not URLs
-with credentials or arbitrary JSON. There are at most 100 actions per decision.
+A RunnerOps `application_id` plus `schema_migrations` identifies the database and migration history.
 
-Actions begin `planned`; allowed transitions are planned→started/cancelled and
-started→succeeded/failed/cancelled. Timestamps must agree with the transition.
-The decision, kind and target cannot change. Once present, start time and external
-ID cannot change. Each state receipt is unique; replaying an earlier identical
-receipt does not regress a terminal outcome. A conflicting receipt is rejected.
-An initial decision and its action batch can be written in one transaction.
+Migrations are explicit:
 
-Idempotency survives reopen while records are retained. The latest identical
-repository observation is a no-op. Same-time conflicting observations and older
-observations are rejected, rather than rewinding continuity. Checkpoints replace
-per-poll receipts: historical observation replay is intentionally unsupported.
-After retention removes an ID, indefinite replay deduplication is not promised.
-New input timestamps must lie within the retention window and not in the future;
-there is no automatic stale-action recovery in this slice.
+```text
+v0 → v1  core audit store
+v1 → v2  durable aggregate pressure evidence
+```
 
-## Bounded retention
+The migration to v2 is performed transactionally by a writable `AuditStore`. Existing v1 queue episodes, decisions, actions, and action events are preserved.
 
-Settings come from exported environment variables or the existing machine-local
-`config.env`. Defaults and valid ranges are:
+Read-only commands deliberately do **not** migrate an existing v1 database. Schema mutation belongs to the writer boundary. Once a legitimate autoscale writer opens the store, migration happens before new evidence is accepted.
+
+Newer or foreign schemas, failed integrity checks, and incomplete migration receipts fail closed.
+
+## Tables
+
+| Table | Purpose |
+| --- | --- |
+| `schema_migrations` | Applied schema versions and timestamps |
+| `repository_observations` | Latest canonical repository checkpoint and collection completeness |
+| `queue_observations` | Strict exact-job queue episodes |
+| `pressure_qualifications` | Durable aggregate pressure state per repository + exact normalized capability scope |
+| `pressure_segments` | Explicitly observed time segments that contribute to aggregate proved pressure |
+| `decisions` | Validated deterministic decision records |
+| `actions` | Current governed action state |
+| `action_events` | Immutable per-state action receipts |
+
+Repository matching is case-insensitive while canonical repository casing is preserved.
+
+## Exact queue episodes
+
+Exact queue evidence is keyed by:
+
+```text
+repository
++ run_id
++ run_attempt
++ job_id
++ first_seen_queued_at
+```
+
+An open episode records:
+
+- `first_seen_queued_at`;
+- `last_seen_queued_at`;
+- `observation_count`;
+- optional `github_created_at` provenance;
+- bounded `required_labels`;
+- `max_gap_seconds`;
+- optional end time and end reason.
+
+The proved duration for one exact episode is:
+
+```text
+last_seen_queued_at - first_seen_queued_at
+```
+
+A single sample therefore proves `0s`.
+
+The exact episode never derives its threshold time from GitHub `job.created_at`.
+
+### Exact episode endings
+
+An exact episode closes on:
+
+- `left_queue`;
+- `inconclusive_observation`;
+- `observation_gap`;
+- `evidence_changed`.
+
+Reruns have distinct `run_attempt` values and cannot share an exact episode.
+
+A transient incomplete collection therefore remains visible as a break in exact per-job continuity. Schema v2 does not weaken that contract.
+
+## Aggregate pressure evidence
+
+Autoscaling pressure is broader than one GitHub job identity. Schema v2 adds a separate durable evidence model keyed by:
+
+```text
+repository + exact normalized required-label scope
+```
+
+For example:
+
+```text
+[self-hosted, linux, cpu]
+[self-hosted, linux, gpu]
+```
+
+Those are independent qualifications.
+
+An aggregate qualification is composed of one or more observed segments. The proved duration is the sum of those segments:
+
+```text
+proven_queued_seconds = Σ segment.observed_seconds
+```
+
+Unknown intervals are not segments and therefore cannot increase proved pressure.
+
+Example:
+
+```text
+955s observed
++ 64s unknown
++ 60s observed
+= 1015s proven
+```
+
+not `1079s`.
+
+### Aggregate states
+
+A qualification can be:
+
+```text
+active
+suspended
+ended
+```
+
+An inconclusive observation changes `active → suspended` without advancing any segment.
+
+If the same exact normalized capability scope returns within the configured queue-gap bound, RunnerOps resumes the qualification and starts a new zero-duration segment. Previously proved time is retained.
+
+A confirmed disappearance, excessive observation gap, or evidence/capability change ends or resets the affected qualification.
+
+The full state machine and safety rationale are documented in [autoscale-pressure-evidence.md](autoscale-pressure-evidence.md).
+
+## Planner read paths
+
+RunnerOps has two planner entry paths.
+
+### Governed controller
+
+The controller performs:
+
+```text
+collect
+→ persist observation
+→ read planner evidence
+→ deterministic plan
+```
+
+Its targeted reader returns:
+
+- exact queue episodes;
+- current aggregate pressure qualifications;
+- active burst evidence;
+- latest started scaling action for cooldown.
+
+Because collection and persistence precede planning, this path has a coherent persisted observation timestamp.
+
+### Standalone read-only plan
+
+`runnerctl autoscale plan` intentionally does not write SQLite.
+
+It combines a fresh `CapacitySnapshot` with retained evidence. The #108 temporal-projection rule allows a bounded gap from the latest persisted observation to the fresh snapshot only when an exact current job anchor still proves that the relevant scope is current.
+
+That unpersisted lag never increases proved queue duration.
+
+## Relationship between exact and aggregate evidence
+
+The two evidence models answer different questions.
+
+Exact episodes answer:
+
+> Did this exact GitHub Actions job remain observed as queued?
+
+Aggregate pressure answers:
+
+> How much queue pressure has RunnerOps proved for this exact capability scope?
+
+After a transient unknown observation, a job can have a fresh exact episode while its capability scope resumes previously proved aggregate pressure.
+
+That is intentional and auditable:
+
+```text
+exact identity: reset
+aggregate capability pressure: suspended → resumed
+unknown time: not counted
+```
+
+## Decision persistence
+
+A stored decision uses a deliberately closed contract:
+
+- `decision_id`;
+- `timestamp`;
+- canonical `repository`;
+- policy fingerprint;
+- decision value;
+- stable reason codes;
+- requested capacity delta;
+- bounded evidence projection.
+
+Supported decisions are:
+
+```text
+WAIT
+START_LOCAL
+PROVISION_LOCAL
+BURST_CLOUD
+HOLD
+BLOCKED
+INCONCLUSIVE
+```
+
+Decision replay is idempotent. A conflicting payload under the same decision ID fails with `idempotency_conflict`.
+
+The richer planner scope object is not copied wholesale into the closed Decision v1 evidence payload. Schema v2 makes aggregate qualification independently durable in dedicated pressure tables instead of adding an arbitrary metadata escape hatch to stored decisions.
+
+## Action persistence
+
+Actions support:
+
+```text
+START_LOCAL
+PROVISION_LOCAL
+BURST_CLOUD
+```
+
+States are:
+
+```text
+planned
+started
+succeeded
+failed
+cancelled
+```
+
+Allowed transitions are:
+
+```text
+planned → started | cancelled
+started → succeeded | failed | cancelled
+```
+
+Each action state has an immutable event receipt. Replay of an identical receipt is a no-op; contradictory replay is rejected.
+
+Diagnostics are bounded structured data. RunnerOps does not persist free-form command output, credentials, workflow bodies, or logs through this API.
+
+## Retention
+
+Relevant settings are:
 
 | Variable | Default | Range |
-| --- | --- | --- |
-| `RUNNER_AUTOSCALE_RETENTION_DAYS` | 30 days | 1–3650 |
-| `RUNNER_AUTOSCALE_MAX_RECORDS` | 10000 per principal table | 1–100000 |
-| `RUNNER_AUTOSCALE_QUEUE_GAP_SECONDS` | 300 seconds | 1–86400 |
-| `RUNNER_AUTOSCALE_BUSY_TIMEOUT_MS` | 2000 ms | 1–5000 |
+| --- | ---: | ---: |
+| `RUNNER_AUTOSCALE_RETENTION_DAYS` | 30 | 1–3650 |
+| `RUNNER_AUTOSCALE_MAX_RECORDS` | 10000 | 1–100000 |
+| `RUNNER_AUTOSCALE_QUEUE_GAP_SECONDS` | 300 | 1–86400 |
+| `RUNNER_AUTOSCALE_BUSY_TIMEOUT_MS` | 2000 | 1–5000 |
 
-Pruning runs transactionally before/after writes, or explicitly through the
-internal `prune()` method. Queue episodes expire by last-seen; decision retention
-uses the last action update, so a recent outcome keeps its original decision.
-Expired repository checkpoints are removed. Age limits are supplemented by row
-caps: oldest closed episodes and decision bundles without pending actions can be
-removed earlier. Actions/events cascade with their decision, preserving correlation.
+Retention runs inside writer transactions.
 
-Decisions with `planned`/`started` actions are protected from automatic deletion.
-The incoming decision/checkpoint is also protected from being immediately evicted.
-If protected records exhaust a limit, the write fails with
-`retention_capacity_exhausted` and rolls back, including pruning. Operators must
-resolve pending action records or deliberately change retention/capacity settings;
-the store never executes actions to free space.
+Queue episodes expire by last observed time. Aggregate pressure qualifications and their segments are retained under the same bounded-store intent. Decision retention follows the latest action update so a recent action outcome keeps its originating decision.
 
-Payloads are bounded to 32 KiB, labels to 32×64 characters, and there are at most
-five event receipts per action. The database also has a 64 MiB page limit; a full
-database yields `store_full` with rollback. The transient DELETE rollback journal
-can use additional disk space. Pruning reuses free pages; it does not VACUUM or
-shrink the historical file high-water mark. No endless per-poll snapshots are saved:
-steady queue polls update one checkpoint and the open episode rows.
+Pending `planned`/`started` actions are protected from automatic deletion. If protected state exhausts a configured bound, the writer fails with `retention_capacity_exhausted` instead of silently deleting evidence.
 
-Retention is a policy applied on writes, not a timer; readers can see old retained
-rows until a writer/prune runs. Protected incomplete actions can outlive the age
-window. This is an operational audit store, not a high-frequency metrics database,
-an immutable compliance ledger, or a distributed coordination service.
+The database has a 64 MiB page limit. Payloads and labels are also bounded.
 
-## Security boundary
+## Security model
 
-Decision/action schemas reject unknown fields. CapacitySnapshot input is projected
-to the queue contract, discarding workflow/job names, arbitrary payloads, URLs,
-environment dumps and credentials. It is never stored wholesale. Code/identifier
-fields have length and character allowlists; common credential formats and opaque
-values present in secret-bearing environment variables are rejected before SQL.
-All data values use SQL parameters; SQL errors and rejected values are not echoed.
-The tests inspect actual database bytes for token leakage, not just query results.
+RunnerOps projects CapacitySnapshot data into closed storage contracts instead of storing arbitrary snapshots wholesale.
 
-No string filter can recognize every possible opaque secret. Internal producers
-must pass identifiers/evidence, never credentials disguised as allowed labels or
-IDs. There is no arbitrary metadata escape hatch. Future payload extensions must
-extend the allowlist and tests explicitly. The database is private local state,
-not encrypted storage; OS permissions are part of its boundary. Registration
-tokens, GH_TOKEN, cloud credentials, workflow bodies and logs have no storage API.
+The store rejects unknown decision/action fields and common secret-bearing values. SQL values use bound parameters. Registration tokens, `GH_TOKEN`, cloud credentials, workflow bodies, environment dumps, and logs have no storage API.
 
-## Read CLI and output v1
+This is local operational state, not encrypted secret storage. OS permissions are part of the security boundary.
+
+## Public read commands
 
 ```bash
 runnerctl autoscale history --since 24h
 runnerctl autoscale history --since 24h --json
-runnerctl autoscale explain --decision decision-example
-runnerctl autoscale explain --decision decision-example --json
+runnerctl autoscale explain --decision <id>
+runnerctl autoscale explain --decision <id> --json
 ```
 
-`--since` accepts a positive integer with `s`, `m`, `h` or `d` (up to 3650 days).
-Omitted means retained history. History filters decisions by their latest action
-update and queue episodes by last-seen. Results are ordered by descending time,
-then ID, with a public limit of 100 per section and explicit `truncated`. Internal
-readers can request up to 1000; `explain` retrieves a selected decision regardless
-of history truncation. Explain contains all its bounded actions and event receipts.
+These commands are read-only.
 
-History JSON contains `schema_version: 1`, `kind: AutoscaleHistory`, `status: ok`,
-`since` (UTC/null), `decisions`, `queue_observations`, `limit`, and `truncated`.
-Decisions include the validated payload plus `updated_at`. Queue rows include
-the episode fields above plus derived `continuous_queued`/`observed_queued_seconds`.
-Explain contains `schema_version: 1`, `kind: AutoscaleExplanation`, `status: ok`,
-`decision`, and `actions`; each action includes its ordered `events`.
+`history` exposes persisted decisions and exact queue episodes. Aggregate pressure is primarily consumed through planner evidence and is deliberately kept separate from the existing public History v1 response for this slice.
 
-Runtime errors use `{schema_version: 1, kind: AutoscaleAuditError, status: error,
-error: CODE}` with exit code `3`. Codes include `store_missing`,
-`store_invalid_or_unreadable`, `store_corrupt`, `unsupported_schema`, `store_busy`,
-`store_full`, `decision_not_found`, `sqlite_capability_unavailable`,
-`sqlite_version_unsupported`, `invalid_settings`, and permission/path errors.
-Success is `0`; argument errors are `2`. Shell dispatch errors (missing Python/helper
-or unsupported autoscale subcommand) retain the existing `runnerctl` exit code `1`.
-Versioned JSON supports additive fields; incompatible meanings require a new version.
+`explain` resolves only decisions actually persisted by a writer. A standalone `autoscale plan` result is not automatically an explainable stored decision.
 
-## Internal writer API and demonstration
+Runtime errors use structured error codes and exit `3`; argument errors use exit `2`.
 
-There is intentionally no public `record`, `run`, `enable` or `apply` command.
-An internal producer can explicitly persist a CapacitySnapshot:
+## Internal writer contract
 
-```bash
-# From a RunnerOps checkout; loads the existing machine-local state configuration.
-source ./runner-runtime-env.sh
-python3 -B - <<'PY'
+The writer is intentionally internal. A simplified observation flow is:
+
+```python
 from capacity import snapshot
 from autoscale_store import AuditStore
 
 observed = snapshot("example/project")
 with AuditStore(writable=True) as store:
     store.observe(observed)
-PY
 ```
 
-Repeating the explicit capture later advances last-seen for jobs still queued
-within the permitted gap. It never calls runner lifecycle or provisions anything.
-`AuditStore()` without `writable=True` only reads an existing database.
-`record_decision(payload, actions=[...])`, `record_action(payload)` and `prune()`
-are internal methods for later producers and current tests; they do not make
-policy decisions. Direct Python consumers should also use `-B` so imports do not
-create bytecode files in the checkout.
+One observation transaction updates:
 
-The executable, credential-free demonstration is
-`python3 -B tests/test-autoscale-audit-contracts.py`. It uses temporary state to
-prove two-poll first/last-seen durability, disappearance, reruns, gaps, decisions,
-action outcomes, JSON/human CLI reads, idempotency, migrations, real SQL rollback,
-retention saturation and operation of traditional commands without SQLite.
-No test writes the actual machine registry or production audit database.
+```text
+repository checkpoint
++ exact queue episodes
++ aggregate pressure state/segments
+```
 
-Before the mutating controller in #71 ships, revisit polling cadence/gap policy,
-crash recovery of pending actions, and measured lock contention. These are
-deliberately not implemented by the read-only planner; #71/#73/#72 remain separate
-work.
+or rolls the entire change back.
+
+## Validation
+
+The SQLite contracts include:
+
+```text
+tests/test-autoscale-audit-contracts.py
+tests/test-autoscale-pressure-contracts.py
+tests/test-autoscale-pressure-planner-contracts.py
+```
+
+They exercise real SQLite transactions, migration, rollback, idempotency, retention, permissions, exact queue semantics, resumable pressure, process restart, scope isolation, and planner consumption.
+
+The governing invariant is:
+
+> Persist what RunnerOps observed, preserve what it proved, and fail closed on what it does not know.

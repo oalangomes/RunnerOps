@@ -150,7 +150,7 @@ class ReadOnlyPlanTimingContracts(unittest.TestCase):
         self.assertEqual(len(aggregate), 1)
         row = aggregate[0]
         self.assertEqual(row["last_seen_queued_at"], "2026-09-10T11:59:30.000000+00:00")
-        self.assertEqual(row["current_observed_at"], "2026-09-10T12:00:00.000000+00:00")
+        self.assertEqual(row["current_observed_at"], self.snapshot_at)
         self.assertEqual(row["read_only_projection_lag_seconds"], 30)
         # 11:50 -> 11:59:30 is 570s. The 30s unknown lag is not counted.
         self.assertEqual(row["observed_queued_seconds"], 570)

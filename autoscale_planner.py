@@ -13,7 +13,7 @@ from pathlib import Path
 
 import capacity
 from autoscale_contracts import AuditError, canonical_repo, label_list, timestamp
-from autoscale_pressure import read_pressure_evidence
+from autoscale_runtime import read_planner_evidence
 from autoscale_provision import (
     ProvisionPolicyError,
     load_provision_policy,
@@ -208,49 +208,7 @@ def load_audit_evidence(repository):
         from autoscale_store import AuditStore
 
         with AuditStore() as store:
-            history = store.history(limit=1000)
-            if history.get("truncated"):
-                return _empty_audit("inconclusive", "audit_history_truncated")
-
-            queue = [
-                row
-                for row in history["queue_observations"]
-                if row.get("repository", "").casefold() == repository.casefold()
-            ]
-            with store._read_transaction():
-                aggregate_pressure = read_pressure_evidence(
-                    store.connection,
-                    canonical_repo(repository).lower(),
-                    current_only=True,
-                    limit=1000,
-                )
-
-            active_burst = 0
-            started = []
-            for decision in history["decisions"]:
-                if decision.get("repository", "").casefold() != repository.casefold():
-                    continue
-                explanation = store.explain(decision["decision_id"])
-                for action in explanation["actions"]:
-                    if action.get("kind") == "BURST_CLOUD" and action.get("state") in (
-                        "planned",
-                        "started",
-                    ):
-                        active_burst += 1
-                    if action.get("started_at") is not None:
-                        started.append((timestamp(action["started_at"]), action["kind"]))
-
-        latest_started = max(started, default=(None, None))
-
-        return {
-            "status": "complete",
-            "error": None,
-            "queue": queue,
-            "aggregate_pressure": aggregate_pressure,
-            "active_burst_capacity": active_burst,
-            "last_scaling_action_started_at": latest_started[0],
-            "last_scaling_action_kind": latest_started[1],
-        }
+            return read_planner_evidence(store, repository)
     except ImportError:
         return _empty_audit("inconclusive", "sqlite_capability_unavailable")
     except AuditError as exc:

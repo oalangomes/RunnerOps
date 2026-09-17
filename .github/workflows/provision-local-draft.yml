@@ -3,12 +3,15 @@ name: Validate local provisioning draft
 on:
   pull_request:
     paths:
+      - autoscale_controller.py
       - autoscale_planner.py
       - autoscale_provision.py
       - autoscale_provision_controller.py
+      - tests/test-autoscale-controller-contracts.py
       - tests/test-autoscale-provision-contracts.py
       - tests/test-autoscale-provision-controller-contracts.py
       - tests/test-autoscale-provision-planner-contracts.py
+      - tests/test-autoscale-provision-run-once-contracts.py
       - tests/test-autoscale-planner-contracts.py
       - tests/test-autoscale-pressure-planner-contracts.py
       - .github/workflows/provision-local-draft.yml
@@ -27,12 +30,15 @@ jobs:
       - name: Validate syntax
         run: |
           python3 -B -m py_compile \
+            autoscale_controller.py \
             autoscale_planner.py \
             autoscale_provision.py \
             autoscale_provision_controller.py \
+            tests/test-autoscale-controller-contracts.py \
             tests/test-autoscale-provision-contracts.py \
             tests/test-autoscale-provision-controller-contracts.py \
             tests/test-autoscale-provision-planner-contracts.py \
+            tests/test-autoscale-provision-run-once-contracts.py \
             tests/test-autoscale-planner-contracts.py \
             tests/test-autoscale-pressure-planner-contracts.py
       - name: Run provisioning and planner contracts
@@ -40,5 +46,7 @@ jobs:
           python3 -B tests/test-autoscale-provision-contracts.py
           python3 -B tests/test-autoscale-provision-controller-contracts.py
           python3 -B tests/test-autoscale-provision-planner-contracts.py
+          python3 -B tests/test-autoscale-provision-run-once-contracts.py
+          python3 -B tests/test-autoscale-controller-contracts.py
           python3 -B tests/test-autoscale-planner-contracts.py
           python3 -B tests/test-autoscale-pressure-planner-contracts.py

@@ -326,6 +326,9 @@ def _audit_queue_row(row, observed_dt):
         )
     except (AuditError, KeyError, TypeError, ValueError):
         return None
+    max_gap_seconds = row.get("max_gap_seconds")
+    if type(max_gap_seconds) is not int or max_gap_seconds <= 0:
+        max_gap_seconds = None
     return {
         "job_id": identity[2],
         "run_id": identity[0],
@@ -337,6 +340,7 @@ def _audit_queue_row(row, observed_dt):
         "required_labels": sorted(set(labels)),
         "github_created_at": created_at,
         "observed_queued_seconds": int((last_dt - first_dt).total_seconds()),
+        "max_gap_seconds": max_gap_seconds,
     }
 
 
@@ -376,23 +380,34 @@ def _queue_evidence(jobs, audit, observed_at):
 
 
 def _aggregate_queue_evidence(jobs, audit, observed_at):
-    """Prove a continuous pressure window per exact normalized label scope.
+    """Prove sustained pressure per exact normalized label scope.
 
-    Episodes may hand off from one queued job to another at the same RunnerOps
-    observation.  Only touching/overlapping observed intervals are joined, so a
-    real pressure disappearance or observation gap resets the aggregate clock.
+    A governed controller observes and persists at the same timestamp before it
+    plans. The standalone read-only planner does not. For that path, a fresh
+    CapacitySnapshot may be slightly newer than the latest persisted queue
+    observation. We allow a bounded projection only when an exact job identity
+    from the persisted episode is still present in the fresh snapshot and the
+    retained row is still marked continuous/fresh by the audit reader.
+
+    The unobserved T0->T1 lag is never added to observed queued duration.
     """
     if audit.get("status") != "complete" or not isinstance(audit.get("queue"), list):
         return None
     try:
         observed_dt = datetime.fromisoformat(observed_at)
-        scopes = {_normalized_label_scope(job["required_labels"]) for job in jobs}
-    except (KeyError, TypeError):
+        current_by_scope = {}
+        for job in jobs:
+            scope = _normalized_label_scope(job["required_labels"])
+            identity = _queue_identity(job)
+            if scope is None or identity is None:
+                return None
+            current_by_scope.setdefault(scope, set()).add(identity)
+    except (KeyError, TypeError, ValueError):
         return None
-    if not scopes or any(not scope for scope in scopes):
+    if not current_by_scope:
         return None
 
-    episodes = {scope: [] for scope in scopes}
+    episodes = {scope: [] for scope in current_by_scope}
     for row in audit["queue"]:
         normalized = _audit_queue_row(row, observed_dt)
         if normalized is None:
@@ -403,17 +418,30 @@ def _aggregate_queue_evidence(jobs, audit, observed_at):
 
     result = []
     for scope, rows in episodes.items():
-        # The aggregate must reach the current observation through at least one
-        # still-continuous exact job; closed history alone can never be stale
-        # pressure evidence.
+        current_identities = current_by_scope[scope]
         current = [
             row
             for row in rows
             if row["continuous_queued"]
-            and datetime.fromisoformat(row["last_seen_queued_at"]) == observed_dt
+            and (row["run_id"], row["run_attempt"], row["job_id"]) in current_identities
         ]
         if not current:
             continue
+
+        persisted_dt = max(datetime.fromisoformat(row["last_seen_queued_at"]) for row in current)
+        if persisted_dt > observed_dt:
+            return None
+        lag_seconds = int((observed_dt - persisted_dt).total_seconds())
+        anchor_rows = [
+            row
+            for row in current
+            if datetime.fromisoformat(row["last_seen_queued_at"]) == persisted_dt
+        ]
+        if lag_seconds > 0:
+            gaps = [row["max_gap_seconds"] for row in anchor_rows]
+            if not gaps or any(gap is None for gap in gaps) or lag_seconds > min(gaps):
+                continue
+
         merged = []
         for row in sorted(
             rows,
@@ -436,14 +464,16 @@ def _aggregate_queue_evidence(jobs, audit, observed_at):
                 merged[-1] = (merged[-1][0], max(merged[-1][1], observed_end))
             else:
                 merged.append((first, observed_end))
-        window = next((item for item in reversed(merged) if item[1] == observed_dt), None)
+        window = next((item for item in reversed(merged) if item[1] == persisted_dt), None)
         if window is None:
             continue
         result.append(
             {
                 "required_labels": list(scope),
                 "first_seen_queued_at": timestamp(window[0].isoformat()),
-                "last_seen_queued_at": observed_at,
+                "last_seen_queued_at": timestamp(persisted_dt.isoformat()),
+                "current_observed_at": observed_at,
+                "read_only_projection_lag_seconds": lag_seconds,
                 "observed_queued_seconds": int((window[1] - window[0]).total_seconds()),
                 "current_observed_job_ids": sorted(row["job_id"] for row in current),
             }
@@ -555,6 +585,9 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
         "audit": {
             "status": audit.get("status", "inconclusive"),
             "error": audit.get("error"),
+            "snapshot_observed_at": observed_at,
+            "persisted_queue_observed_at": None,
+            "read_only_evidence_lag_seconds": None,
             "last_scaling_action_started_at": audit.get(
                 "last_scaling_action_started_at"
             ),
@@ -652,16 +685,25 @@ def plan(snapshot, policy, host, audit):
 
     aggregate_queue = _aggregate_queue_evidence(pressure_jobs, audit, observed_at)
     if not aggregate_queue:
-        return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
+        return decide("INCONCLUSIVE", "QUEUE_EVIDENCE_NOT_CURRENT")
 
     evidence["queue"] = [
         {
             key: value
             for key, value in row.items()
-            if key not in ("ended_at", "observed_queued_seconds")
+            if key not in ("ended_at", "observed_queued_seconds", "max_gap_seconds")
         }
         for row in observed_queue
     ]
+    latest_persisted = max(row["last_seen_queued_at"] for row in aggregate_queue)
+    evidence["audit"].update(
+        {
+            "persisted_queue_observed_at": latest_persisted,
+            "read_only_evidence_lag_seconds": max(
+                row["read_only_projection_lag_seconds"] for row in aggregate_queue
+            ),
+        }
+    )
     oldest = max(row["observed_queued_seconds"] for row in aggregate_queue)
     qualified_scopes = [
         row
@@ -817,6 +859,15 @@ def render(result):
             scope.get("queue_threshold_seconds", "unknown"),
         )
     )
+    audit = result["evidence"].get("audit", {})
+    if audit.get("read_only_evidence_lag_seconds") is not None:
+        print(
+            "Evidence: persisted={} snapshot={} lag={}s".format(
+                audit.get("persisted_queue_observed_at"),
+                audit.get("snapshot_observed_at"),
+                audit.get("read_only_evidence_lag_seconds"),
+            )
+        )
     print(
         "Read-only plan: no runner lifecycle, provisioning, cloud, or audit-store mutation was performed."
     )

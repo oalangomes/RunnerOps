@@ -98,6 +98,43 @@ last_seen_queued_at - first_seen_queued_at
 as `oldest_observed_queued_seconds`. If required continuity cannot be established,
 the result is `INCONCLUSIVE`; an old `job.created_at` never substitutes for it.
 
+### Read-only temporal projection
+
+`runnerctl autoscale run-once` observes, persists and plans against one coherent
+observation timestamp. The standalone `runnerctl autoscale plan` intentionally does
+not write the audit store, so its fresh `CapacitySnapshot` can be slightly newer
+than the latest persisted queue episode.
+
+For this read-only path RunnerOps can project persisted evidence onto the fresh
+snapshot only when all of the following remain true:
+
+- the retained episode is still marked `continuous_queued` by the bounded audit
+  reader;
+- the exact `(run_id, run_attempt, job_id)` is still queued in the fresh snapshot;
+- its normalized required-label scope is unchanged;
+- the snapshot is not older than persisted evidence;
+- when there is a positive lag, it is within the episode's retained
+  `max_gap_seconds` bound.
+
+The projection never converts the unobserved interval into queue duration. For
+example:
+
+```text
+11:50:00 first persisted queued evidence
+11:59:30 latest persisted queued evidence
+12:00:00 fresh read-only CapacitySnapshot
+```
+
+The planner has **570 seconds of proven queue duration plus a 30-second read-only
+projection lag**. It does not claim 600 seconds of observed queue time. Evidence
+exposes the persisted queue timestamp, fresh snapshot timestamp and lag so this is
+inspectable in JSON and human output.
+
+If the exact identity disappeared, labels changed, the retained episode is stale,
+or the lag exceeds the safe bound, read-only planning fails closed with
+`QUEUE_EVIDENCE_NOT_CURRENT`. Aggregate continuity across a transient unknown
+observation is a separate evidence-lifecycle concern and is not inferred here.
+
 A current job that already has matching `available_now` capacity is not considered
 pressure. If all scoped jobs have available capacity, the plan is `WAIT`. If one
 job has available capacity but another scoped job with different labels does not,
@@ -155,6 +192,7 @@ Public reason codes are uppercase and stable within the v1 contract:
 
 - `NO_SCOPED_QUEUED_WORK`
 - `QUEUE_BELOW_THRESHOLD`
+- `QUEUE_EVIDENCE_NOT_CURRENT`
 - `MATCHING_LOCAL_RUNNER_AVAILABLE`
 - `MATCHING_LOCAL_RUNNER_IDLE`
 - `OBSERVED_QUEUE_THRESHOLD_MET`
@@ -208,8 +246,10 @@ decisions use `ok`. `action` is null for decisions that request no capacity.
 Evidence contains the normalized observation timestamp, queue/capacity facts, host
 headroom, scoped/pressure job IDs, aggregate pressure windows, qualified label
 scopes and job IDs, available/matching capacity, bounded desired local capacity,
-capacity deficit and audit-read status used by the plan. It does not contain
-credentials, workflow bodies or arbitrary command output.
+capacity deficit and audit-read status used by the plan. Read-only temporal
+evidence additionally records `snapshot_observed_at`,
+`persisted_queue_observed_at` and `read_only_evidence_lag_seconds`. It does not
+contain credentials, workflow bodies or arbitrary command output.
 
 The plan ID is a SHA-256-derived identifier over schema version, repository,
 normalized policy and normalized evidence. The public `timestamp` is the source
@@ -253,9 +293,11 @@ closed schema unchanged.
 - no cloud/provider calls or credentials;
 - no SQLite writes, migrations, pruning or database creation;
 - missing/contradictory required evidence fails closed as `INCONCLUSIVE`;
+- read-only projection never counts unknown lag as observed queued duration;
 - burst spending cannot be decided by an LLM;
 - current label/capacity evidence does not claim GitHub scheduler authority.
 
-Focused contracts live in `tests/test-autoscale-planner-contracts.py`. Capacity and
-audit-store contracts remain independent so the planner can be tested as a pure
-function with frozen evidence.
+Focused contracts live in `tests/test-autoscale-planner-contracts.py` and
+`tests/test-autoscale-readonly-plan-timing.py`. Capacity and audit-store contracts
+remain independent so the planner can be tested as a pure function with frozen
+evidence.

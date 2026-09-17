@@ -17,10 +17,9 @@ from autoscale_contracts import (
     label_list,
     timestamp,
 )
+from autoscale_pressure import read_pressure_evidence
 
-# Aggregate pressure needs the short sequence of completed hand-off episodes as
-# well as the current queue. Keep the reader bounded and fail closed, while
-# allowing a busy queue to churn through a normal qualification window.
+# Exact queue evidence remains bounded independently from aggregate scope evidence.
 MAX_PLANNER_QUEUE_ROWS = 1000
 
 
@@ -31,11 +30,9 @@ def _repo_key(repository):
 def read_planner_evidence(store, repository):
     """Read only the retained facts needed by the planner for one repository.
 
-    Unlike ``history(limit=...)``, these queries are repository-scoped and target
-    queue episodes, active actions and the latest started-action event. Completed
-    episodes are retained here only to prove a bounded aggregate pressure window
-    when individual queued jobs churn.
-    Unrelated or old terminal history cannot make controller planning inconclusive.
+    Exact queue episodes preserve per-job audit semantics. Aggregate pressure is a
+    separate v2 durable model whose observed segments can survive a bounded
+    suspended interval without counting unknown time.
     """
 
     repository = canonical_repo(repository)
@@ -52,6 +49,10 @@ def read_planner_evidence(store, repository):
         ).fetchall()
         if len(rows) > MAX_PLANNER_QUEUE_ROWS:
             raise AuditError("planner_evidence_too_large")
+
+        aggregate_pressure = read_pressure_evidence(
+            store.connection, repo_key, current_only=True, limit=MAX_PLANNER_QUEUE_ROWS
+        )
 
         active_action_rows = store.connection.execute(
             """SELECT a.payload
@@ -110,6 +111,7 @@ def read_planner_evidence(store, repository):
                         - instant(item["first_seen_queued_at"])
                     ).total_seconds()
                 ),
+                "max_gap_seconds": item["max_gap_seconds"],
             }
         )
 
@@ -128,6 +130,7 @@ def read_planner_evidence(store, repository):
         "status": "complete",
         "error": None,
         "queue": queue,
+        "aggregate_pressure": aggregate_pressure,
         "active_burst_capacity": active_burst,
         "last_scaling_action_started_at": (
             timestamp(latest_started["timestamp"]) if latest_started is not None else None

@@ -65,6 +65,7 @@ jobs:
           python3 -B -m py_compile \
             capacity.py \
             autoscale_contracts.py \
+            autoscale_pressure.py \
             autoscale_store.py \
             autoscale_audit.py \
             autoscale_planner.py \
@@ -76,6 +77,8 @@ jobs:
             tests/test-capacity-collector-performance.py \
             tests/test-capacity-bom-contract.py \
             tests/test-autoscale-audit-contracts.py \
+            tests/test-autoscale-pressure-contracts.py \
+            tests/test-autoscale-pressure-planner-contracts.py \
             tests/test-autoscale-planner-contracts.py \
             tests/test-autoscale-readonly-plan-timing.py \
             tests/test-autoscale-controller-contracts.py \
@@ -140,6 +143,8 @@ jobs:
           python3 -B tests/test-capacity-collector-performance.py
           python3 -B tests/test-capacity-bom-contract.py
           python3 -B tests/test-autoscale-audit-contracts.py
+          python3 -B tests/test-autoscale-pressure-contracts.py
+          python3 -B tests/test-autoscale-pressure-planner-contracts.py
           python3 -B tests/test-autoscale-planner-contracts.py
           python3 -B tests/test-autoscale-readonly-plan-timing.py
           python3 -B tests/test-autoscale-controller-contracts.py

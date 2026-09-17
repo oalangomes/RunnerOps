@@ -21,8 +21,14 @@ from autoscale_contracts import (
     timestamp,
     utcnow,
 )
+from autoscale_pressure import (
+    PRESSURE_MIGRATION,
+    check_schema as check_pressure_schema,
+    observe_pressure,
+    prune_pressure,
+)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPLICATION_ID = 0x52554E41  # RUNA
 MAX_DB_BYTES = 64 * 1024 * 1024
 MIGRATIONS = {
@@ -54,7 +60,8 @@ MIGRATIONS = {
         action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
         state TEXT NOT NULL, timestamp TEXT NOT NULL, payload TEXT NOT NULL CHECK (length(payload) <= 32768),
         PRIMARY KEY (action_id,state))""",
-    )
+    ),
+    2: PRESSURE_MIGRATION,
 }
 
 
@@ -250,6 +257,7 @@ class AuditStore:
             "action_events",
         ):
             self.connection.execute(f"SELECT * FROM {table} LIMIT 0")
+        check_pressure_schema(self.connection)
         if self.connection.execute("PRAGMA quick_check(1)").fetchone()[0] != "ok":
             raise AuditError("store_corrupt")
         if self.connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
@@ -343,6 +351,7 @@ class AuditStore:
                         None,
                     ),
                 )
+            observe_pressure(self.connection, record, self.settings)
             self._prune(protected_repo=repo)
         return True
 
@@ -474,6 +483,7 @@ class AuditStore:
         self.connection.execute(
             "DELETE FROM queue_observations WHERE last_seen_queued_at<?", (cutoff,)
         )
+        prune_pressure(self.connection, cutoff, self.settings.max_records)
         # Old cursors must not outlive the retention horizon.
         self.connection.execute(
             "DELETE FROM repository_observations WHERE observed_at<? AND (? IS NULL OR repo_key != ?)",

@@ -59,17 +59,18 @@ RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once owner/repo --json
 Accepted true values are `1`, `true`, `yes` and `on`; false accepts `0`, `false`,
 `no` and `off`.
 
-## One-shot first
+## One-shot controller, continuously scheduled
 
-This delivery exposes `run-once` only. Continuous polling, a systemd autoscaler
-service and public `autoscale enable/disable` commands are intentionally deferred.
-The first mutating slice proves the safety boundary before operationalizing it.
+`run-once` remains the sole mutating controller boundary. Issue #102 operationalizes
+it with a per-repository systemd **user** timer; it does not introduce a daemon or
+another controller loop. See [the scheduler guide](autoscale-scheduler.md) for
+`runnerctl autoscale enable/status/disable`, cadence and diagnostics.
 
 The controller is therefore limited to:
 
 - one repository per invocation;
 - at most one exact local runner start;
-- no hidden background loop;
+- no hidden background loop outside the explicit user timer;
 - no automatic `runnerctl add`;
 - no provider/cloud execution.
 

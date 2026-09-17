@@ -36,6 +36,7 @@ bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh 
 
 bash tests/test-runnerctl-contracts.sh
 bash tests/test-runnerctl-routing-contracts.sh
+python3 -B tests/test-autoscale-scheduler-contracts.py
 bash tests/test-runner-package-contracts.sh
 bash tests/test-ci-watch-contracts.sh
 bash tests/test-agent-skills-contracts.sh

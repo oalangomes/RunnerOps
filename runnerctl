@@ -56,7 +56,9 @@ Repository operations:
 
 Capacity and autoscale:
   runnerctl capacity [owner/repo|.] [--json]
+  runnerctl autoscale enable [owner/repo|.]
   runnerctl autoscale status [owner/repo|.] [--json]
+  runnerctl autoscale disable [owner/repo|.]
   runnerctl autoscale plan [owner/repo|.] [--json]
   runnerctl autoscale run-once [owner/repo|.] [--json]
   runnerctl autoscale history [--since DURATION] [--json]
@@ -203,17 +205,23 @@ EOF
     autoscale)
       cat <<'EOF'
 Uso:
+  runnerctl autoscale enable [owner/repo|.]
   runnerctl autoscale status [owner/repo|.] [--json]
+  runnerctl autoscale disable [owner/repo|.]
   runnerctl autoscale plan [owner/repo|.] [--json]
   runnerctl autoscale run-once [owner/repo|.] [--json]
   runnerctl autoscale history [--since DURATION] [--json]
   runnerctl autoscale explain --decision ID [--json]
 
-status/plan são read-only. run-once é governado por RUNNER_AUTOSCALE_ENABLED=true
-e executa somente ações locais explicitamente suportadas.
+enable/disable gerenciam somente um timer systemd de usuário. status/plan são
+read-only. run-once é governado por RUNNER_AUTOSCALE_ENABLED=true e executa
+somente ações locais explicitamente suportadas.
 
 Exemplos:
   runnerctl autoscale plan .
+  runnerctl autoscale enable .
+  runnerctl autoscale status .
+  runnerctl autoscale disable .
   RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
 EOF
       ;;
@@ -358,6 +366,7 @@ RUNNEROPS_SYSTEMCTL_HELPER="${RUNNEROPS_SYSTEMCTL_HELPER:-/usr/local/libexec/run
 export ACTIONS_RUNNERS_HOME="$PLATFORM_HOME"
 # shellcheck source=/dev/null
 source "$PLATFORM_HOME/runner-runtime-env.sh"
+export RUNNERCTL_EXECUTABLE="$SCRIPT_PATH"
 
 normalize_repo() {
   local value="${1:-}"
@@ -1499,10 +1508,17 @@ case "$cmd" in
     if [[ "$cmd" == "autoscale" ]]; then
       sub="${1:-}"
       case "$sub" in
-        status|plan|run-once|history|explain) ;;
-        *) die "autoscale aceita status, plan, run-once, history ou explain" ;;
+        enable|disable|status|plan|run-once|history|explain) ;;
+        *) die "autoscale aceita enable, disable, status, plan, run-once, history ou explain" ;;
       esac
       shift
+      if [[ "$sub" == "enable" || "$sub" == "disable" || "$sub" == "status" ]]; then
+        [[ -f "$PLATFORM_HOME/autoscale_scheduler.py" ]] || die "autoscale_scheduler.py ausente em: $PLATFORM_HOME"
+        command -v python3 >/dev/null 2>&1 || die "autoscale $sub exige python3 3.8+"
+        python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+          die "autoscale $sub exige python3 3.8+"
+        exec python3 -B "$PLATFORM_HOME/autoscale_scheduler.py" "$sub" "$@"
+      fi
       if [[ "$sub" == "plan" ]]; then
         [[ -f "$PLATFORM_HOME/autoscale_planner.py" ]] || die "autoscale_planner.py ausente em: $PLATFORM_HOME"
         command -v python3 >/dev/null 2>&1 || die "autoscale plan exige python3 3.8+"

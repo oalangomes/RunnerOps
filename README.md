@@ -59,6 +59,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
 | Planejar autoscale (read-only) | `runnerctl autoscale plan .` |
 | Aplicar `START_LOCAL` governado | `runnerctl autoscale run-once .` |
+| Agendar autoscale contínuo | `runnerctl autoscale enable .` |
 | Histórico/auditoria de autoscale | `runnerctl autoscale history`, `runnerctl autoscale explain` |
 | Agent Skills | `runnerctl skills list/install` |
 | Autorização de runtime | `runnerctl platform-authorize` |
@@ -421,6 +422,7 @@ Política principal:
 
 ```properties
 RUNNER_AUTOSCALE_QUEUE_THRESHOLD_SECONDS=300
+RUNNER_AUTOSCALE_INTERVAL_SECONDS=60
 RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=1
 RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB=1024
 RUNNER_AUTOSCALE_MAX_CPU_PERCENT=
@@ -456,9 +458,39 @@ start existente daquele runner. O sucesso é provado por evidência estruturada 
 o exit code de `start` isoladamente não prova sucesso.
 
 `RUNNER_AUTOSCALE_ENABLED` é `false` por padrão. Desabilitado, `run-once` não
-coleta snapshot, não cria SQLite/lock e não toca no lifecycle. Esta primeira
-entrega mutável é one-shot; daemon contínuo e `enable/disable` permanecem fora
-até este caminho ser provado.
+coleta snapshot, não cria SQLite/lock e não toca no lifecycle.
+
+### Agendar autoscale contínuo
+
+```bash
+runnerctl autoscale enable .
+runnerctl autoscale status .
+runnerctl autoscale disable .
+```
+
+`enable` instala e ativa um serviço e timer **systemd de usuário** por repositório
+canônico. O timer roda a cada 60 segundos por padrão e só agenda o controller
+governado já existente como `RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale
+run-once owner/repo --json`. Ele não inicia runners durante o enable, não chama
+`ensure .` e não executa scale-in. A única mutação automática continua sendo
+`START_LOCAL` para um runner local exato; todos os demais outcomes continuam
+no-op.
+
+Defina `RUNNER_AUTOSCALE_INTERVAL_SECONDS` no `config.env` para ajustar a
+cadência. O valor deve ser positivo e estritamente menor que
+`RUNNER_AUTOSCALE_QUEUE_GAP_SECONDS` (300s por padrão), preservando a
+continuidade de observação da fila. `runnerctl ensure .` permanece uma ativação
+manual explícita, independente do scheduler.
+
+`autoscale status` preserva os campos de fila/capacidade existentes e acrescenta
+`scheduler` no JSON, com estado, unidades, intervalo e próxima execução. Para
+inspecionar execuções agendadas, use:
+
+```bash
+journalctl --user -u "$(runnerctl autoscale status . --json | jq -r .scheduler.service)" --since 30m
+```
+
+Veja o [guia operacional do scheduler](docs/autoscale-scheduler.md).
 
 Veja [o contrato do controller governado](docs/autoscale-controller.md).
 

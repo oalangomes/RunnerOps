@@ -2,9 +2,11 @@
 """End-to-end planner contract for resumable aggregate pressure (#107)."""
 
 import json
+import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from autoscale_contracts import timestamp  # noqa: E402
-from autoscale_planner import plan  # noqa: E402
+from autoscale_planner import load_audit_evidence, plan  # noqa: E402
 from autoscale_runtime import MAX_PLANNER_QUEUE_ROWS, read_planner_evidence  # noqa: E402
 from autoscale_store import AuditStore, Settings  # noqa: E402
 
@@ -223,6 +225,12 @@ class ResumedPressurePlannerContracts(unittest.TestCase):
 
         self.assertEqual(audit["status"], "complete")
         self.assertEqual([row["job_id"] for row in audit["queue"]], [999999])
+
+        with patch.dict(os.environ, {"RUNNER_STATE_ROOT": str(self.path.parent)}):
+            readonly = load_audit_evidence("Example/Resume")
+        self.assertEqual(readonly["status"], "complete")
+        self.assertEqual(readonly["error"], None)
+        self.assertEqual([row["job_id"] for row in readonly["queue"]], [999999])
 
 
 

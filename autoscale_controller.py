@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Governed autoscale controller for exact local START_LOCAL activation.
+"""Governed autoscale controller for exact local scaling actions.
 
-Slice #71 intentionally applies only pre-provisioned local capacity. It never
-registers a runner and never contacts a cloud provider.
+START_LOCAL activates one existing registration. PROVISION_LOCAL may create one
+new bounded local registration through the existing runnerctl add boundary.
+Cloud execution remains out of scope.
 """
 
 import argparse
@@ -21,6 +22,12 @@ from pathlib import Path
 import capacity
 from autoscale_contracts import AuditError, action_record, timestamp, utcnow
 from autoscale_planner import PolicyError, collect_host_facts, load_policy, plan, policy_fingerprint
+from autoscale_provision import provision_exact
+from autoscale_provision_controller import (
+    pending_provision_actions,
+    planned_action as planned_provision_action,
+    reconcile_or_apply as reconcile_or_apply_provision,
+)
 from autoscale_runtime import decision_from_plan, pending_start_actions, read_planner_evidence
 from autoscale_store import AuditStore, database_path
 
@@ -117,7 +124,8 @@ def _target_record(snapshot, target, expected_registration_id=None):
     ):
         return None
     matches = [
-        runner for runner in snapshot.get("capacity", {}).get("runners", [])
+        runner
+        for runner in snapshot.get("capacity", {}).get("runners", [])
         if runner.get("scope") == "local" and runner.get("name") == target
     ]
     if len(matches) != 1:
@@ -127,7 +135,10 @@ def _target_record(snapshot, target, expected_registration_id=None):
     if (
         runner.get("enabled") is not True
         or registration_id is None
-        or (expected_registration_id is not None and str(registration_id) != str(expected_registration_id))
+        or (
+            expected_registration_id is not None
+            and str(registration_id) != str(expected_registration_id)
+        )
     ):
         return None
     return runner
@@ -178,6 +189,7 @@ def _target_state(snapshot, target, expected_registration_id=None):
 
 
 def _action(plan_result, state, at, *, previous=None, diagnostic=None, exit_code=None, external_id=None):
+    """Build one START_LOCAL action receipt."""
     target = plan_result["action"]["target"]
     started_at = previous["started_at"] if previous else None
     finished_at = None
@@ -189,18 +201,20 @@ def _action(plan_result, state, at, *, previous=None, diagnostic=None, exit_code
         finished_at = at
     if previous is not None:
         external_id = previous["external_id"]
-    return action_record({
-        "action_id": _action_id(plan_result["decision_id"], target),
-        "decision_id": plan_result["decision_id"],
-        "kind": "START_LOCAL",
-        "target": target,
-        "state": state,
-        "timestamp": at,
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "external_id": external_id,
-        "diagnostic": {"code": diagnostic, "exit_code": exit_code},
-    })
+    return action_record(
+        {
+            "action_id": _action_id(plan_result["decision_id"], target),
+            "decision_id": plan_result["decision_id"],
+            "kind": "START_LOCAL",
+            "target": target,
+            "state": state,
+            "timestamp": at,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "external_id": external_id,
+            "diagnostic": {"code": diagnostic, "exit_code": exit_code},
+        }
+    )
 
 
 def _transition_existing(action, state, at, diagnostic, exit_code=None):
@@ -208,14 +222,16 @@ def _transition_existing(action, state, at, diagnostic, exit_code=None):
     if state == "started" and started_at is None:
         started_at = at
     finished_at = at if state in ("succeeded", "failed", "cancelled") else None
-    return action_record({
-        **action,
-        "state": state,
-        "timestamp": at,
-        "started_at": started_at,
-        "finished_at": finished_at,
-        "diagnostic": {"code": diagnostic, "exit_code": exit_code},
-    })
+    return action_record(
+        {
+            **action,
+            "state": state,
+            "timestamp": at,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "diagnostic": {"code": diagnostic, "exit_code": exit_code},
+        }
+    )
 
 
 def start_exact_runner(target):
@@ -258,7 +274,10 @@ def verify_exact_runner(
             return True, "VERIFIED_ONLINE"
         saw_inconclusive = saw_inconclusive or state == "inconclusive"
         if time.monotonic() >= deadline:
-            return False, "EVIDENCE_INCONCLUSIVE" if saw_inconclusive else "GITHUB_VERIFICATION_FAILED"
+            return (
+                False,
+                "EVIDENCE_INCONCLUSIVE" if saw_inconclusive else "GITHUB_VERIFICATION_FAILED",
+            )
         time.sleep(interval_seconds)
 
 
@@ -279,6 +298,10 @@ def _controller_result(plan_result=None, *, decision=None, status, action=None, 
     }
 
 
+def _provision_result_envelope(value):
+    return {"schema_version": SCHEMA_VERSION, "kind": "AutoscaleControllerResult", **value}
+
+
 def _empty_audit(error):
     return {
         "status": "inconclusive",
@@ -291,7 +314,9 @@ def _empty_audit(error):
 
 
 def _cancel_pending(store, decision, action, code, clock):
-    terminal = _transition_existing(action, "cancelled", timestamp(clock().isoformat()), code, None)
+    terminal = _transition_existing(
+        action, "cancelled", timestamp(clock().isoformat()), code, None
+    )
     store.record_action(terminal)
     return _controller_result(
         decision=decision, status="noop", action=terminal, diagnostic=code
@@ -300,11 +325,17 @@ def _cancel_pending(store, decision, action, code, clock):
 
 def _finish_start_attempt(store, decision, action, repository, *, start_fn, verify_fn, clock):
     start_rc = start_fn(action["target"])
-    verified, verify_code = verify_fn(repository, action["target"], action["external_id"])
+    verified, verify_code = verify_fn(
+        repository, action["target"], action["external_id"]
+    )
     finished_at = timestamp(clock().isoformat())
     if verified:
-        diagnostic = verify_code if start_rc == 0 else "VERIFIED_ONLINE_AFTER_START_ERROR"
-        terminal = _transition_existing(action, "succeeded", finished_at, diagnostic, start_rc)
+        diagnostic = (
+            verify_code if start_rc == 0 else "VERIFIED_ONLINE_AFTER_START_ERROR"
+        )
+        terminal = _transition_existing(
+            action, "succeeded", finished_at, diagnostic, start_rc
+        )
         store.record_action(terminal)
         return _controller_result(
             decision=decision, status="ok", action=terminal, diagnostic=diagnostic
@@ -312,7 +343,11 @@ def _finish_start_attempt(store, decision, action, repository, *, start_fn, veri
 
     diagnostic = "START_COMMAND_FAILED" if start_rc != 0 else verify_code
     terminal = _transition_existing(
-        action, "failed", finished_at, diagnostic, start_rc if start_rc != 0 else 1
+        action,
+        "failed",
+        finished_at,
+        diagnostic,
+        start_rc if start_rc != 0 else 1,
     )
     store.record_action(terminal)
     return _controller_result(
@@ -320,7 +355,7 @@ def _finish_start_attempt(store, decision, action, repository, *, start_fn, veri
     ), 1
 
 
-def _recover_pending(
+def _recover_pending_start(
     store,
     pending,
     fresh_snapshot,
@@ -340,8 +375,12 @@ def _recover_pending(
 
     if state == "online":
         if action["state"] == "planned":
-            return _cancel_pending(store, decision, action, "TARGET_ALREADY_ONLINE", clock)
-        terminal = _transition_existing(action, "succeeded", at, "VERIFIED_ONLINE", 0)
+            return _cancel_pending(
+                store, decision, action, "TARGET_ALREADY_ONLINE", clock
+            )
+        terminal = _transition_existing(
+            action, "succeeded", at, "VERIFIED_ONLINE", 0
+        )
         store.record_action(terminal)
         return _controller_result(
             decision=decision,
@@ -358,9 +397,9 @@ def _recover_pending(
                 action=action,
                 diagnostic="EVIDENCE_INCONCLUSIVE",
             ), 3
-        # Reconciliation is not a new scaling decision. Do not issue a second
-        # lifecycle start after the process may already have crossed that boundary.
-        verified, code = verify_fn(repository, action["target"], expected_registration_id)
+        verified, code = verify_fn(
+            repository, action["target"], expected_registration_id
+        )
         terminal = _transition_existing(
             action,
             "succeeded" if verified else "failed",
@@ -399,17 +438,21 @@ def _recover_pending(
         return _cancel_pending(store, decision, action, "TARGET_CHANGED", clock)
 
     if action["external_id"] is None:
-        started = action_record({
-            **action,
-            "state": "started",
-            "timestamp": at,
-            "started_at": at,
-            "finished_at": None,
-            "external_id": registration_id,
-            "diagnostic": {"code": "START_REQUESTED", "exit_code": None},
-        })
+        started = action_record(
+            {
+                **action,
+                "state": "started",
+                "timestamp": at,
+                "started_at": at,
+                "finished_at": None,
+                "external_id": registration_id,
+                "diagnostic": {"code": "START_REQUESTED", "exit_code": None},
+            }
+        )
     else:
-        started = _transition_existing(action, "started", at, "START_REQUESTED", None)
+        started = _transition_existing(
+            action, "started", at, "START_REQUESTED", None
+        )
     store.record_action(started)
     return _finish_start_attempt(
         store,
@@ -420,6 +463,35 @@ def _recover_pending(
         verify_fn=verify_fn,
         clock=clock,
     )
+
+
+# Backward-compatible private name used by older direct callers/tests.
+_recover_pending = _recover_pending_start
+
+
+def _provision_enabled(policy):
+    fragment = policy.get("local_provision") if isinstance(policy, dict) else None
+    return isinstance(fragment, dict) and fragment.get("enabled") is True
+
+
+def _pending_actions(store, repository):
+    starts = pending_start_actions(store, repository)
+    provisions = pending_provision_actions(store, repository)
+    return starts + provisions, starts, provisions
+
+
+def _pending_error(starts, provisions):
+    if len(starts) > 1 and not provisions:
+        return "MULTIPLE_PENDING_START_ACTIONS"
+    if len(provisions) > 1 and not starts:
+        return "MULTIPLE_PENDING_PROVISION_ACTIONS"
+    return "MULTIPLE_PENDING_AUTOSCALE_ACTIONS"
+
+
+def _observe_snapshot(snapshot_fn, store, repository):
+    observed = snapshot_fn(repository)
+    store.observe(observed)
+    return observed
 
 
 def run_once(
@@ -433,13 +505,16 @@ def run_once(
     lock_factory=controller_lock,
     start_fn=start_exact_runner,
     verify_fn=None,
+    provision_fn=provision_exact,
     clock=utcnow,
 ):
-    """Run one governed controller iteration and apply at most one exact START_LOCAL."""
+    """Run one governed controller iteration and apply at most one local mutation."""
     if enabled is None:
         enabled = autoscale_enabled()
     if not enabled:
-        return _controller_result(status="disabled", diagnostic="AUTOSCALE_DISABLED"), 0
+        return _controller_result(
+            status="disabled", diagnostic="AUTOSCALE_DISABLED"
+        ), 0
 
     initial_policy = policy_loader()
     store_factory = store_factory or (lambda: AuditStore(writable=True))
@@ -458,51 +533,86 @@ def run_once(
 
     initial_decision = None
     initial_registration_id = None
+    initial_plan = None
     initial_pending = []
 
     # Observe and decide before entering the mutating critical section.
     with store_factory() as store:
         store.observe(initial_snapshot)
         audit = read_planner_evidence(store, canonical)
-        initial_plan = plan(initial_snapshot, initial_policy, host_collector(initial_policy), audit)
-        initial_pending = pending_start_actions(store, canonical)
+        initial_plan = plan(
+            initial_snapshot,
+            initial_policy,
+            host_collector(initial_policy),
+            audit,
+        )
+        initial_pending, initial_starts, initial_provisions = _pending_actions(
+            store, canonical
+        )
 
         if len(initial_pending) > 1:
             return _controller_result(
                 initial_plan,
                 status="inconclusive",
-                diagnostic="MULTIPLE_PENDING_START_ACTIONS",
+                diagnostic=_pending_error(initial_starts, initial_provisions),
             ), 3
 
         if not initial_pending:
             if initial_plan["decision"] == "INCONCLUSIVE":
                 return _controller_result(
-                    initial_plan, status="inconclusive", diagnostic="EVIDENCE_INCONCLUSIVE"
+                    initial_plan,
+                    status="inconclusive",
+                    diagnostic="EVIDENCE_INCONCLUSIVE",
                 ), 3
-            if initial_plan["decision"] != "START_LOCAL":
+
+            if initial_plan["decision"] == "START_LOCAL":
+                target = initial_plan.get("action", {}).get("target")
+                initial_registration_id = _idle_target_identity(
+                    initial_snapshot, target
+                )
+                if initial_registration_id is None:
+                    return _controller_result(
+                        initial_plan,
+                        status="inconclusive",
+                        diagnostic="START_TARGET_INCONCLUSIVE",
+                    ), 3
+                initial_decision = decision_from_plan(initial_plan)
+                store.record_decision(initial_decision)
+            elif (
+                initial_plan["decision"] == "PROVISION_LOCAL"
+                and _provision_enabled(initial_policy)
+            ):
+                target = initial_plan.get("action", {}).get("target")
+                if not isinstance(target, str) or not target:
+                    return _controller_result(
+                        initial_plan,
+                        status="inconclusive",
+                        diagnostic="PROVISION_TARGET_INCONCLUSIVE",
+                    ), 3
+                initial_decision = decision_from_plan(initial_plan)
+                store.record_decision(initial_decision)
+            else:
                 return _controller_result(
-                    initial_plan, status="noop", diagnostic="DECISION_NOT_APPLIED_IN_SLICE"
+                    initial_plan,
+                    status="noop",
+                    diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
                 ), 0
 
-            target = initial_plan.get("action", {}).get("target")
-            initial_registration_id = _idle_target_identity(initial_snapshot, target)
-            if initial_registration_id is None:
-                return _controller_result(
-                    initial_plan, status="inconclusive", diagnostic="START_TARGET_INCONCLUSIVE"
-                ), 3
-
-            initial_decision = decision_from_plan(initial_plan)
-            # The decision is durable before lock/action/lifecycle mutation.
-            store.record_decision(initial_decision)
-
-    lock_decision = initial_pending[0]["decision"] if initial_pending else initial_decision
+    lock_decision = (
+        initial_pending[0]["decision"] if initial_pending else initial_decision
+    )
     try:
         with lock_factory():
             with store_factory() as store:
                 fresh_policy = policy_loader()
                 fresh_snapshot = snapshot_fn(repository)
-                fresh_canonical = fresh_snapshot.get("repository", {}).get("nameWithOwner")
-                if not fresh_canonical or fresh_canonical.casefold() != canonical.casefold():
+                fresh_canonical = fresh_snapshot.get("repository", {}).get(
+                    "nameWithOwner"
+                )
+                if (
+                    not fresh_canonical
+                    or fresh_canonical.casefold() != canonical.casefold()
+                ):
                     return _controller_result(
                         decision=lock_decision,
                         status="inconclusive",
@@ -512,14 +622,17 @@ def run_once(
                 store.observe(fresh_snapshot)
                 fresh_audit = read_planner_evidence(store, canonical)
                 fresh_plan = plan(
-                    fresh_snapshot, fresh_policy, host_collector(fresh_policy), fresh_audit
+                    fresh_snapshot,
+                    fresh_policy,
+                    host_collector(fresh_policy),
+                    fresh_audit,
                 )
-                pending = pending_start_actions(store, canonical)
+                pending, starts, provisions = _pending_actions(store, canonical)
                 if len(pending) > 1:
                     return _controller_result(
                         decision=lock_decision,
                         status="inconclusive",
-                        diagnostic="MULTIPLE_PENDING_START_ACTIONS",
+                        diagnostic=_pending_error(starts, provisions),
                     ), 3
 
                 active_verify = verify_fn or (
@@ -533,17 +646,33 @@ def run_once(
                 )
 
                 if pending:
-                    return _recover_pending(
+                    current = pending[0]
+                    if current["action"]["kind"] == "START_LOCAL":
+                        return _recover_pending_start(
+                            store,
+                            current,
+                            fresh_snapshot,
+                            fresh_plan,
+                            fresh_policy,
+                            canonical,
+                            start_fn=start_fn,
+                            verify_fn=active_verify,
+                            clock=clock,
+                        )
+                    provision_result, code = reconcile_or_apply_provision(
                         store,
-                        pending[0],
+                        current,
                         fresh_snapshot,
                         fresh_plan,
                         fresh_policy,
                         canonical,
-                        start_fn=start_fn,
-                        verify_fn=active_verify,
+                        provision_fn=provision_fn,
+                        snapshot_fn=lambda repo: _observe_snapshot(
+                            snapshot_fn, store, repo
+                        ),
                         clock=clock,
                     )
+                    return _provision_result_envelope(provision_result), code
 
                 if initial_decision is None:
                     return _controller_result(
@@ -556,66 +685,111 @@ def run_once(
                     policy_fingerprint(fresh_policy)
                     == initial_decision["policy_fingerprint"]
                 )
+                if not same_policy:
+                    return _controller_result(
+                        decision=initial_decision,
+                        status="noop",
+                        diagnostic="POLICY_CHANGED",
+                    ), 0
                 if fresh_plan["decision"] == "INCONCLUSIVE":
                     return _controller_result(
                         decision=initial_decision,
                         status="inconclusive",
                         diagnostic="EVIDENCE_INCONCLUSIVE",
                     ), 3
+
+                expected_kind = initial_decision["decision"]
+                expected_target = initial_plan.get("action", {}).get("target")
                 same_plan = (
-                    fresh_plan["decision"] == "START_LOCAL"
-                    and fresh_plan.get("action", {}).get("target")
-                    == initial_plan["action"]["target"]
+                    fresh_plan["decision"] == expected_kind
+                    and fresh_plan.get("action", {}).get("kind") == expected_kind
+                    and fresh_plan.get("action", {}).get("target") == expected_target
                 )
-                fresh_registration_id = _idle_target_identity(
-                    fresh_snapshot,
-                    initial_plan["action"]["target"],
-                    initial_registration_id,
-                )
-                if not same_policy:
-                    return _controller_result(
-                        decision=initial_decision, status="noop", diagnostic="POLICY_CHANGED"
-                    ), 0
                 if not same_plan:
                     return _controller_result(
-                        decision=initial_decision, status="noop", diagnostic="PLAN_CHANGED"
-                    ), 0
-                if fresh_registration_id is None:
-                    return _controller_result(
-                        decision=initial_decision, status="noop", diagnostic="TARGET_CHANGED"
+                        decision=initial_decision,
+                        status="noop",
+                        diagnostic="PLAN_CHANGED",
                     ), 0
 
-                planned = _action(
-                    initial_plan,
-                    "planned",
-                    timestamp(clock().isoformat()),
-                    diagnostic="PLANNED",
-                    exit_code=None,
-                    external_id=initial_registration_id,
-                )
-                store.record_action(planned)
-                started = _transition_existing(
-                    planned,
-                    "started",
-                    timestamp(clock().isoformat()),
-                    "START_REQUESTED",
-                    None,
-                )
-                store.record_action(started)
-                return _finish_start_attempt(
-                    store,
-                    initial_decision,
-                    started,
-                    canonical,
-                    start_fn=start_fn,
-                    verify_fn=active_verify,
-                    clock=clock,
-                )
+                if expected_kind == "START_LOCAL":
+                    fresh_registration_id = _idle_target_identity(
+                        fresh_snapshot,
+                        expected_target,
+                        initial_registration_id,
+                    )
+                    if fresh_registration_id is None:
+                        return _controller_result(
+                            decision=initial_decision,
+                            status="noop",
+                            diagnostic="TARGET_CHANGED",
+                        ), 0
+
+                    planned = _action(
+                        initial_plan,
+                        "planned",
+                        timestamp(clock().isoformat()),
+                        diagnostic="PLANNED",
+                        exit_code=None,
+                        external_id=initial_registration_id,
+                    )
+                    store.record_action(planned)
+                    started = _transition_existing(
+                        planned,
+                        "started",
+                        timestamp(clock().isoformat()),
+                        "START_REQUESTED",
+                        None,
+                    )
+                    store.record_action(started)
+                    return _finish_start_attempt(
+                        store,
+                        initial_decision,
+                        started,
+                        canonical,
+                        start_fn=start_fn,
+                        verify_fn=active_verify,
+                        clock=clock,
+                    )
+
+                if expected_kind == "PROVISION_LOCAL":
+                    if not _provision_enabled(fresh_policy):
+                        return _controller_result(
+                            decision=initial_decision,
+                            status="noop",
+                            diagnostic="LOCAL_PROVISION_DISABLED",
+                        ), 0
+                    planned = planned_provision_action(
+                        initial_plan, timestamp(clock().isoformat())
+                    )
+                    store.record_action(planned)
+                    provision_result, code = reconcile_or_apply_provision(
+                        store,
+                        {"decision": initial_decision, "action": planned},
+                        fresh_snapshot,
+                        fresh_plan,
+                        fresh_policy,
+                        canonical,
+                        provision_fn=provision_fn,
+                        snapshot_fn=lambda repo: _observe_snapshot(
+                            snapshot_fn, store, repo
+                        ),
+                        clock=clock,
+                    )
+                    return _provision_result_envelope(provision_result), code
+
+                return _controller_result(
+                    decision=initial_decision,
+                    status="noop",
+                    diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
+                ), 0
     except ControllerError as exc:
         if exc.code != "CONTROLLER_BUSY":
             raise
         return _controller_result(
-            decision=lock_decision, status="inconclusive", diagnostic="CONTROLLER_BUSY"
+            decision=lock_decision,
+            status="inconclusive",
+            diagnostic="CONTROLLER_BUSY",
         ), 3
 
 
@@ -626,7 +800,9 @@ def render(result):
     if result["decision"]:
         print(f"Decision: {result['decision']} id={result['decision_id']}")
     if result["action_id"]:
-        print(f"Action: {result['action_id']} state={result['action_state']} target={result['target']}")
+        print(
+            f"Action: {result['action_id']} state={result['action_state']} target={result['target']}"
+        )
     if result["diagnostic"]:
         print(f"Diagnostic: {result['diagnostic']}")
 
@@ -634,7 +810,7 @@ def render(result):
 def main():
     parser = argparse.ArgumentParser(
         prog="runnerctl autoscale run-once",
-        description="Apply at most one governed START_LOCAL autoscale decision.",
+        description="Apply at most one governed local autoscale mutation.",
     )
     parser.add_argument("repository", nargs="?", default=".")
     parser.add_argument("--json", action="store_true")
@@ -648,7 +824,9 @@ def main():
         result = _controller_result(status="error", diagnostic="INVALID_POLICY")
         exit_code = 2
     except AuditError as exc:
-        result = _controller_result(status="inconclusive", diagnostic=exc.code.upper())
+        result = _controller_result(
+            status="inconclusive", diagnostic=exc.code.upper()
+        )
         exit_code = 3
     except ControllerError as exc:
         result = _controller_result(
@@ -658,7 +836,14 @@ def main():
         exit_code = exc.exit_code
 
     if args.json:
-        print(json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+        print(
+            json.dumps(
+                result,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
     else:
         render(result)
     return exit_code

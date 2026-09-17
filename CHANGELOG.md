@@ -4,6 +4,26 @@ Mudanças relevantes do RunnerOps e de sua CLI pública `runnerctl` são registr
 
 O projeto segue versionamento SemVer enquanto a API pública amadurece. Em versões `0.x`, mudanças incompatíveis continuam sendo evitadas e devem ser explicitadas quando inevitáveis.
 
+## Unreleased
+
+### Added
+
+- `PROVISION_LOCAL` passa a ser uma mutação local governada e **opt-in**, executada por `runnerctl autoscale run-once` somente quando pressão qualificada, headroom do host, template explícito e limites de pool permitem crescimento. Cada execução cria no máximo um runner e reutiliza o caminho seguro existente de `runnerctl add`.
+- provisioning local ganha policy própria: `RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED`, `RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS` e template explícito de profile, group, labels, prefixo, versão e arquitetura. O tamanho total do pool fica separado de `RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS` e participa do `policy_fingerprint`.
+- o planner seleciona slots determinísticos pelo menor nome livre (`<prefix>-01`, `<prefix>-02`, …), registra evidência de tamanho/máximo do pool, scope qualificado, labels do template e target exato, e mantém `START_LOCAL` como preferência quando capacidade matching já está provisionada e ociosa.
+- o controller persiste e reconcilia ações `PROVISION_LOCAL` com o mesmo lock/replan/audit boundary usado pelo autoscaler. Uma ação que já cruzou para `started` nunca repete `runnerctl add` às cegas após falha parcial, outcome inconclusivo ou restart do processo.
+- contratos end-to-end cobrem `PROVISION_LOCAL -> provisioned_idle -> START_LOCAL`, delta maior que um com apenas uma criação por tick, restart sem duplicate add, isolamento de capability scopes e limites independentes de capacidade ativa/pool.
+
+### Fixed
+
+- autoscale exact provisioning não aceita o auto-incremento útil do fluxo humano de `runnerctl add`: apply usa target imutável, `configure-runner.sh` recusa colisão e reserva a pasta exata atomicamente. Uma corrida após o preview pode consumir um registration token de curta duração já emitido, mas não registra silenciosamente outro nome como `<target>-2`.
+- reason code `LOCAL_POOL_AT_MAX` no caminho novo passa a representar o limite real de registros locais, em vez de ser usado como sinônimo do teto de runners ativos.
+
+### Safety
+
+- provisioning continua desabilitado por padrão e não executa `BURST_CLOUD`, scale-in, batch provisioning, `ensure .` ou escolha de template por LLM.
+- o sucesso de `PROVISION_LOCAL` exige observação fresca do target exato como registro local saudável `provisioned_idle`; o start desse runner permanece uma ação posterior e independente.
+
 ## v0.3.0 — 2026-09-16
 
 ### Added
@@ -92,7 +112,7 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ### Changed
 
-- a skill pre-PR pode consumir `runnerctl ci watch` depois da publicação para devolver o estado conclusivo do CI.
+- a skill pre-PR pode consumir `runnerctl ci watch` depois da publicação para devolver o estado conclusivo do CI ao agente.
 - a skill de gerenciamento local passou a documentar e consumir o feedback estruturado do CI.
 - documentação de instalação/upgrade agora deixa explícito que `install.sh` deve ser executado novamente após atualizar o checkout.
 - validação de release passa a distinguir a evidência histórica da v0.1.0 da prova exigida para uma release nova.

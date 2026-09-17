@@ -1,22 +1,20 @@
-# Deterministic autoscale planner — Slice #70
+# Deterministic autoscale planner
 
-`runnerctl autoscale plan [owner/repo|.] [--json]` converts current queue/capacity
-evidence plus optional durable audit evidence into a deterministic plan. It is a
-**read-only** decision surface: this slice does not start a runner, call
-`runnerctl add`, contact a cloud provider, enable a controller, or write SQLite.
+`runnerctl autoscale plan [owner/repo|.] [--json]` converts normalized capacity, queue, durable pressure, host, and policy evidence into an `AutoscalePlan`.
+
+It is a **read-only** decision surface. It does not start runners, register capacity, call a cloud provider, or write SQLite.
 
 ```text
 CapacitySnapshot
-+ RunnerOps-observed queue continuity
++ exact current queue evidence
++ durable aggregate pressure evidence
 + host headroom
 + autoscale policy
         ↓
 AutoscalePlan v1
 ```
 
-The command is intended to make a future controller inspectable before mutation is
-introduced. `runnerctl autoscale status` remains the CapacitySnapshot command;
-`runnerctl autoscale history` and `explain` remain audit-store readers.
+The governed controller consumes the same planner function after persisting its observation.
 
 ## Usage
 
@@ -29,117 +27,165 @@ Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | A deterministic `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD` or `BLOCKED` plan was produced |
-| `2` | Invalid CLI arguments or autoscale policy |
-| `3` | Required evidence was missing, contradictory or unavailable; decision is `INCONCLUSIVE` |
+| `0` | A deterministic `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, or `BLOCKED` plan was produced |
+| `2` | Invalid CLI arguments or policy |
+| `3` | Required evidence was unavailable, contradictory, stale, or incomplete; decision is `INCONCLUSIVE` |
 
-A planned action is evidence, not execution. `requested_capacity_delta` is the
-bounded local capacity deficit justified by the current plan (and can therefore
-be greater than one); it does not mean that multiple runners were started or
-provisioned.
+A planned action is evidence, not execution.
 
 ## Policy
 
-Policy is loaded from the normal RunnerOps runtime environment/config path. There
-are no planner-specific CLI policy flags.
+Policy comes from the normal RunnerOps runtime environment/configuration.
 
 | Variable | Default | Meaning |
 | --- | ---: | --- |
-| `RUNNER_AUTOSCALE_QUEUE_THRESHOLD_SECONDS` | `300` | Minimum RunnerOps-observed continuous queued duration before a scaling action can be planned |
-| `RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS` | `1` | Host-wide active local runner ceiling used before `PROVISION_LOCAL` |
-| `RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB` | `1024` | Minimum `/proc/meminfo` `MemAvailable` required for a scaling action |
-| `RUNNER_AUTOSCALE_MAX_CPU_PERCENT` | unset | Optional host CPU guard; unset disables CPU sampling/guard |
-| `RUNNER_AUTOSCALE_MAX_BURST_RUNNERS` | `0` | Maximum retained active/planned burst actions considered allowable |
-| `RUNNER_AUTOSCALE_COOLDOWN_SECONDS` | `300` | Minimum elapsed time after the latest retained started scaling action |
-| `RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS` | `30` | Stabilization interval between consecutive retained `START_LOCAL` actions while the local capacity deficit remains proven |
-| `RUNNER_AUTOSCALE_BURST_ENABLED` | `false` | Explicitly permits planning `BURST_CLOUD` after local options are exhausted |
-| `RUNNER_AUTOSCALE_LABEL_SCOPE` | unset | Optional comma-separated labels; unset selects queued self-hosted jobs for the repository |
+| `RUNNER_AUTOSCALE_QUEUE_THRESHOLD_SECONDS` | `300` | Minimum **proved** aggregate queued duration before scale-out can qualify |
+| `RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS` | `1` | Host-wide active local capacity ceiling |
+| `RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB` | `1024` | Minimum host `MemAvailable` for scale-out |
+| `RUNNER_AUTOSCALE_MAX_CPU_PERCENT` | unset | Optional CPU headroom guard |
+| `RUNNER_AUTOSCALE_MAX_BURST_RUNNERS` | `0` | Maximum retained active/planned burst actions |
+| `RUNNER_AUTOSCALE_COOLDOWN_SECONDS` | `300` | Generic stabilization interval after a scaling action |
+| `RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS` | `30` | Short stabilization interval between justified local `START_LOCAL` actions |
+| `RUNNER_AUTOSCALE_BURST_ENABLED` | `false` | Explicitly permits planning cloud burst after local capacity is exhausted |
+| `RUNNER_AUTOSCALE_LABEL_SCOPE` | unset | Optional required label subset for queued self-hosted work |
 
-Invalid booleans, percentages, integer ranges or labels fail with exit `2`. Policy
-is normalized before its SHA-256 fingerprint is calculated.
+Policy is normalized before its SHA-256 fingerprint is computed.
 
-## Queue threshold semantics
+## Queue age is not the scaling clock
 
-GitHub job creation age is **not** the scaling clock.
+GitHub `job.created_at` remains source provenance only.
 
-`CapacitySnapshot.queue.jobs[].queue_age_seconds` is derived from
-`job.created_at`. That timestamp may include dependency/approval waiting and is
-kept as source evidence only. Threshold-dependent planner decisions join a current
-queued job to an exact retained audit episode by:
+RunnerOps does **not** use:
+
+```text
+now - job.created_at
+```
+
+as the autoscaling qualification clock.
+
+Instead it uses time that RunnerOps itself observed and persisted.
+
+## Two queue evidence layers
+
+The planner intentionally separates exact current-job truth from aggregate capability pressure.
+
+### Exact current-job evidence
+
+Exact queue episodes are keyed by:
 
 ```text
 repository
 + run_id
 + run_attempt
 + job_id
-+ required labels
-+ continuous_queued=true
 ```
 
-The planner keeps exact job episodes in audit evidence and also derives a bounded
-aggregate window for each exact normalized `required_labels` set. Jobs may hand
-off within one scope at the same RunnerOps observation without resetting that
-window. Different label sets never share it; a real gap, queue disappearance or
-stale/non-continuous current episode resets qualification.
+They answer whether an exact GitHub Actions job was observed as queued.
 
-Each label scope qualifies independently. A young GPU scope therefore cannot add
-jobs, idle targets or requested capacity to a CPU scope that has already met the
-threshold. When at least one scope qualifies, only its current pressure jobs are
-used for desired local capacity and the next local target; unqualified scopes stay
-visible in evidence but do not block qualified work. If none qualifies, the plan
-is `WAIT` with `QUEUE_BELOW_THRESHOLD`.
+An inconclusive observation closes an exact episode. A later appearance of the same or another job starts a fresh exact episode.
 
-The planner then uses each qualifying aggregate window's:
+### Aggregate capability pressure
+
+Autoscaling pressure is qualified by exact normalized `required_labels` scope.
+
+Schema v2 persists a durable qualification made from explicitly observed segments:
 
 ```text
-last_seen_queued_at - first_seen_queued_at
+segment A
+→ unknown interval
+→ segment B
 ```
 
-as `oldest_observed_queued_seconds`. If required continuity cannot be established,
-the result is `INCONCLUSIVE`; an old `job.created_at` never substitutes for it.
-
-### Read-only temporal projection
-
-`runnerctl autoscale run-once` observes, persists and plans against one coherent
-observation timestamp. The standalone `runnerctl autoscale plan` intentionally does
-not write the audit store, so its fresh `CapacitySnapshot` can be slightly newer
-than the latest persisted queue episode.
-
-For this read-only path RunnerOps can project persisted evidence onto the fresh
-snapshot only when all of the following remain true:
-
-- the retained episode is still marked `continuous_queued` by the bounded audit
-  reader;
-- the exact `(run_id, run_attempt, job_id)` is still queued in the fresh snapshot;
-- its normalized required-label scope is unchanged;
-- the snapshot is not older than persisted evidence;
-- when there is a positive lag, it is within the episode's retained
-  `max_gap_seconds` bound.
-
-The projection never converts the unobserved interval into queue duration. For
-example:
+The planner uses:
 
 ```text
-11:50:00 first persisted queued evidence
-11:59:30 latest persisted queued evidence
-12:00:00 fresh read-only CapacitySnapshot
+proven_queued_seconds = Σ observed_segment_seconds
 ```
 
-The planner has **570 seconds of proven queue duration plus a 30-second read-only
-projection lag**. It does not claim 600 seconds of observed queue time. Evidence
-exposes the persisted queue timestamp, fresh snapshot timestamp and lag so this is
-inspectable in JSON and human output.
+Unknown time does not contribute.
 
-If the exact identity disappeared, labels changed, the retained episode is stale,
-or the lag exceeds the safe bound, read-only planning fails closed with
-`QUEUE_EVIDENCE_NOT_CURRENT`. Aggregate continuity across a transient unknown
-observation is a separate evidence-lifecycle concern and is not inferred here.
+A transient inconclusive observation can therefore suspend aggregate pressure and later resume the same capability scope without pretending that the unknown interval was observed.
 
-A current job that already has matching `available_now` capacity is not considered
-pressure. If all scoped jobs have available capacity, the plan is `WAIT`. If one
-job has available capacity but another scoped job with different labels does not,
-the second job remains pressure and is evaluated independently instead of being
-hidden by the available runner.
+Example:
+
+```text
+955s proven
++ 64s unknown
++ scope resumes
+= 955s proven
+```
+
+A later 60-second observed segment produces `1015s`, not `1079s`.
+
+See [autoscale-pressure-evidence.md](autoscale-pressure-evidence.md) for the state machine.
+
+## Capability-scope isolation
+
+Each exact normalized label scope qualifies independently.
+
+For example:
+
+```text
+[self-hosted, linux, cpu]
+[self-hosted, linux, gpu]
+```
+
+are distinct evidence boundaries.
+
+An old CPU qualification cannot make a new GPU queue eligible. A young GPU backlog also cannot inflate the capacity delta justified by qualified CPU pressure.
+
+Only current pressure jobs belonging to qualified scopes participate in:
+
+- desired local capacity;
+- capacity deficit;
+- idle target selection;
+- requested capacity delta.
+
+## Read-only temporal projection
+
+The governed controller performs:
+
+```text
+observe → persist → plan
+```
+
+so its snapshot and durable evidence share a coherent observation timestamp.
+
+Standalone `runnerctl autoscale plan` deliberately does not persist its fresh snapshot. Its T1 snapshot may therefore be newer than durable evidence from T0.
+
+RunnerOps allows a bounded read-only projection only when:
+
+- the durable qualification remains active;
+- the same normalized capability scope is present now;
+- an exact current job identity anchors the persisted evidence;
+- the T0→T1 lag is within the retained gap contract.
+
+The lag is exposed as evidence but never added to `proven_queued_seconds`.
+
+Example:
+
+```text
+11:50:00 first proved observation
+11:59:30 latest persisted observation
+12:00:00 fresh read-only snapshot
+
+proved duration = 570s
+projection lag = 30s
+```
+
+The planner does not claim `600s`.
+
+If the current anchor disappeared or the lag is unsafe, the plan fails closed with `QUEUE_EVIDENCE_NOT_CURRENT`.
+
+This #108 projection boundary is separate from #107 durable scope resumption. A capability scope can resume **after a complete persisted observation** even when job identities churn; speculative read-only projection still requires an exact current anchor.
+
+## Pressure qualification and capacity
+
+Once a scope has enough `proven_queued_seconds`, the planner considers current capacity.
+
+A current job with `available_now` capacity does not represent pressure.
+
+For qualified pressure jobs RunnerOps computes a bounded desired local capacity and deficit. `requested_capacity_delta` can be greater than one when evidence justifies multiple missing slots, but the v0.3 controller still applies at most one exact `START_LOCAL` action per iteration.
 
 ## Decision order
 
@@ -147,48 +193,47 @@ The planner follows a bounded local-first order:
 
 ```text
 scoped queued work?
-  no  -> WAIT / LABEL_SCOPE_BLOCKED
+  no  → WAIT / LABEL_SCOPE_BLOCKED
   yes
    ↓
-required evidence complete?
-  no  -> INCONCLUSIVE
+required evidence complete/current?
+  no  → INCONCLUSIVE
   yes
    ↓
-all scoped jobs already have available capacity?
-  yes -> WAIT
+all scoped jobs have available capacity?
+  yes → WAIT
   no
    ↓
-continuous observed queue threshold met?
-  no  -> WAIT
+aggregate proved threshold met?
+  no  → WAIT / QUEUE_BELOW_THRESHOLD
   yes
    ↓
-local scale-out stabilization or action cooldown/headroom guards pass?
-  no  -> HOLD
+cooldown + host guards pass?
+  no  → HOLD
   yes
    ↓
-matching provisioned-idle local runner exists?
-  yes -> START_LOCAL
+matching provisioned-idle runner exists?
+  yes → START_LOCAL
   no
    ↓
-active local pool below max?
-  yes -> PROVISION_LOCAL
+local capacity target below configured max?
+  yes → PROVISION_LOCAL
   no
    ↓
 burst disabled?
-  yes -> BLOCKED
+  yes → BLOCKED
   no
    ↓
 burst limit reached?
-  yes -> HOLD
-  no  -> BURST_CLOUD
+  yes → HOLD
+  no  → BURST_CLOUD
 ```
 
-`START_LOCAL`, `PROVISION_LOCAL` and `BURST_CLOUD` only describe a future action.
-Slice #70 never applies them.
+`PROVISION_LOCAL` and `BURST_CLOUD` remain planning outcomes until their execution slices are implemented.
 
 ## Reason codes
 
-Public reason codes are uppercase and stable within the v1 contract:
+Public reason codes include:
 
 - `NO_SCOPED_QUEUED_WORK`
 - `QUEUE_BELOW_THRESHOLD`
@@ -197,6 +242,7 @@ Public reason codes are uppercase and stable within the v1 contract:
 - `MATCHING_LOCAL_RUNNER_IDLE`
 - `OBSERVED_QUEUE_THRESHOLD_MET`
 - `SUSTAINED_QUEUE_PRESSURE`
+- `PRESSURE_QUALIFICATION_RESUMED`
 - `LOCAL_CAPACITY_DEFICIT`
 - `LOCAL_CAPACITY_TARGET_REACHED`
 - `LOCAL_SCALE_OUT_STABILIZING`
@@ -211,12 +257,13 @@ Public reason codes are uppercase and stable within the v1 contract:
 - `LABEL_SCOPE_BLOCKED`
 - `EVIDENCE_INCONCLUSIVE`
 
-Multiple reasons are emitted in sorted order so equivalent plans are byte-stable
-under canonical JSON serialization.
+`PRESSURE_QUALIFICATION_RESUMED` appears when a resumed durable qualification contributes to a threshold-qualified scaling decision. It explains provenance; it does not change the policy result by itself.
 
-## AutoscalePlan JSON v1
+Reason codes are sorted before serialization.
 
-The JSON surface contains:
+## AutoscalePlan v1
+
+A plan contains:
 
 ```json
 {
@@ -228,11 +275,8 @@ The JSON surface contains:
   "repository": "owner/repo",
   "policy_fingerprint": "sha256:...",
   "decision": "START_LOCAL",
-  "reason_codes": [
-    "MATCHING_LOCAL_RUNNER_IDLE",
-    "OBSERVED_QUEUE_THRESHOLD_MET"
-  ],
-  "requested_capacity_delta": 3,
+  "reason_codes": [],
+  "requested_capacity_delta": 1,
   "action": {
     "kind": "START_LOCAL",
     "target": "runner-name"
@@ -241,63 +285,65 @@ The JSON surface contains:
 }
 ```
 
-`status` is `inconclusive` only with decision `INCONCLUSIVE`; other deterministic
-decisions use `ok`. `action` is null for decisions that request no capacity.
-Evidence contains the normalized observation timestamp, queue/capacity facts, host
-headroom, scoped/pressure job IDs, aggregate pressure windows, qualified label
-scopes and job IDs, available/matching capacity, bounded desired local capacity,
-capacity deficit and audit-read status used by the plan. Read-only temporal
-evidence additionally records `snapshot_observed_at`,
-`persisted_queue_observed_at` and `read_only_evidence_lag_seconds`. It does not
-contain credentials, workflow bodies or arbitrary command output.
+The evidence includes current queue/capacity facts, host facts, capability scope, aggregate pressure qualification, desired capacity, deficit, and audit-read timing.
 
-The plan ID is a SHA-256-derived identifier over schema version, repository,
-normalized policy and normalized evidence. The public `timestamp` is the source
-CapacitySnapshot observation timestamp rather than a second wall-clock read. As a
-result, identical evidence + policy produces identical decision, reason ordering,
-plan ID and JSON.
+Aggregate pressure entries expose enough information to explain resumed proof, including:
+
+- qualification ID/state;
+- normalized labels;
+- first/latest proved timestamps;
+- proved queued seconds;
+- current job IDs;
+- resume count;
+- last resume time;
+- last unknown interval length;
+- observed segments;
+- read-only projection lag when applicable.
+
+The plan ID is derived from schema version, repository, normalized policy, and normalized evidence. Identical inputs therefore produce an identical deterministic plan ID and output ordering.
 
 ## Audit-store relationship
 
-The planner opens the optional audit store in read-only/query-only mode. It may use
-continuous queue episodes, the latest retained started scaling action for cooldown,
-and retained `planned`/`started` `BURST_CLOUD` actions as conservative active-burst
-evidence.
+The planner reads SQLite but standalone planning does not write it.
 
-`plan` does **not** insert its decision into SQLite. Therefore:
+The audit store keeps:
+
+- strict exact-job queue episodes;
+- schema-v2 aggregate pressure qualifications and observed segments;
+- stored decisions/actions from the governed controller.
+
+The existing stored Decision evidence contract remains deliberately closed. The rich planner scope object is not copied wholesale into a Decision record. Aggregate pressure is durable through its own dedicated schema instead.
+
+Therefore:
 
 ```bash
 runnerctl autoscale plan . --json
-runnerctl autoscale explain --decision <returned-plan-id>
+runnerctl autoscale explain --decision <plan-id>
 ```
 
-does not imply that `explain` will find the plan. `explain` only addresses decisions
-actually persisted through the internal audit-store writer API. A future controller
-must perform that explicit persistence step before it applies an action.
-
-### Durable projection limitation
-
-The #69 `Decision` evidence contract is intentionally closed and currently stores
-the normalized current queue references, aggregate capacity counts, action result,
-reason codes and requested delta—not the richer #104 `scope` object. The durable
-queue-observation history retains the raw episodes required to independently
-reconstruct pressure windows, but `autoscale explain` alone cannot reproduce the
-qualified-scope selection or desired-capacity arithmetic. Extending that projection
-requires a versioned storage-contract change; this slice deliberately leaves the
-closed schema unchanged.
+is not automatically valid. `explain` addresses decisions that a writer explicitly persisted.
 
 ## Safety boundaries
 
-- no lifecycle mutation;
-- no automatic runner registration;
-- no cloud/provider calls or credentials;
-- no SQLite writes, migrations, pruning or database creation;
-- missing/contradictory required evidence fails closed as `INCONCLUSIVE`;
-- read-only projection never counts unknown lag as observed queued duration;
-- burst spending cannot be decided by an LLM;
-- current label/capacity evidence does not claim GitHub scheduler authority.
+- standalone planning never mutates runner lifecycle;
+- standalone planning never writes or migrates SQLite;
+- GitHub job creation age never qualifies scale-out by itself;
+- unknown time never increases proved pressure;
+- exact job evidence remains strict;
+- capability scopes remain isolated;
+- missing/contradictory evidence fails closed;
+- burst spending remains deterministic policy, not an LLM decision;
+- planner output does not claim GitHub scheduler authority.
 
-Focused contracts live in `tests/test-autoscale-planner-contracts.py` and
-`tests/test-autoscale-readonly-plan-timing.py`. Capacity and audit-store contracts
-remain independent so the planner can be tested as a pure function with frozen
-evidence.
+## Validation
+
+Relevant contracts include:
+
+```text
+tests/test-autoscale-planner-contracts.py
+tests/test-autoscale-readonly-plan-timing.py
+tests/test-autoscale-pressure-contracts.py
+tests/test-autoscale-pressure-planner-contracts.py
+```
+
+Together they cover deterministic planning, scoped qualification, bounded read-only projection, resumable durable pressure, reset conditions, restart durability, and a resumed qualification driving a real `START_LOCAL` plan.

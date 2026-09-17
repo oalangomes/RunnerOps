@@ -12,7 +12,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from autoscale_planner import PolicyError, load_policy, plan  # noqa: E402
+from autoscale_planner import PolicyError, load_policy, plan, policy_fingerprint  # noqa: E402
 
 
 class PlannerContracts(unittest.TestCase):
@@ -26,6 +26,7 @@ class PlannerContracts(unittest.TestCase):
             "max_cpu_percent": None,
             "max_burst_runners": 1,
             "cooldown_seconds": 300,
+            "local_scale_out_cooldown_seconds": 30,
             "burst_enabled": True,
             "label_scope": [],
         }
@@ -142,6 +143,7 @@ class PlannerContracts(unittest.TestCase):
             "error": None,
             "active_burst_capacity": active_burst,
             "last_scaling_action_started_at": last_started,
+            "last_scaling_action_kind": None,
             "queue": [
                 {
                     "observation_id": "observation-1",
@@ -167,6 +169,20 @@ class PlannerContracts(unittest.TestCase):
             audit or self.audit(),
         )
 
+    def pressure_jobs(self, snapshot, count, *, status="provisioned_idle", names=None):
+        jobs = []
+        for offset in range(count):
+            job = self.job(status=status, names=names)
+            job["job_id"] = 101 + offset
+            job["run_id"] = 201 + offset
+            jobs.append(job)
+        snapshot["queue"]["jobs"] = jobs
+        snapshot["queue"]["queued_job_count"] = count
+        snapshot["queue"]["observed_queued_job_count"] = count
+        snapshot["queue"]["oldest_queued_job_id"] = jobs[0]["job_id"] if jobs else None
+        snapshot["queue"]["oldest_matching_queued_job_id"] = jobs[0]["job_id"] if jobs else None
+        return snapshot
+
     def test_queue_below_observed_threshold_waits_and_ignores_github_created_age(self):
         result = self.decision(audit=self.audit(seconds=120))
         self.assertEqual(result["decision"], "WAIT")
@@ -184,6 +200,8 @@ class PlannerContracts(unittest.TestCase):
         self.assertEqual(result["action"], {"kind": "START_LOCAL", "target": "runner-a"})
         self.assertIn("MATCHING_LOCAL_RUNNER_IDLE", result["reason_codes"])
         self.assertIn("OBSERVED_QUEUE_THRESHOLD_MET", result["reason_codes"])
+        self.assertEqual(result["requested_capacity_delta"], 1)
+        self.assertEqual(result["evidence"]["scope"]["desired_local_capacity"], 2)
 
     def test_busy_capacity_safe_headroom_and_local_slot_provisions_local(self):
         result = self.decision(snapshot=self.snapshot(status="busy_capacity", active_local=1))
@@ -307,6 +325,150 @@ class PlannerContracts(unittest.TestCase):
         self.assertIn("COOLDOWN_ACTIVE", result["reason_codes"])
         self.assertEqual(result["evidence"]["audit"]["cooldown_elapsed_seconds"], 120)
 
+    def test_pressure_model_scales_delta_with_bounded_matching_backlog(self):
+        names = ["runner-d", "runner-c", "runner-b", "runner-a"]
+        snapshot = self.pressure_jobs(
+            self.snapshot(status="provisioned_idle", active_local=1, names=names),
+            40,
+            names=names,
+        )
+        result = self.decision(
+            snapshot=snapshot,
+            policy=self.policy(max_active_local_runners=5),
+        )
+        self.assertEqual(result["decision"], "START_LOCAL")
+        self.assertEqual(result["action"], {"kind": "START_LOCAL", "target": "runner-a"})
+        self.assertEqual(result["requested_capacity_delta"], 4)
+        scope = result["evidence"]["scope"]
+        self.assertEqual(scope["pressure_queued_job_count"], 40)
+        self.assertEqual(scope["current_active_local_capacity"], 1)
+        self.assertEqual(scope["desired_local_capacity"], 5)
+        self.assertEqual(scope["capacity_deficit"], 4)
+        self.assertEqual(scope["provisioned_idle_matching_capacity"], 4)
+
+    def test_low_and_medium_pressure_remain_bounded(self):
+        low = self.decision(
+            snapshot=self.pressure_jobs(
+                self.snapshot(status="provisioned_idle", active_local=1, names=["runner-a"]),
+                1,
+                names=["runner-a"],
+            ),
+            policy=self.policy(max_active_local_runners=5),
+        )
+        medium = self.decision(
+            snapshot=self.pressure_jobs(
+                self.snapshot(status="provisioned_idle", active_local=1, names=["runner-a"]),
+                3,
+                names=["runner-a"],
+            ),
+            policy=self.policy(max_active_local_runners=5),
+        )
+        self.assertEqual(low["requested_capacity_delta"], 1)
+        self.assertEqual(low["evidence"]["scope"]["desired_local_capacity"], 2)
+        self.assertEqual(medium["requested_capacity_delta"], 3)
+        self.assertEqual(medium["evidence"]["scope"]["desired_local_capacity"], 4)
+
+    def test_local_max_is_authoritative_even_with_matching_idle_runners(self):
+        snapshot = self.pressure_jobs(
+            self.snapshot(
+                status="provisioned_idle",
+                active_local=5,
+                names=["runner-a", "runner-b", "runner-c", "runner-d"],
+            ),
+            40,
+            names=["runner-a", "runner-b", "runner-c", "runner-d"],
+        )
+        result = self.decision(
+            snapshot=snapshot,
+            policy=self.policy(max_active_local_runners=5, burst_enabled=False),
+        )
+        self.assertEqual(result["decision"], "BLOCKED")
+        self.assertEqual(result["requested_capacity_delta"], 0)
+        self.assertIn("LOCAL_CAPACITY_TARGET_REACHED", result["reason_codes"])
+
+    def test_available_matching_capacity_reduces_the_pressure_model(self):
+        snapshot = self.snapshot(status="available_now", active_local=1, names=["runner-ready"])
+        pressure = self.pressure_jobs(
+            self.snapshot(status="no_matching_capacity", active_local=1, names=[]), 2, status="no_matching_capacity", names=[]
+        )
+        for offset, job in enumerate(pressure["queue"]["jobs"], start=2):
+            job["job_id"] = 100 + offset
+            job["run_id"] = 200 + offset
+        snapshot["queue"]["jobs"].extend(pressure["queue"]["jobs"])
+        snapshot["queue"]["queued_job_count"] = 3
+        snapshot["queue"]["observed_queued_job_count"] = 3
+        audit = self.audit()
+        audit["queue"].extend(
+            [
+                {
+                    **audit["queue"][0],
+                    "observation_id": f"pressure-{job['job_id']}",
+                    "job_id": job["job_id"],
+                    "run_id": job["run_id"],
+                }
+                for job in pressure["queue"]["jobs"]
+            ]
+        )
+        result = self.decision(snapshot=snapshot, policy=self.policy(max_active_local_runners=5), audit=audit)
+        self.assertEqual(result["evidence"]["scope"]["pressure_queued_job_count"], 2)
+        self.assertEqual(result["evidence"]["scope"]["desired_local_capacity"], 3)
+
+    def test_aggregate_pressure_survives_matching_job_churn_but_not_disappearance(self):
+        snapshot = self.snapshot(status="provisioned_idle", active_local=1, names=["runner-a"])
+        new_job = snapshot["queue"]["jobs"][0]
+        new_job["job_id"], new_job["run_id"] = 102, 202
+        audit = self.audit()
+        old = audit["queue"][0]
+        old["continuous_queued"] = False
+        old["last_seen_queued_at"] = self.observed_at
+        current = {
+            **old,
+            "observation_id": "observation-2",
+            "job_id": 102,
+            "run_id": 202,
+            "first_seen_queued_at": self.observed_at,
+            "continuous_queued": True,
+        }
+        audit["queue"] = [old, current]
+        churn = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(churn["decision"], "START_LOCAL")
+        self.assertEqual(churn["evidence"]["scope"]["oldest_observed_queued_seconds"], 600)
+
+        disappeared = deepcopy(audit)
+        disappeared["queue"][0]["last_seen_queued_at"] = "2026-09-10T11:50:00+00:00"
+        reset = self.decision(snapshot=snapshot, audit=disappeared)
+        self.assertEqual(reset["decision"], "WAIT")
+        self.assertIn("QUEUE_BELOW_THRESHOLD", reset["reason_codes"])
+
+    def test_aggregate_pressure_never_crosses_label_boundaries(self):
+        snapshot = self.snapshot(
+            status="provisioned_idle", active_local=1, names=["runner-a"], labels=["self-hosted", "Linux", "gpu"]
+        )
+        audit = self.audit()
+        audit["queue"][0]["continuous_queued"] = False
+        audit["queue"][0]["last_seen_queued_at"] = self.observed_at
+        result = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(result["decision"], "INCONCLUSIVE")
+
+    def test_local_scale_out_uses_short_stabilization_after_start_local(self):
+        audit = self.audit(last_started="2026-09-10T11:58:00+00:00")
+        audit["last_scaling_action_kind"] = "START_LOCAL"
+        snapshot = self.snapshot(status="provisioned_idle", names=["runner-a"])
+        result = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(result["decision"], "START_LOCAL")
+        self.assertEqual(result["evidence"]["audit"]["effective_cooldown_seconds"], 30)
+
+        audit["last_scaling_action_started_at"] = "2026-09-10T11:59:40+00:00"
+        holding = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(holding["decision"], "HOLD")
+        self.assertIn("LOCAL_SCALE_OUT_STABILIZING", holding["reason_codes"])
+
+    def test_local_scale_out_policy_changes_fingerprint(self):
+        self.assertNotEqual(
+            policy_fingerprint(self.policy(local_scale_out_cooldown_seconds=30)),
+            policy_fingerprint(self.policy(local_scale_out_cooldown_seconds=31)),
+        )
+
     def test_identical_evidence_and_policy_produces_identical_plan_and_json(self):
         snapshot = self.snapshot()
         policy = self.policy()
@@ -334,6 +496,7 @@ class PlannerContracts(unittest.TestCase):
         self.assertIsNone(policy["max_cpu_percent"])
         self.assertEqual(policy["max_burst_runners"], 0)
         self.assertEqual(policy["cooldown_seconds"], 300)
+        self.assertEqual(policy["local_scale_out_cooldown_seconds"], 30)
         self.assertFalse(policy["burst_enabled"])
         self.assertEqual(policy["label_scope"], [])
 

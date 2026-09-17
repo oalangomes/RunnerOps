@@ -44,6 +44,7 @@ class ControllerContracts(unittest.TestCase):
             "max_cpu_percent": None,
             "max_burst_runners": 0,
             "cooldown_seconds": 300,
+            "local_scale_out_cooldown_seconds": 30,
             "burst_enabled": False,
             "label_scope": [],
         }
@@ -268,6 +269,39 @@ class ControllerContracts(unittest.TestCase):
         self.assertEqual(self.start_calls, ["runner-a"])
         self.assertNotIn("all", self.start_calls)
         self.assertTrue(all(not target.startswith("group:") for target in self.start_calls))
+
+    def test_high_pressure_plan_still_mutates_one_exact_runner(self):
+        names = ("runner-d", "runner-c", "runner-b", "runner-a")
+        self.seed_queue(names=names, active_local=1)
+        snapshot = self.snapshot(names=names, active_local=1)
+        jobs = snapshot["queue"]["jobs"]
+        for offset in range(1, 40):
+            job = dict(jobs[0])
+            job["job_id"] += offset
+            job["run_id"] += offset
+            jobs.append(job)
+        snapshot["queue"]["queued_job_count"] = len(jobs)
+        snapshot["queue"]["observed_queued_job_count"] = len(jobs)
+        result, code = self.run_controller(
+            [snapshot], policy_loader=lambda: self.policy(max_active_local_runners=5)
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(result["decision"], "START_LOCAL")
+        self.assertEqual(result["target"], "runner-a")
+        self.assertEqual(self.start_calls, ["runner-a"])
+        with self.store_factory() as store:
+            decision = store.explain(result["decision_id"])["decision"]
+        self.assertEqual(decision["requested_capacity_delta"], 4)
+
+    def test_observed_job_handoff_preserves_aggregate_pressure(self):
+        self.seed_queue(active_local=1)
+        replacement = self.snapshot(active_local=1)
+        replacement["queue"]["jobs"][0]["job_id"] = 102
+        replacement["queue"]["jobs"][0]["run_id"] = 202
+        result, code = self.run_controller([replacement])
+        self.assertEqual(code, 0)
+        self.assertEqual(result["decision"], "START_LOCAL")
+        self.assertEqual(self.start_calls, ["runner-a"])
 
     def test_invalid_broad_targets_are_rejected_by_lifecycle_boundary(self):
         for target in ("all", "group:runnerops"):

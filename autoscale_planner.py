@@ -108,6 +108,9 @@ def load_policy():
         "cooldown_seconds": _integer_env(
             "RUNNER_AUTOSCALE_COOLDOWN_SECONDS", 300, 0, 86400 * 30
         ),
+        "local_scale_out_cooldown_seconds": _integer_env(
+            "RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS", 30, 0, 86400 * 30
+        ),
         "burst_enabled": _boolean_env("RUNNER_AUTOSCALE_BURST_ENABLED", False),
         "label_scope": _label_scope(),
     }
@@ -183,6 +186,7 @@ def _empty_audit(status, error):
         "queue": [],
         "active_burst_capacity": None,
         "last_scaling_action_started_at": None,
+        "last_scaling_action_kind": None,
     }
 
 
@@ -196,14 +200,16 @@ def load_audit_evidence(repository):
             if history.get("truncated"):
                 return _empty_audit("inconclusive", "audit_history_truncated")
 
+            # Retain completed episodes as well as open ones.  The planner uses
+            # their bounded, RunnerOps-observed intervals to prove aggregate
+            # pressure when individual queued jobs churn.
             queue = [
                 row
                 for row in history["queue_observations"]
                 if row.get("repository", "").casefold() == repository.casefold()
-                and row.get("continuous_queued") is True
             ]
             active_burst = 0
-            started_at = []
+            started = []
             for decision in history["decisions"]:
                 if decision.get("repository", "").casefold() != repository.casefold():
                     continue
@@ -215,14 +221,17 @@ def load_audit_evidence(repository):
                     ):
                         active_burst += 1
                     if action.get("started_at") is not None:
-                        started_at.append(timestamp(action["started_at"]))
+                        started.append((timestamp(action["started_at"]), action["kind"]))
+
+        latest_started = max(started, default=(None, None))
 
         return {
             "status": "complete",
             "error": None,
             "queue": queue,
             "active_burst_capacity": active_burst,
-            "last_scaling_action_started_at": max(started_at) if started_at else None,
+            "last_scaling_action_started_at": latest_started[0],
+            "last_scaling_action_kind": latest_started[1],
         }
     except ImportError:
         return _empty_audit("inconclusive", "sqlite_capability_unavailable")
@@ -281,81 +290,191 @@ def _queue_identity(value):
     return identity
 
 
+def _audit_queue_row(row, observed_dt):
+    """Normalize one retained episode without trusting GitHub creation time."""
+    identity = _queue_identity(row)
+    if identity is None:
+        return None
+    try:
+        first = timestamp(row["first_seen_queued_at"])
+        last = timestamp(row["last_seen_queued_at"])
+        first_dt = datetime.fromisoformat(first)
+        last_dt = datetime.fromisoformat(last)
+        ended_at = timestamp(row["ended_at"]) if row.get("ended_at") is not None else None
+        ended_dt = datetime.fromisoformat(ended_at) if ended_at is not None else None
+        labels = row.get("required_labels")
+        if (
+            first_dt > last_dt
+            or last_dt > observed_dt
+            or (ended_dt is not None and (last_dt > ended_dt or ended_dt > observed_dt))
+            or not isinstance(labels, list)
+        ):
+            return None
+        created_at = (
+            timestamp(row["github_created_at"])
+            if row.get("github_created_at") is not None
+            else None
+        )
+    except (AuditError, KeyError, TypeError, ValueError):
+        return None
+    return {
+        "job_id": identity[2],
+        "run_id": identity[0],
+        "run_attempt": identity[1],
+        "first_seen_queued_at": first,
+        "last_seen_queued_at": last,
+        "continuous_queued": row.get("continuous_queued") is True,
+        "ended_at": ended_at,
+        "required_labels": sorted(set(labels)),
+        "github_created_at": created_at,
+        "observed_queued_seconds": int((last_dt - first_dt).total_seconds()),
+    }
+
+
 def _queue_evidence(jobs, audit, observed_at):
-    """Join current queued jobs to continuous RunnerOps observations by exact attempt."""
+    """Return exact current-job observations without letting a new job erase scope evidence."""
     if audit.get("status") != "complete" or not isinstance(audit.get("queue"), list):
         return None
 
+    observed_dt = datetime.fromisoformat(observed_at)
     by_identity = {}
     for row in audit["queue"]:
-        identity = _queue_identity(row)
-        if identity is None or identity in by_identity:
+        normalized = _audit_queue_row(row, observed_dt)
+        if normalized is None:
             return None
-        by_identity[identity] = row
+        identity = (normalized["run_id"], normalized["run_attempt"], normalized["job_id"])
+        if normalized["continuous_queued"]:
+            if identity in by_identity:
+                return None
+            by_identity[identity] = normalized
 
-    observed_dt = datetime.fromisoformat(observed_at)
     result = []
     for job in jobs:
         identity = _queue_identity(job)
         row = by_identity.get(identity) if identity is not None else None
-        if row is None or row.get("continuous_queued") is not True:
+        # A job that arrived between observations has no exact episode yet. It
+        # must not invalidate an independently proven aggregate scope, but it
+        # also never becomes its own continuity evidence on this tick.
+        if row is None:
+            continue
+        if _label_set(job["required_labels"]) != _label_set(row["required_labels"]):
             return None
-        try:
-            first = timestamp(row["first_seen_queued_at"])
-            last = timestamp(row["last_seen_queued_at"])
-            first_dt = datetime.fromisoformat(first)
-            last_dt = datetime.fromisoformat(last)
-            labels = row.get("required_labels")
-            if (
-                first_dt > last_dt
-                or last_dt > observed_dt
-                or not isinstance(labels, list)
-                or _label_set(job["required_labels"]) != _label_set(labels)
-            ):
-                return None
-            duration = int((last_dt - first_dt).total_seconds())
-            created_at = (
-                timestamp(row["github_created_at"])
-                if row.get("github_created_at") is not None
-                else None
-            )
-        except (AuditError, KeyError, TypeError, ValueError):
-            return None
-
-        result.append(
-            {
-                "job_id": identity[2],
-                "run_id": identity[0],
-                "run_attempt": identity[1],
-                "first_seen_queued_at": first,
-                "last_seen_queued_at": last,
-                "continuous_queued": True,
-                "required_labels": sorted(set(labels)),
-                "github_created_at": created_at,
-                "observed_queued_seconds": duration,
-            }
-        )
+        result.append(row)
 
     return sorted(
         result, key=lambda row: (row["run_id"], row["run_attempt"], row["job_id"])
     )
 
 
-def _idle_target(jobs, snapshot):
+def _aggregate_queue_evidence(jobs, audit, observed_at):
+    """Prove a continuous pressure window per exact normalized label scope.
+
+    Episodes may hand off from one queued job to another at the same RunnerOps
+    observation.  Only touching/overlapping observed intervals are joined, so a
+    real pressure disappearance or observation gap resets the aggregate clock.
+    """
+    if audit.get("status") != "complete" or not isinstance(audit.get("queue"), list):
+        return None
+    try:
+        observed_dt = datetime.fromisoformat(observed_at)
+        scopes = {
+            tuple(sorted(_label_set(job["required_labels"])))
+            for job in jobs
+        }
+    except (KeyError, TypeError):
+        return None
+    if not scopes or any(not scope for scope in scopes):
+        return None
+
+    episodes = {scope: [] for scope in scopes}
+    for row in audit["queue"]:
+        normalized = _audit_queue_row(row, observed_dt)
+        if normalized is None:
+            return None
+        scope = tuple(sorted(_label_set(normalized["required_labels"])))
+        if scope in episodes:
+            episodes[scope].append(normalized)
+
+    result = []
+    for scope, rows in episodes.items():
+        # The aggregate must reach the current observation through at least one
+        # still-continuous exact job; closed history alone can never be stale
+        # pressure evidence.
+        current = [
+            row
+            for row in rows
+            if row["continuous_queued"]
+            and datetime.fromisoformat(row["last_seen_queued_at"]) == observed_dt
+        ]
+        if not current:
+            continue
+        merged = []
+        for row in sorted(
+            rows,
+            key=lambda item: (
+                item["first_seen_queued_at"],
+                item["last_seen_queued_at"],
+                item["run_id"],
+                item["run_attempt"],
+                item["job_id"],
+            ),
+        ):
+            first = datetime.fromisoformat(row["first_seen_queued_at"])
+            end_value = (
+                row["last_seen_queued_at"]
+                if row["continuous_queued"]
+                else row["ended_at"] or row["last_seen_queued_at"]
+            )
+            observed_end = datetime.fromisoformat(end_value)
+            if merged and first <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], observed_end))
+            else:
+                merged.append((first, observed_end))
+        window = next((item for item in reversed(merged) if item[1] == observed_dt), None)
+        if window is None:
+            continue
+        result.append(
+            {
+                "required_labels": list(scope),
+                "first_seen_queued_at": timestamp(window[0].isoformat()),
+                "last_seen_queued_at": observed_at,
+                "observed_queued_seconds": int((window[1] - window[0]).total_seconds()),
+                "current_observed_job_ids": sorted(row["job_id"] for row in current),
+            }
+        )
+    return sorted(result, key=lambda row: (row["required_labels"], row["first_seen_queued_at"]))
+
+
+def _local_capacity_evidence(scoped_jobs, pressure_jobs, snapshot):
     categories = {
         runner.get("name"): runner.get("category")
         for runner in snapshot.get("capacity", {}).get("runners", [])
         if isinstance(runner, dict) and isinstance(runner.get("name"), str)
     }
-    candidates = set()
-    for job in jobs:
+    matching = {"available_now": set(), "busy_capacity": set(), "provisioned_idle": set()}
+    for job in scoped_jobs:
         names = job.get("matching_local_runner_names")
         if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
-            return None, False
-        candidates.update(
-            name for name in names if categories.get(name) == "provisioned_idle"
-        )
-    return (sorted(candidates)[0] if candidates else None), True
+            return None
+        for name in names:
+            category = categories.get(name)
+            if category in matching:
+                matching[category].add(name)
+    pressure_names = set()
+    for job in pressure_jobs:
+        pressure_names.update(job["matching_local_runner_names"])
+    return {
+        "available_matching_capacity": len(matching["available_now"]),
+        "active_matching_local_capacity": len(
+            (matching["available_now"] | matching["busy_capacity"]) & pressure_names
+        ),
+        "provisioned_idle_matching_capacity": len(
+            matching["provisioned_idle"] & pressure_names
+        ),
+        "provisioned_idle_matching_runner_names": sorted(
+            matching["provisioned_idle"] & pressure_names
+        ),
+    }
 
 
 def _plan_id(repository, policy, evidence):
@@ -368,7 +487,9 @@ def _plan_id(repository, policy, evidence):
     return "plan-" + hashlib.sha256(_canonical_json(basis).encode("utf-8")).hexdigest()[:32]
 
 
-def _result(repository, observed_at, policy, evidence, decision, reasons, action=None):
+def _result(
+    repository, observed_at, policy, evidence, decision, reasons, action=None, requested_capacity_delta=None
+):
     if decision not in DECISIONS:
         raise ValueError("unknown decision")
     return {
@@ -381,7 +502,11 @@ def _result(repository, observed_at, policy, evidence, decision, reasons, action
         "policy_fingerprint": policy_fingerprint(policy),
         "decision": decision,
         "reason_codes": sorted(set(reasons)),
-        "requested_capacity_delta": 1 if decision in ACTION_DECISIONS else 0,
+        "requested_capacity_delta": (
+            (1 if decision in ACTION_DECISIONS else 0)
+            if requested_capacity_delta is None
+            else requested_capacity_delta
+        ),
         "action": action,
         "evidence": evidence,
     }
@@ -408,6 +533,13 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
             "labels": policy["label_scope"],
             "scoped_queued_job_count": None,
             "pressure_queued_job_count": None,
+            "available_matching_capacity": None,
+            "current_active_local_capacity": None,
+            "active_matching_local_capacity": None,
+            "desired_local_capacity": None,
+            "capacity_deficit": None,
+            "provisioned_idle_matching_capacity": None,
+            "aggregate_sustained_pressure": [],
             "scoped_job_ids": [],
             "pressure_job_ids": [],
         },
@@ -417,6 +549,7 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
             "last_scaling_action_started_at": audit.get(
                 "last_scaling_action_started_at"
             ),
+            "last_scaling_action_kind": audit.get("last_scaling_action_kind"),
         },
     }
 
@@ -437,9 +570,16 @@ def plan(snapshot, policy, host, audit):
 
     evidence = _base_evidence(observed_at, snapshot, policy, host, audit)
 
-    def decide(decision, *reasons, action=None):
+    def decide(decision, *reasons, action=None, requested_capacity_delta=None):
         return _result(
-            repository, observed_at, policy, evidence, decision, reasons, action=action
+            repository,
+            observed_at,
+            policy,
+            evidence,
+            decision,
+            reasons,
+            action=action,
+            requested_capacity_delta=requested_capacity_delta,
         )
 
     sources = snapshot.get("sources", {})
@@ -501,21 +641,50 @@ def plan(snapshot, policy, host, audit):
     if observed_queue is None:
         return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
 
+    aggregate_queue = _aggregate_queue_evidence(pressure_jobs, audit, observed_at)
+    if not aggregate_queue:
+        return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
+
     evidence["queue"] = [
-        {key: value for key, value in row.items() if key != "observed_queued_seconds"}
+        {
+            key: value
+            for key, value in row.items()
+            if key not in ("ended_at", "observed_queued_seconds")
+        }
         for row in observed_queue
     ]
-    oldest = max(row["observed_queued_seconds"] for row in observed_queue)
+    oldest = max(row["observed_queued_seconds"] for row in aggregate_queue)
     evidence["scope"].update(
         {
             "oldest_observed_queued_seconds": oldest,
             "queue_threshold_seconds": policy["queue_threshold_seconds"],
+            "aggregate_sustained_pressure": aggregate_queue,
         }
     )
     if oldest < policy["queue_threshold_seconds"]:
         return decide("WAIT", "QUEUE_BELOW_THRESHOLD")
 
-    reasons = ["OBSERVED_QUEUE_THRESHOLD_MET"]
+    reasons = ["OBSERVED_QUEUE_THRESHOLD_MET", "SUSTAINED_QUEUE_PRESSURE"]
+
+    local_capacity = _local_capacity_evidence(scoped_jobs, pressure_jobs, snapshot)
+    active_local = evidence["capacity"]["active_local_runner_count"]
+    if local_capacity is None or active_local is None:
+        return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
+    desired_local = min(
+        policy["max_active_local_runners"], active_local + len(pressure_jobs)
+    )
+    capacity_deficit = max(0, desired_local - active_local)
+    evidence["scope"].update(
+        {
+            **local_capacity,
+            "current_active_local_capacity": active_local,
+            "desired_local_capacity": desired_local,
+            "capacity_deficit": capacity_deficit,
+        }
+    )
+
+    idle_targets = local_capacity["provisioned_idle_matching_runner_names"]
+    local_start_candidate = capacity_deficit > 0 and bool(idle_targets)
     last_started = audit.get("last_scaling_action_started_at")
     if last_started is not None:
         try:
@@ -536,8 +705,23 @@ def plan(snapshot, policy, host, audit):
                 "cooldown_elapsed_seconds": elapsed,
             }
         )
-        if policy["cooldown_seconds"] and elapsed < policy["cooldown_seconds"]:
-            return decide("HOLD", *(reasons + ["COOLDOWN_ACTIVE"]))
+        latest_kind = audit.get("last_scaling_action_kind")
+        cooldown = (
+            policy["local_scale_out_cooldown_seconds"]
+            if latest_kind == "START_LOCAL" and local_start_candidate
+            else policy["cooldown_seconds"]
+        )
+        evidence["audit"].update(
+            {
+                "last_scaling_action_kind": latest_kind,
+                "effective_cooldown_seconds": cooldown,
+            }
+        )
+        if cooldown and elapsed < cooldown:
+            stabilization = ["COOLDOWN_ACTIVE"]
+            if latest_kind == "START_LOCAL" and local_start_candidate:
+                stabilization.append("LOCAL_SCALE_OUT_STABILIZING")
+            return decide("HOLD", *(reasons + stabilization))
 
     if host.get("status") != "complete" or host.get("memory_available_mib") is None:
         return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
@@ -549,27 +733,23 @@ def plan(snapshot, policy, host, audit):
         if host["cpu_percent"] > policy["max_cpu_percent"]:
             return decide("HOLD", *(reasons + ["HOST_CPU_THRESHOLD_EXCEEDED"]))
 
-    idle_target, idle_known = _idle_target(pressure_jobs, snapshot)
-    if not idle_known:
-        return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
-    if idle_target is not None:
+    if local_start_candidate:
         return decide(
             "START_LOCAL",
-            *(reasons + ["MATCHING_LOCAL_RUNNER_IDLE"]),
-            action={"kind": "START_LOCAL", "target": idle_target},
+            *(reasons + ["LOCAL_CAPACITY_DEFICIT", "MATCHING_LOCAL_RUNNER_IDLE"]),
+            action={"kind": "START_LOCAL", "target": idle_targets[0]},
+            requested_capacity_delta=capacity_deficit,
         )
 
-    active_local = evidence["capacity"]["active_local_runner_count"]
-    if active_local is None:
-        return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
-    if active_local < policy["max_active_local_runners"]:
+    if capacity_deficit > 0:
         return decide(
             "PROVISION_LOCAL",
-            *(reasons + ["LOCAL_POOL_BELOW_MAX"]),
+            *(reasons + ["LOCAL_CAPACITY_DEFICIT", "LOCAL_POOL_BELOW_MAX"]),
             action={"kind": "PROVISION_LOCAL", "target": repository},
+            requested_capacity_delta=capacity_deficit,
         )
 
-    reasons.extend(["LOCAL_POOL_AT_MAX", "LOCAL_CAPACITY_SATURATED"])
+    reasons.extend(["LOCAL_CAPACITY_TARGET_REACHED", "LOCAL_POOL_AT_MAX", "LOCAL_CAPACITY_SATURATED"])
     if not policy["burst_enabled"]:
         return decide("BLOCKED", *(reasons + ["BURST_DISABLED"]))
 

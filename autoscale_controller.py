@@ -286,6 +286,7 @@ def _empty_audit(error):
         "queue": [],
         "active_burst_capacity": None,
         "last_scaling_action_started_at": None,
+        "last_scaling_action_kind": None,
     }
 
 

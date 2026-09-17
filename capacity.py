@@ -9,11 +9,14 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import time
 
 
 CATEGORIES = ("available_now", "busy_capacity", "provisioned_idle", "inconclusive")
 RUN_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+COLLECTOR_CACHE_TTL_SECONDS = 60
+_REPO_CACHE = {}
 
 
 class EvidenceError(Exception):
@@ -31,6 +34,31 @@ def command(*args):
     return result.stdout.strip()
 
 
+def collector_metrics():
+    return {
+        "github_calls": 0,
+        "repo_resolution_calls": 0,
+        "run_list_calls": 0,
+        "job_list_calls": 0,
+        "runner_list_calls": 0,
+        "repo_cache_hits": 0,
+        "canonical_source": None,
+    }
+
+
+def record_github_call(metrics, kind):
+    if metrics is None:
+        return
+    metrics["github_calls"] += 1
+    if kind:
+        metrics[kind] += 1
+
+
+def reset_process_cache():
+    """Test/support hook; collector caches never persist beyond this process."""
+    _REPO_CACHE.clear()
+
+
 def repo_key(value):
     for prefix in ("https://github.com/", "http://github.com/",
                    "ssh://git@github.com/", "git@github.com:"):
@@ -43,14 +71,38 @@ def repo_key(value):
     return value.lower()
 
 
-def resolve_repo(requested):
+def _repo_cache_key(requested):
+    return (requested, str(Path.cwd()) if requested == "." else None)
+
+
+def resolve_repo(requested, metrics=None):
+    cache_key = _repo_cache_key(requested)
+    now = time.monotonic()
+    cached = _REPO_CACHE.get(cache_key)
+    if cached and cached[2] >= now:
+        if metrics is not None:
+            metrics["repo_cache_hits"] += 1
+            metrics["canonical_source"] = "process_cache"
+        return cached[0], cached[1]
+    if cached:
+        _REPO_CACHE.pop(cache_key, None)
+
     target = [] if requested == "." else [requested]
     try:
+        record_github_call(metrics, "repo_resolution_calls")
         canonical = command("gh", "repo", "view", *target,
                             "--json", "nameWithOwner", "--jq", ".nameWithOwner")
         if not re.fullmatch(REPO_PATTERN, canonical):
             raise EvidenceError("invalid_response")
-        return canonical, canonical.lower()
+        result = (canonical, canonical.lower())
+        cached_value = (*result, now + COLLECTOR_CACHE_TTL_SECONDS)
+        _REPO_CACHE[cache_key] = cached_value
+        # A remotely resolved canonical owner/repo is a safe alias for later calls
+        # in the same short-lived CLI process (fresh plan / verification polls).
+        _REPO_CACHE[_repo_cache_key(canonical)] = cached_value
+        if metrics is not None:
+            metrics["canonical_source"] = "remote"
+        return result
     except EvidenceError:
         if requested == ".":
             try:
@@ -58,15 +110,18 @@ def resolve_repo(requested):
             except EvidenceError:
                 return None, None
         key = repo_key(requested)
+        if metrics is not None:
+            metrics["canonical_source"] = "fallback"
         return None, key if re.fullmatch(REPO_PATTERN, key) else None
 
 
-def api_pages(endpoint, field, errors, source, max_pages=100):
+def api_pages(endpoint, field, errors, source, max_pages=100, *, metrics=None, metric_kind=None):
     """Retain partial evidence, but never report a truncated collection as complete."""
     rows = []
     for page in range(1, max_pages + 1):
         separator = "&" if "?" in endpoint else "?"
         try:
+            record_github_call(metrics, metric_kind)
             payload = json.loads(command(
                 "gh", "api", "--method", "GET",
                 f"{endpoint}{separator}per_page=100&page={page}"))
@@ -102,11 +157,12 @@ def positive_id(value):
     return type(value) is int and value > 0
 
 
-def collect_queue(repo, now, errors):
+def collect_queue(repo, now, errors, metrics=None):
     runs = {}
     for status in RUN_STATUSES:
         for run in api_pages(f"repos/{repo}/actions/runs?status={status}",
-                             "workflow_runs", errors, "queue", max_pages=10):
+                             "workflow_runs", errors, "queue", max_pages=10,
+                             metrics=metrics, metric_kind="run_list_calls"):
             if not positive_id(run.get("id")) or not positive_id(run.get("run_attempt")):
                 errors.append({"source": "queue", "reason": "invalid_run"})
                 continue
@@ -116,7 +172,8 @@ def collect_queue(repo, now, errors):
     jobs = {}
     for run in runs.values():
         endpoint = f"repos/{repo}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs"
-        for job in api_pages(endpoint, "jobs", errors, "queue"):
+        for job in api_pages(endpoint, "jobs", errors, "queue",
+                             metrics=metrics, metric_kind="job_list_calls"):
             if job.get("status") != "queued":
                 if job.get("status") not in ("in_progress", "completed", "waiting", "pending"):
                     errors.append({"source": "queue", "reason": "unknown_job_status"})
@@ -316,9 +373,11 @@ def match_jobs(jobs, runners, complete):
 
 
 def snapshot(requested):
+    started = time.monotonic()
+    metrics = collector_metrics()
     now = datetime.now(timezone.utc)
     errors = []
-    canonical, key = resolve_repo(requested)
+    canonical, key = resolve_repo(requested, metrics=metrics)
     if canonical is None:
         errors.append({"source": "repository", "reason": "canonical_identity_unavailable"})
     records = read_registry(errors)
@@ -326,8 +385,9 @@ def snapshot(requested):
     selected = [record for record in records if key and record["repo"] == key]
     jobs, remote = [], []
     if canonical:
-        jobs = collect_queue(canonical, now, errors)
-        remote = api_pages(f"repos/{canonical}/actions/runners", "runners", errors, "github_runners")
+        jobs = collect_queue(canonical, now, errors, metrics=metrics)
+        remote = api_pages(f"repos/{canonical}/actions/runners", "runners", errors, "github_runners",
+                           metrics=metrics, metric_kind="runner_list_calls")
         valid_remote = [r for r in remote if positive_id(r.get("id")) and isinstance(r.get("name"), str)]
         if len(valid_remote) != len(remote) or len({r["id"] for r in valid_remote}) != len(valid_remote):
             errors.append({"source": "github_runners", "reason": "invalid_runners"})
@@ -352,6 +412,9 @@ def snapshot(requested):
     inconclusive = (any(s != "complete" for s in sources.values()) or counts["inconclusive"] > 0
                     or not host_complete or any(j["capacity_status"] == "inconclusive"
                                                or j["queue_age_seconds"] is None for j in jobs))
+    metrics["wall_time_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
+    metrics["cache_scope"] = "process"
+    metrics["cache_ttl_seconds"] = COLLECTOR_CACHE_TTL_SECONDS
     return {
         "schema_version": 1, "kind": "CapacitySnapshot", "observed_at": now.isoformat(),
         "status": "inconclusive" if inconclusive else "complete",
@@ -367,6 +430,7 @@ def snapshot(requested):
         "host": {"active_local_runner_count": active_count if host_complete else None,
                  "observed_active_local_runner_count": active_count,
                  "status": "complete" if host_complete else "inconclusive"},
+        "collector": metrics,
     }
 
 
@@ -378,6 +442,13 @@ def render(snapshot):
     print(f"Queue: {count if count is not None else 'unknown'} queued jobs; observed={queue['observed_queued_job_count']}")
     print("Capacity: " + ", ".join(f"{key.replace('_', ' ')}={value}" for key, value in snapshot["capacity"]["counts"].items()))
     print(f"Host active local runners: {snapshot['host']['active_local_runner_count']}")
+    collector = snapshot.get("collector", {})
+    print(
+        "Collector: "
+        f"wall={collector.get('wall_time_ms')}ms github_calls={collector.get('github_calls')} "
+        f"runs={collector.get('run_list_calls')} jobs={collector.get('job_list_calls')} "
+        f"runners={collector.get('runner_list_calls')} repo_cache_hits={collector.get('repo_cache_hits')}"
+    )
     for runner in snapshot["capacity"]["runners"]:
         github = runner["github"] or {}
         print(f"  {runner['name']}: {runner['category'].replace('_', ' ')}; reason={runner['reason']}"

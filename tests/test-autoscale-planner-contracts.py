@@ -6,6 +6,7 @@ import os
 import sys
 import unittest
 from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -183,6 +184,67 @@ class PlannerContracts(unittest.TestCase):
         snapshot["queue"]["oldest_matching_queued_job_id"] = jobs[0]["job_id"] if jobs else None
         return snapshot
 
+    def two_scope_pressure(
+        self,
+        *,
+        cpu_seconds=400,
+        gpu_seconds=10,
+        cpu_jobs=1,
+        gpu_jobs=1,
+        cpu_category="provisioned_idle",
+        gpu_category="provisioned_idle",
+    ):
+        cpu_labels = ["self-hosted", "Linux", "cpu"]
+        gpu_labels = ["self-hosted", "Linux", "gpu"]
+        runners = [
+            self.runner("runner-cpu", cpu_category),
+            self.runner("runner-gpu", gpu_category),
+        ]
+        jobs = []
+        audit_rows = []
+        observed = datetime.fromisoformat(self.observed_at)
+        for prefix, labels, seconds, count, name in (
+            (100, cpu_labels, cpu_seconds, cpu_jobs, "runner-cpu"),
+            (200, gpu_labels, gpu_seconds, gpu_jobs, "runner-gpu"),
+        ):
+            for offset in range(count):
+                job = self.job(status="provisioned_idle", names=[name], labels=labels)
+                job["job_id"] = prefix + offset
+                job["run_id"] = prefix + 1000 + offset
+                jobs.append(job)
+                audit_rows.append(
+                    {
+                        "observation_id": f"scope-{job['job_id']}",
+                        "repository": "Example/RunnerOps",
+                        "job_id": job["job_id"],
+                        "run_id": job["run_id"],
+                        "run_attempt": 1,
+                        "first_seen_queued_at": (observed - timedelta(seconds=seconds)).isoformat(),
+                        "last_seen_queued_at": self.observed_at,
+                        "continuous_queued": True,
+                        "required_labels": labels,
+                        "github_created_at": "2026-09-10T10:00:00+00:00",
+                    }
+                )
+        counts = {
+            key: sum(runner["category"] == key for runner in runners)
+            for key in ("available_now", "busy_capacity", "provisioned_idle", "inconclusive")
+        }
+        snapshot = self.snapshot(status="no_matching_capacity", active_local=1, names=[])
+        snapshot["queue"].update(
+            {
+                "queued_job_count": len(jobs),
+                "observed_queued_job_count": len(jobs),
+                "oldest_queued_job_id": jobs[0]["job_id"],
+                "oldest_matching_queued_job_id": jobs[0]["job_id"],
+                "jobs": jobs,
+            }
+        )
+        snapshot["capacity"].update({"counts": counts, "runners": runners})
+        audit = self.audit()
+        audit["queue"] = audit_rows
+        return snapshot, audit
+
     def test_queue_below_observed_threshold_waits_and_ignores_github_created_age(self):
         result = self.decision(audit=self.audit(seconds=120))
         self.assertEqual(result["decision"], "WAIT")
@@ -345,6 +407,72 @@ class PlannerContracts(unittest.TestCase):
         self.assertEqual(scope["desired_local_capacity"], 5)
         self.assertEqual(scope["capacity_deficit"], 4)
         self.assertEqual(scope["provisioned_idle_matching_capacity"], 4)
+
+    def test_qualified_scope_alone_drives_capacity_and_target_selection(self):
+        snapshot, audit = self.two_scope_pressure(cpu_seconds=400, gpu_seconds=10)
+        result = self.decision(
+            snapshot=snapshot,
+            audit=audit,
+            policy=self.policy(max_active_local_runners=5),
+        )
+        scope = result["evidence"]["scope"]
+        self.assertEqual(result["decision"], "START_LOCAL")
+        self.assertEqual(result["action"], {"kind": "START_LOCAL", "target": "runner-cpu"})
+        self.assertEqual(result["requested_capacity_delta"], 1)
+        self.assertEqual(scope["pressure_queued_job_count"], 2)
+        self.assertEqual(scope["qualified_pressure_queued_job_count"], 1)
+        self.assertEqual(scope["qualified_pressure_job_ids"], [100])
+        self.assertEqual(scope["qualified_pressure_labels"], [["cpu", "linux", "self-hosted"]])
+
+    def test_each_qualified_scope_can_contribute_after_its_own_threshold(self):
+        snapshot, audit = self.two_scope_pressure(cpu_seconds=400, gpu_seconds=300)
+        result = self.decision(
+            snapshot=snapshot,
+            audit=audit,
+            policy=self.policy(max_active_local_runners=5),
+        )
+        scope = result["evidence"]["scope"]
+        self.assertEqual(result["requested_capacity_delta"], 2)
+        self.assertEqual(scope["qualified_pressure_queued_job_count"], 2)
+        self.assertEqual(scope["qualified_pressure_job_ids"], [100, 200])
+        self.assertEqual(
+            scope["qualified_pressure_labels"],
+            [["cpu", "linux", "self-hosted"], ["gpu", "linux", "self-hosted"]],
+        )
+
+    def test_young_scope_cannot_inflate_capacity_delta(self):
+        snapshot, audit = self.two_scope_pressure(
+            cpu_seconds=400, gpu_seconds=10, cpu_jobs=1, gpu_jobs=20
+        )
+        result = self.decision(
+            snapshot=snapshot,
+            audit=audit,
+            policy=self.policy(max_active_local_runners=10),
+        )
+        self.assertEqual(result["requested_capacity_delta"], 1)
+        self.assertEqual(result["evidence"]["scope"]["pressure_queued_job_count"], 21)
+        self.assertEqual(
+            result["evidence"]["scope"]["qualified_pressure_queued_job_count"], 1
+        )
+
+    def test_unqualified_idle_capability_is_not_start_target(self):
+        snapshot, audit = self.two_scope_pressure(
+            cpu_seconds=400,
+            gpu_seconds=10,
+            cpu_category="busy_capacity",
+            gpu_category="provisioned_idle",
+        )
+        result = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(result["decision"], "PROVISION_LOCAL")
+        self.assertEqual(result["action"]["target"], "Example/RunnerOps")
+
+    def test_no_qualified_scope_waits_with_aggregate_evidence(self):
+        snapshot, audit = self.two_scope_pressure(cpu_seconds=10, gpu_seconds=20)
+        result = self.decision(snapshot=snapshot, audit=audit)
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(result["reason_codes"], ["QUEUE_BELOW_THRESHOLD"])
+        self.assertEqual(result["evidence"]["scope"]["qualified_pressure_queued_job_count"], 0)
+        self.assertEqual(len(result["evidence"]["scope"]["aggregate_sustained_pressure"]), 2)
 
     def test_low_and_medium_pressure_remain_bounded(self):
         low = self.decision(

@@ -245,6 +245,15 @@ def _label_set(values):
     return {value.casefold() for value in values}
 
 
+def _normalized_label_scope(values):
+    """Return the exact case-insensitive capability boundary for one job."""
+    if not isinstance(values, list) or not values or any(
+        not isinstance(value, str) or not value for value in values
+    ):
+        return None
+    return tuple(sorted(_label_set(values)))
+
+
 def _self_hosted_jobs(snapshot, policy):
     jobs = snapshot.get("queue", {}).get("jobs")
     if not isinstance(jobs, list):
@@ -377,10 +386,7 @@ def _aggregate_queue_evidence(jobs, audit, observed_at):
         return None
     try:
         observed_dt = datetime.fromisoformat(observed_at)
-        scopes = {
-            tuple(sorted(_label_set(job["required_labels"])))
-            for job in jobs
-        }
+        scopes = {_normalized_label_scope(job["required_labels"]) for job in jobs}
     except (KeyError, TypeError):
         return None
     if not scopes or any(not scope for scope in scopes):
@@ -391,7 +397,7 @@ def _aggregate_queue_evidence(jobs, audit, observed_at):
         normalized = _audit_queue_row(row, observed_dt)
         if normalized is None:
             return None
-        scope = tuple(sorted(_label_set(normalized["required_labels"])))
+        scope = _normalized_label_scope(normalized["required_labels"])
         if scope in episodes:
             episodes[scope].append(normalized)
 
@@ -533,6 +539,9 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
             "labels": policy["label_scope"],
             "scoped_queued_job_count": None,
             "pressure_queued_job_count": None,
+            "qualified_pressure_labels": [],
+            "qualified_pressure_queued_job_count": None,
+            "qualified_pressure_job_ids": [],
             "available_matching_capacity": None,
             "current_active_local_capacity": None,
             "active_matching_local_capacity": None,
@@ -654,24 +663,47 @@ def plan(snapshot, policy, host, audit):
         for row in observed_queue
     ]
     oldest = max(row["observed_queued_seconds"] for row in aggregate_queue)
+    qualified_scopes = [
+        row
+        for row in aggregate_queue
+        if row["observed_queued_seconds"] >= policy["queue_threshold_seconds"]
+    ]
+    qualified_labels = {
+        tuple(row["required_labels"])
+        for row in qualified_scopes
+    }
+    qualified_pressure_jobs = [
+        job
+        for job in pressure_jobs
+        if _normalized_label_scope(job["required_labels"]) in qualified_labels
+    ]
     evidence["scope"].update(
         {
             "oldest_observed_queued_seconds": oldest,
             "queue_threshold_seconds": policy["queue_threshold_seconds"],
             "aggregate_sustained_pressure": aggregate_queue,
+            "qualified_pressure_labels": sorted(
+                row["required_labels"] for row in qualified_scopes
+            ),
+            "qualified_pressure_queued_job_count": len(qualified_pressure_jobs),
+            "qualified_pressure_job_ids": sorted(
+                job["job_id"] for job in qualified_pressure_jobs
+            ),
         }
     )
-    if oldest < policy["queue_threshold_seconds"]:
+    if not qualified_pressure_jobs:
         return decide("WAIT", "QUEUE_BELOW_THRESHOLD")
 
     reasons = ["OBSERVED_QUEUE_THRESHOLD_MET", "SUSTAINED_QUEUE_PRESSURE"]
 
-    local_capacity = _local_capacity_evidence(scoped_jobs, pressure_jobs, snapshot)
+    local_capacity = _local_capacity_evidence(
+        qualified_pressure_jobs, qualified_pressure_jobs, snapshot
+    )
     active_local = evidence["capacity"]["active_local_runner_count"]
     if local_capacity is None or active_local is None:
         return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
     desired_local = min(
-        policy["max_active_local_runners"], active_local + len(pressure_jobs)
+        policy["max_active_local_runners"], active_local + len(qualified_pressure_jobs)
     )
     capacity_deficit = max(0, desired_local - active_local)
     evidence["scope"].update(

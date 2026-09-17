@@ -160,6 +160,13 @@ subset and capacity evidence; the store does not infer policy or invent capacity
 Decision/evidence time ordering is checked. Decisions are immutable: exact replay
 is a no-op, conflicting payloads under one ID fail with `idempotency_conflict`.
 
+The richer #104 planner scope (aggregate pressure windows, qualified label scopes,
+desired local capacity and capacity deficit) is not projected into this v1
+decision-evidence structure. Queue episodes remain durable and can be inspected
+through history, but `autoscale explain` cannot by itself reconstruct the scoped
+capacity arithmetic. A future extension must version the closed allowlist rather
+than attaching arbitrary metadata to a decision record.
+
 An action has `action_id`, `decision_id`, `kind`, `target`, `state`, `timestamp`,
 `started_at`, `finished_at`, `external_id`, and `diagnostic`. Kinds are
 `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`. Diagnostics contain only a bounded

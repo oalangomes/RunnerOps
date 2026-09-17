@@ -82,7 +82,14 @@ off within one scope at the same RunnerOps observation without resetting that
 window. Different label sets never share it; a real gap, queue disappearance or
 stale/non-continuous current episode resets qualification.
 
-The planner then uses the qualifying aggregate window's:
+Each label scope qualifies independently. A young GPU scope therefore cannot add
+jobs, idle targets or requested capacity to a CPU scope that has already met the
+threshold. When at least one scope qualifies, only its current pressure jobs are
+used for desired local capacity and the next local target; unqualified scopes stay
+visible in evidence but do not block qualified work. If none qualifies, the plan
+is `WAIT` with `QUEUE_BELOW_THRESHOLD`.
+
+The planner then uses each qualifying aggregate window's:
 
 ```text
 last_seen_queued_at - first_seen_queued_at
@@ -199,10 +206,10 @@ The JSON surface contains:
 `status` is `inconclusive` only with decision `INCONCLUSIVE`; other deterministic
 decisions use `ok`. `action` is null for decisions that request no capacity.
 Evidence contains the normalized observation timestamp, queue/capacity facts, host
-headroom, scoped/pressure job IDs, aggregate pressure windows, available/matching
-capacity, bounded desired local capacity, capacity deficit and audit-read status
-used by the plan. It does not contain credentials, workflow bodies or arbitrary
-command output.
+headroom, scoped/pressure job IDs, aggregate pressure windows, qualified label
+scopes and job IDs, available/matching capacity, bounded desired local capacity,
+capacity deficit and audit-read status used by the plan. It does not contain
+credentials, workflow bodies or arbitrary command output.
 
 The plan ID is a SHA-256-derived identifier over schema version, repository,
 normalized policy and normalized evidence. The public `timestamp` is the source
@@ -227,6 +234,17 @@ runnerctl autoscale explain --decision <returned-plan-id>
 does not imply that `explain` will find the plan. `explain` only addresses decisions
 actually persisted through the internal audit-store writer API. A future controller
 must perform that explicit persistence step before it applies an action.
+
+### Durable projection limitation
+
+The #69 `Decision` evidence contract is intentionally closed and currently stores
+the normalized current queue references, aggregate capacity counts, action result,
+reason codes and requested delta—not the richer #104 `scope` object. The durable
+queue-observation history retains the raw episodes required to independently
+reconstruct pressure windows, but `autoscale explain` alone cannot reproduce the
+qualified-scope selection or desired-capacity arithmetic. Extending that projection
+requires a versioned storage-contract change; this slice deliberately leaves the
+closed schema unchanged.
 
 ## Safety boundaries
 

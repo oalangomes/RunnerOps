@@ -3,6 +3,7 @@
 
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -136,7 +137,9 @@ class ProvisionContracts(unittest.TestCase):
         self.assertEqual(result["current_local_pool_size"], 1)
         self.assertEqual(result["max_local_pool_size"], 4)
 
-        at_max = provisioning_candidate(snapshot, self.policy(RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS="1"), scope)
+        at_max = provisioning_candidate(
+            snapshot, self.policy(RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS="1"), scope
+        )
         self.assertEqual(at_max["reason"], "LOCAL_POOL_AT_MAX")
 
         disabled = provisioning_candidate(snapshot, load_provision_policy({}), scope)
@@ -146,7 +149,9 @@ class ProvisionContracts(unittest.TestCase):
         snapshot = self.snapshot()
         result = provisioning_candidate(
             snapshot,
-            self.policy(RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS="self-hosted,Linux,X64,local-runner"),
+            self.policy(
+                RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS="self-hosted,Linux,X64,local-runner"
+            ),
             [["self-hosted", "Linux", "X64", "GPU"]],
         )
         self.assertEqual(result["status"], "blocked")
@@ -195,7 +200,9 @@ class ProvisionContracts(unittest.TestCase):
 
     def test_post_apply_name_mismatch_is_inconclusive(self):
         with tempfile.TemporaryDirectory() as tmp:
-            script, _ = self.fake_runnerctl(tmp, planned="example-auto-01", applied="example-auto-01-2")
+            script, _ = self.fake_runnerctl(
+                tmp, planned="example-auto-01", applied="example-auto-01-2"
+            )
             result = provision_exact(
                 "Example/Project", "example-auto-01", self.policy(), runnerctl=script
             )
@@ -203,11 +210,35 @@ class ProvisionContracts(unittest.TestCase):
             self.assertEqual(result["code"], "PROVISION_TARGET_MISMATCH")
 
     def test_positive_identity_requires_exact_healthy_provisioned_idle(self):
-        good = self.snapshot([self.runner("example-auto-01", category="provisioned_idle", registration_id=42)])
+        good = self.snapshot(
+            [
+                self.runner(
+                    "example-auto-01",
+                    category="provisioned_idle",
+                    registration_id=42,
+                )
+            ]
+        )
         self.assertEqual(provisioned_identity(good, "example-auto-01"), "42")
-        busy = self.snapshot([self.runner("example-auto-01", category="busy_capacity", registration_id=42)])
+        busy = self.snapshot(
+            [self.runner("example-auto-01", category="busy_capacity", registration_id=42)]
+        )
         self.assertIsNone(provisioned_identity(busy, "example-auto-01"))
         self.assertIsNone(provisioned_identity(good, "different"))
+
+    def test_exact_name_boundary_subsuite(self):
+        completed = subprocess.run(
+            [sys.executable, str(ROOT / "tests/test-autoscale-exact-provisioning-contracts.py")],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
 
 
 if __name__ == "__main__":

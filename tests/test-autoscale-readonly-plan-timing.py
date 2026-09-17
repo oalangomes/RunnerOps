@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Contracts for bounded read-only autoscale evidence projection (#108)."""
 
+import sys
 import unittest
-from copy import deepcopy
+from pathlib import Path
 
-from autoscale_planner import _aggregate_queue_evidence, plan
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from autoscale_planner import _aggregate_queue_evidence, plan  # noqa: E402
 
 
 class ReadOnlyPlanTimingContracts(unittest.TestCase):

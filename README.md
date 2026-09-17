@@ -428,6 +428,7 @@ RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB=1024
 RUNNER_AUTOSCALE_MAX_CPU_PERCENT=
 RUNNER_AUTOSCALE_MAX_BURST_RUNNERS=0
 RUNNER_AUTOSCALE_COOLDOWN_SECONDS=300
+RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS=30
 RUNNER_AUTOSCALE_BURST_ENABLED=false
 RUNNER_AUTOSCALE_LABEL_SCOPE=
 ```
@@ -436,6 +437,15 @@ O mesmo conjunto normalizado de evidência + policy produz o mesmo decision ID,
 reason codes e JSON. Evidência necessária ausente/contraditória resulta em
 `INCONCLUSIVE` (exit `3`) em vez de uma ação otimista. Veja o
 [contrato do planner determinístico](docs/autoscale-planner.md).
+
+Após a qualificação inicial da fila, o planner calcula uma capacidade local alvo
+limitada pelo máximo do host a partir da pressão que permanece sem capacidade. O
+`requested_capacity_delta` expõe esse déficit (por isso pode ser maior que `1`),
+mas o controller ainda inicia somente um runner local exato por execução. Entre
+`START_LOCAL` consecutivos, o intervalo curto
+`RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS` permite revalidar e drenar
+capacidade já provisionada sem enfraquecer o threshold de fila nem o cooldown
+mais longo de outras ações.
 
 ### Aplicar uma ativação local governada
 

@@ -18,7 +18,10 @@ from autoscale_contracts import (
     timestamp,
 )
 
-MAX_PLANNER_QUEUE_ROWS = 100
+# Aggregate pressure needs the short sequence of completed hand-off episodes as
+# well as the current queue. Keep the reader bounded and fail closed, while
+# allowing a busy queue to churn through a normal qualification window.
+MAX_PLANNER_QUEUE_ROWS = 1000
 
 
 def _repo_key(repository):
@@ -29,7 +32,9 @@ def read_planner_evidence(store, repository):
     """Read only the retained facts needed by the planner for one repository.
 
     Unlike ``history(limit=...)``, these queries are repository-scoped and target
-    only open queue episodes, active actions and the latest started-action event.
+    queue episodes, active actions and the latest started-action event. Completed
+    episodes are retained here only to prove a bounded aggregate pressure window
+    when individual queued jobs churn.
     Unrelated or old terminal history cannot make controller planning inconclusive.
     """
 
@@ -40,7 +45,7 @@ def read_planner_evidence(store, repository):
             """SELECT q.*, r.repository
             FROM queue_observations q
             JOIN repository_observations r USING(repo_key)
-            WHERE q.repo_key=? AND q.ended_at IS NULL
+            WHERE q.repo_key=?
             ORDER BY q.last_seen_queued_at DESC, q.observation_id
             LIMIT ?""",
             (repo_key, MAX_PLANNER_QUEUE_ROWS + 1),
@@ -59,7 +64,7 @@ def read_planner_evidence(store, repository):
         ).fetchall()
 
         latest_started = store.connection.execute(
-            """SELECT e.timestamp
+            """SELECT e.timestamp, a.payload
             FROM action_events e
             JOIN actions a USING(action_id)
             JOIN decisions d USING(decision_id)
@@ -89,7 +94,10 @@ def read_planner_evidence(store, repository):
                 "run_attempt": item["run_attempt"],
                 "first_seen_queued_at": timestamp(item["first_seen_queued_at"]),
                 "last_seen_queued_at": timestamp(item["last_seen_queued_at"]),
-                "continuous_queued": fresh,
+                "continuous_queued": item["ended_at"] is None and fresh,
+                "ended_at": (
+                    timestamp(item["ended_at"]) if item["ended_at"] is not None else None
+                ),
                 "required_labels": labels,
                 "github_created_at": (
                     timestamp(item["github_created_at"])
@@ -110,6 +118,11 @@ def read_planner_evidence(store, repository):
         action = action_record(json.loads(row["payload"]))
         if action["kind"] == "BURST_CLOUD":
             active_burst += 1
+    latest_kind = (
+        action_record(json.loads(latest_started["payload"]))["kind"]
+        if latest_started is not None
+        else None
+    )
 
     return {
         "status": "complete",
@@ -119,6 +132,7 @@ def read_planner_evidence(store, repository):
         "last_scaling_action_started_at": (
             timestamp(latest_started["timestamp"]) if latest_started is not None else None
         ),
+        "last_scaling_action_kind": latest_kind,
     }
 
 

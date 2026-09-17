@@ -33,9 +33,10 @@ Exit codes:
 | `2` | Invalid CLI arguments or autoscale policy |
 | `3` | Required evidence was missing, contradictory or unavailable; decision is `INCONCLUSIVE` |
 
-A planned action is evidence, not execution. `requested_capacity_delta: 1` means
-"one additional capacity unit would be requested by this plan"; it does not mean
-that capacity was started or provisioned.
+A planned action is evidence, not execution. `requested_capacity_delta` is the
+bounded local capacity deficit justified by the current plan (and can therefore
+be greater than one); it does not mean that multiple runners were started or
+provisioned.
 
 ## Policy
 
@@ -50,6 +51,7 @@ are no planner-specific CLI policy flags.
 | `RUNNER_AUTOSCALE_MAX_CPU_PERCENT` | unset | Optional host CPU guard; unset disables CPU sampling/guard |
 | `RUNNER_AUTOSCALE_MAX_BURST_RUNNERS` | `0` | Maximum retained active/planned burst actions considered allowable |
 | `RUNNER_AUTOSCALE_COOLDOWN_SECONDS` | `300` | Minimum elapsed time after the latest retained started scaling action |
+| `RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS` | `30` | Stabilization interval between consecutive retained `START_LOCAL` actions while the local capacity deficit remains proven |
 | `RUNNER_AUTOSCALE_BURST_ENABLED` | `false` | Explicitly permits planning `BURST_CLOUD` after local options are exhausted |
 | `RUNNER_AUTOSCALE_LABEL_SCOPE` | unset | Optional comma-separated labels; unset selects queued self-hosted jobs for the repository |
 
@@ -74,7 +76,20 @@ repository
 + continuous_queued=true
 ```
 
-The planner then uses:
+The planner keeps exact job episodes in audit evidence and also derives a bounded
+aggregate window for each exact normalized `required_labels` set. Jobs may hand
+off within one scope at the same RunnerOps observation without resetting that
+window. Different label sets never share it; a real gap, queue disappearance or
+stale/non-continuous current episode resets qualification.
+
+Each label scope qualifies independently. A young GPU scope therefore cannot add
+jobs, idle targets or requested capacity to a CPU scope that has already met the
+threshold. When at least one scope qualifies, only its current pressure jobs are
+used for desired local capacity and the next local target; unqualified scopes stay
+visible in evidence but do not block qualified work. If none qualifies, the plan
+is `WAIT` with `QUEUE_BELOW_THRESHOLD`.
+
+The planner then uses each qualifying aggregate window's:
 
 ```text
 last_seen_queued_at - first_seen_queued_at
@@ -110,7 +125,7 @@ continuous observed queue threshold met?
   no  -> WAIT
   yes
    ↓
-cooldown/headroom guards pass?
+local scale-out stabilization or action cooldown/headroom guards pass?
   no  -> HOLD
   yes
    ↓
@@ -143,6 +158,10 @@ Public reason codes are uppercase and stable within the v1 contract:
 - `MATCHING_LOCAL_RUNNER_AVAILABLE`
 - `MATCHING_LOCAL_RUNNER_IDLE`
 - `OBSERVED_QUEUE_THRESHOLD_MET`
+- `SUSTAINED_QUEUE_PRESSURE`
+- `LOCAL_CAPACITY_DEFICIT`
+- `LOCAL_CAPACITY_TARGET_REACHED`
+- `LOCAL_SCALE_OUT_STABILIZING`
 - `LOCAL_POOL_BELOW_MAX`
 - `LOCAL_POOL_AT_MAX`
 - `HOST_MEMORY_HEADROOM_LOW`
@@ -175,7 +194,7 @@ The JSON surface contains:
     "MATCHING_LOCAL_RUNNER_IDLE",
     "OBSERVED_QUEUE_THRESHOLD_MET"
   ],
-  "requested_capacity_delta": 1,
+  "requested_capacity_delta": 3,
   "action": {
     "kind": "START_LOCAL",
     "target": "runner-name"
@@ -187,8 +206,10 @@ The JSON surface contains:
 `status` is `inconclusive` only with decision `INCONCLUSIVE`; other deterministic
 decisions use `ok`. `action` is null for decisions that request no capacity.
 Evidence contains the normalized observation timestamp, queue/capacity facts, host
-headroom, scoped/pressure job IDs and audit-read status used by the plan. It does
-not contain credentials, workflow bodies or arbitrary command output.
+headroom, scoped/pressure job IDs, aggregate pressure windows, qualified label
+scopes and job IDs, available/matching capacity, bounded desired local capacity,
+capacity deficit and audit-read status used by the plan. It does not contain
+credentials, workflow bodies or arbitrary command output.
 
 The plan ID is a SHA-256-derived identifier over schema version, repository,
 normalized policy and normalized evidence. The public `timestamp` is the source
@@ -213,6 +234,17 @@ runnerctl autoscale explain --decision <returned-plan-id>
 does not imply that `explain` will find the plan. `explain` only addresses decisions
 actually persisted through the internal audit-store writer API. A future controller
 must perform that explicit persistence step before it applies an action.
+
+### Durable projection limitation
+
+The #69 `Decision` evidence contract is intentionally closed and currently stores
+the normalized current queue references, aggregate capacity counts, action result,
+reason codes and requested delta—not the richer #104 `scope` object. The durable
+queue-observation history retains the raw episodes required to independently
+reconstruct pressure windows, but `autoscale explain` alone cannot reproduce the
+qualified-scope selection or desired-capacity arithmetic. Extending that projection
+requires a versioned storage-contract change; this slice deliberately leaves the
+closed schema unchanged.
 
 ## Safety boundaries
 

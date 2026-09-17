@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - autoscale_provision.py
+      - autoscale_provision_controller.py
       - tests/test-autoscale-provision-contracts.py
+      - tests/test-autoscale-provision-controller-contracts.py
       - .github/workflows/provision-local-draft.yml
 
 permissions:
@@ -20,6 +22,12 @@ jobs:
           persist-credentials: false
       - name: Validate syntax
         run: |
-          python3 -B -m py_compile autoscale_provision.py tests/test-autoscale-provision-contracts.py
+          python3 -B -m py_compile \
+            autoscale_provision.py \
+            autoscale_provision_controller.py \
+            tests/test-autoscale-provision-contracts.py \
+            tests/test-autoscale-provision-controller-contracts.py
       - name: Run provisioning contracts
-        run: python3 -B tests/test-autoscale-provision-contracts.py
+        run: |
+          python3 -B tests/test-autoscale-provision-contracts.py
+          python3 -B tests/test-autoscale-provision-controller-contracts.py

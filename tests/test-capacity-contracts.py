@@ -2,12 +2,15 @@
 """Public CLI contracts with strict read-only GitHub/systemd fixtures."""
 
 import copy
+from datetime import datetime, timezone
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -300,6 +303,90 @@ class CapacityContracts(unittest.TestCase):
         job['labels'] = []
         result = self.invoke('capacity', expected=3)
         self.assertEqual(result['queue']['jobs'][0]['capacity_status'], 'inconclusive')
+
+    def test_job_queries_are_bounded_parallel_and_metrics_are_merged(self):
+        spec = importlib.util.spec_from_file_location('capacity_parallel', ROOT / 'capacity.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        runs = [
+            {
+                'id': 100 + index,
+                'workflow_id': 7,
+                'name': 'Build',
+                'status': 'queued',
+                'run_attempt': 1,
+                'head_sha': 'abc123',
+                'head_branch': 'feature',
+            }
+            for index in range(8)
+        ]
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def fake_api_pages(endpoint, field, local_errors, source, max_pages=100, *,
+                           metrics=None, metric_kind=None, retries=0):
+            nonlocal active, peak
+            module.record_github_call(metrics, metric_kind)
+            if 'actions/runs?status=' in endpoint:
+                return runs if endpoint.endswith('status=queued') else []
+            self.assertEqual(field, 'jobs')
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.03)
+            with lock:
+                active -= 1
+            run_id = int(endpoint.split('/runs/')[1].split('/')[0])
+            return [{
+                'id': 1000 + run_id,
+                'name': 'test',
+                'status': 'queued',
+                'created_at': '2020-01-01T00:00:00Z',
+                'labels': ['self-hosted', 'Linux'],
+            }]
+
+        metrics = module.collector_metrics()
+        errors = []
+        with patch.object(module, 'api_pages', side_effect=fake_api_pages):
+            jobs = module.collect_queue(
+                'Example/MixedCase', datetime.now(timezone.utc), errors, metrics=metrics
+            )
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(jobs), 8)
+        self.assertGreaterEqual(peak, 2)
+        self.assertLessEqual(peak, module.MAX_JOB_QUERY_WORKERS)
+        self.assertEqual(metrics['job_query_workers'], module.MAX_JOB_QUERY_WORKERS)
+        self.assertEqual(metrics['job_list_calls'], 8)
+
+    def test_job_api_retry_is_bounded_and_preserves_fail_closed_semantics(self):
+        spec = importlib.util.spec_from_file_location('capacity_retry', ROOT / 'capacity.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        payload = json.dumps({'jobs': [], 'total_count': 0})
+        metrics = module.collector_metrics()
+        errors = []
+        with patch.object(
+            module,
+            'command',
+            side_effect=[module.EvidenceError('query_failed'), payload],
+        ):
+            rows = module.api_pages(
+                'repos/Example/MixedCase/actions/runs/1/attempts/1/jobs',
+                'jobs',
+                errors,
+                'queue',
+                metrics=metrics,
+                metric_kind='job_list_calls',
+                retries=1,
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(errors, [])
+        self.assertEqual(metrics['job_list_calls'], 2)
+        self.assertEqual(metrics['github_calls'], 2)
+        self.assertEqual(metrics['job_query_retry_calls'], 1)
 
     def test_pagination_runs_jobs_and_runners_latest_attempt(self):
         self.runner()

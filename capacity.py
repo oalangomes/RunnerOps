@@ -3,6 +3,7 @@
 
 import argparse
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import os
@@ -16,6 +17,8 @@ CATEGORIES = ("available_now", "busy_capacity", "provisioned_idle", "inconclusiv
 RUN_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 COLLECTOR_CACHE_TTL_SECONDS = 60
+MAX_JOB_QUERY_WORKERS = 4
+JOB_QUERY_RETRIES = 1
 _REPO_CACHE = {}
 
 
@@ -41,6 +44,8 @@ def collector_metrics():
         "run_list_calls": 0,
         "job_list_calls": 0,
         "runner_list_calls": 0,
+        "job_query_retry_calls": 0,
+        "job_query_workers": 0,
         "repo_cache_hits": 0,
         "canonical_source": None,
     }
@@ -115,31 +120,51 @@ def resolve_repo(requested, metrics=None):
         return None, key if re.fullmatch(REPO_PATTERN, key) else None
 
 
-def api_pages(endpoint, field, errors, source, max_pages=100, *, metrics=None, metric_kind=None):
+def api_pages(
+    endpoint,
+    field,
+    errors,
+    source,
+    max_pages=100,
+    *,
+    metrics=None,
+    metric_kind=None,
+    retries=0,
+):
     """Retain partial evidence, but never report a truncated collection as complete."""
     rows = []
     for page in range(1, max_pages + 1):
         separator = "&" if "?" in endpoint else "?"
-        try:
-            record_github_call(metrics, metric_kind)
-            payload = json.loads(command(
-                "gh", "api", "--method", "GET",
-                f"{endpoint}{separator}per_page=100&page={page}"))
-            batch, total = payload[field], payload["total_count"]
-            if (not isinstance(batch, list) or type(total) is not int or total < 0
-                    or any(not isinstance(row, dict) for row in batch)):
-                raise ValueError
-            rows.extend(batch)
-            if len(batch) < 100:
-                if len(rows) < total:
-                    errors.append({"source": source, "reason": "incomplete_pagination"})
-                return rows
-            if len(rows) >= total:
-                if max_pages == 10 and total >= 1000:
-                    errors.append({"source": source, "reason": "pagination_limit"})
-                return rows
-        except (EvidenceError, ValueError, KeyError, TypeError):
+        failure = None
+        for attempt in range(retries + 1):
+            try:
+                record_github_call(metrics, metric_kind)
+                payload = json.loads(command(
+                    "gh", "api", "--method", "GET",
+                    f"{endpoint}{separator}per_page=100&page={page}"))
+                batch, total = payload[field], payload["total_count"]
+                if (not isinstance(batch, list) or type(total) is not int or total < 0
+                        or any(not isinstance(row, dict) for row in batch)):
+                    raise ValueError
+                failure = None
+                break
+            except (EvidenceError, ValueError, KeyError, TypeError) as exc:
+                failure = exc
+                if attempt < retries:
+                    if metrics is not None:
+                        metrics["job_query_retry_calls"] += 1
+                    continue
+        if failure is not None:
             errors.append({"source": source, "reason": "query_failed"})
+            return rows
+        rows.extend(batch)
+        if len(batch) < 100:
+            if len(rows) < total:
+                errors.append({"source": source, "reason": "incomplete_pagination"})
+            return rows
+        if len(rows) >= total:
+            if max_pages == 10 and total >= 1000:
+                errors.append({"source": source, "reason": "pagination_limit"})
             return rows
     errors.append({"source": source, "reason": "pagination_limit"})
     return rows
@@ -157,6 +182,22 @@ def positive_id(value):
     return type(value) is int and value > 0
 
 
+def _collect_run_jobs(repo, run):
+    local_errors = []
+    local_metrics = collector_metrics()
+    endpoint = f"repos/{repo}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs"
+    rows = api_pages(
+        endpoint,
+        "jobs",
+        local_errors,
+        "queue",
+        metrics=local_metrics,
+        metric_kind="job_list_calls",
+        retries=JOB_QUERY_RETRIES,
+    )
+    return run, rows, local_errors, local_metrics
+
+
 def collect_queue(repo, now, errors, metrics=None):
     runs = {}
     for status in RUN_STATUSES:
@@ -169,11 +210,27 @@ def collect_queue(repo, now, errors, metrics=None):
             previous = runs.get(run["id"])
             if previous is None or run["run_attempt"] >= previous["run_attempt"]:
                 runs[run["id"]] = run
+
+    ordered_runs = sorted(runs.values(), key=lambda run: (run["id"], run["run_attempt"]))
+    workers = min(MAX_JOB_QUERY_WORKERS, len(ordered_runs))
+    if metrics is not None:
+        metrics["job_query_workers"] = workers
+
+    if workers:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runnerops-jobs") as executor:
+            collected = executor.map(lambda run: _collect_run_jobs(repo, run), ordered_runs)
+            job_batches = list(collected)
+    else:
+        job_batches = []
+
     jobs = {}
-    for run in runs.values():
-        endpoint = f"repos/{repo}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs"
-        for job in api_pages(endpoint, "jobs", errors, "queue",
-                             metrics=metrics, metric_kind="job_list_calls"):
+    for run, rows, batch_errors, batch_metrics in job_batches:
+        errors.extend(batch_errors)
+        if metrics is not None:
+            metrics["github_calls"] += batch_metrics["github_calls"]
+            metrics["job_list_calls"] += batch_metrics["job_list_calls"]
+            metrics["job_query_retry_calls"] += batch_metrics["job_query_retry_calls"]
+        for job in rows:
             if job.get("status") != "queued":
                 if job.get("status") not in ("in_progress", "completed", "waiting", "pending"):
                     errors.append({"source": "queue", "reason": "unknown_job_status"})

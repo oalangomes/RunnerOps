@@ -1,0 +1,25 @@
+name: Validate local provisioning draft
+
+on:
+  pull_request:
+    paths:
+      - autoscale_provision.py
+      - tests/test-autoscale-provision-contracts.py
+      - .github/workflows/provision-local-draft.yml
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate syntax
+        run: |
+          python3 -B -m py_compile autoscale_provision.py tests/test-autoscale-provision-contracts.py
+      - name: Run provisioning contracts
+        run: python3 -B tests/test-autoscale-provision-contracts.py

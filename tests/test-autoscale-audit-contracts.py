@@ -602,10 +602,7 @@ sys.meta_path.insert(0, NoSQLite())
         )
         for name in ("runners.sh", "runner-services.sh", "ci-watch.sh"):
             script = platform / name
-            script.write_text('#!/bin/sh\
-printf "legacy-ok\\\
-"\
-')
+            script.write_text('#!/bin/sh\nprintf "legacy-ok\\n"\n')
             script.chmod(0o755)
         env["ACTIONS_RUNNERS_HOME"] = str(platform)
         for args in [

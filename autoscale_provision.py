@@ -165,7 +165,9 @@ def compatible_scopes(qualified_scopes, template_labels):
     offered = {label.casefold() for label in template_labels if isinstance(label, str) and label}
     result = []
     for scope in qualified_scopes:
-        if not isinstance(scope, list) or not scope or any(not isinstance(label, str) or not label for label in scope):
+        if not isinstance(scope, list) or not scope or any(
+            not isinstance(label, str) or not label for label in scope
+        ):
             continue
         required = {label.casefold() for label in scope}
         if required <= offered:
@@ -220,7 +222,11 @@ def provisioning_candidate(snapshot, policy, qualified_scopes):
 def _command(repository, target, policy, *, plan=False, runnerctl=None):
     repository = canonical_repo(repository)
     template = policy["template"]
-    executable = Path(runnerctl) if runnerctl is not None else Path(__file__).resolve().parent / "runnerctl"
+    executable = (
+        Path(runnerctl)
+        if runnerctl is not None
+        else Path(__file__).resolve().parent / "runnerctl"
+    )
     command = [
         str(executable),
         "add",
@@ -243,7 +249,7 @@ def _command(repository, target, policy, *, plan=False, runnerctl=None):
     return command
 
 
-def _run(command, timeout):
+def _run(command, timeout, *, env=None):
     try:
         return subprocess.run(
             command,
@@ -252,6 +258,7 @@ def _run(command, timeout):
             stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -267,45 +274,103 @@ def _planned_name(output):
 def _applied_name(output):
     for line in output.splitlines():
         if line.startswith("[OK] runner="):
-            value = line[len("[OK] runner="):].split(" ", 1)[0].strip()
+            value = line[len("[OK] runner=") :].split(" ", 1)[0].strip()
             return value or None
     return None
 
 
 def provision_exact(repository, target, policy, *, runnerctl=None, timeout=180):
-    """Preview then apply one exact target without exposing command output to callers.
+    """Preview then apply one immutable local target through ``runnerctl add``.
 
-    ``runnerctl add --plan`` is intentionally executed first. If its effective
-    collision-resolved name differs from the immutable action target, the function
-    aborts before the registration-token boundary. The apply result is classified
-    only into bounded codes; raw output/tokens are never returned.
+    The preview catches ordinary collisions before ``runnerctl add`` requests a
+    short-lived registration token. Apply additionally exports
+    ``RUNNEROPS_EXACT_NAME``; configure-runner then refuses auto-increment and
+    atomically reserves the exact local directory. A race after preview can
+    therefore consume a short-lived token, but it cannot silently register a
+    different target such as ``target-2``.
     """
 
-    if not isinstance(target, str) or not PREFIX_PATTERN.fullmatch(target.rsplit("-", 1)[0]):
-        return {"status": "failed", "code": "PROVISION_TARGET_INVALID", "exit_code": 2}
+    if not isinstance(target, str) or not PREFIX_PATTERN.fullmatch(
+        target.rsplit("-", 1)[0]
+    ):
+        return {
+            "status": "failed",
+            "code": "PROVISION_TARGET_INVALID",
+            "exit_code": 2,
+        }
 
-    preview = _run(_command(repository, target, policy, plan=True, runnerctl=runnerctl), timeout)
+    preview = _run(
+        _command(repository, target, policy, plan=True, runnerctl=runnerctl), timeout
+    )
     if preview is None:
-        return {"status": "failed", "code": "PROVISION_PREVIEW_UNAVAILABLE", "exit_code": 1}
+        return {
+            "status": "failed",
+            "code": "PROVISION_PREVIEW_UNAVAILABLE",
+            "exit_code": 1,
+        }
     preview_output = preview.stdout + preview.stderr
     if preview.returncode != 0:
-        return {"status": "failed", "code": "PROVISION_PREVIEW_FAILED", "exit_code": preview.returncode}
+        return {
+            "status": "failed",
+            "code": "PROVISION_PREVIEW_FAILED",
+            "exit_code": preview.returncode,
+        }
     if _planned_name(preview_output) != target:
-        return {"status": "failed", "code": "PROVISION_TARGET_COLLISION", "exit_code": 1}
+        return {
+            "status": "failed",
+            "code": "PROVISION_TARGET_COLLISION",
+            "exit_code": 1,
+        }
 
-    applied = _run(_command(repository, target, policy, plan=False, runnerctl=runnerctl), timeout)
+    exact_env = os.environ.copy()
+    exact_env["RUNNEROPS_EXACT_NAME"] = target
+    applied = _run(
+        _command(repository, target, policy, plan=False, runnerctl=runnerctl),
+        timeout,
+        env=exact_env,
+    )
     if applied is None:
-        return {"status": "inconclusive", "code": "PROVISION_EXECUTION_UNKNOWN", "exit_code": 1}
+        return {
+            "status": "inconclusive",
+            "code": "PROVISION_EXECUTION_UNKNOWN",
+            "exit_code": 1,
+        }
     output = applied.stdout + applied.stderr
     if applied.returncode == 0:
         if _applied_name(output) != target:
-            return {"status": "inconclusive", "code": "PROVISION_TARGET_MISMATCH", "exit_code": 1}
-        return {"status": "ok", "code": "PROVISION_ADD_COMPLETED", "exit_code": 0}
+            return {
+                "status": "inconclusive",
+                "code": "PROVISION_TARGET_MISMATCH",
+                "exit_code": 1,
+            }
+        return {
+            "status": "ok",
+            "code": "PROVISION_ADD_COMPLETED",
+            "exit_code": 0,
+        }
+    if "[EXACT-NAME-COLLISION]" in output:
+        return {
+            "status": "inconclusive",
+            "code": "PROVISION_TARGET_COLLISION_RACE",
+            "exit_code": applied.returncode,
+        }
     if "[PARTIAL]" in output:
-        return {"status": "inconclusive", "code": "PROVISION_PARTIAL", "exit_code": applied.returncode}
+        return {
+            "status": "inconclusive",
+            "code": "PROVISION_PARTIAL",
+            "exit_code": applied.returncode,
+        }
     if "[INCONCLUSIVE]" in output:
-        return {"status": "inconclusive", "code": "PROVISION_OUTCOME_UNKNOWN", "exit_code": applied.returncode}
-    return {"status": "failed", "code": "PROVISION_ADD_FAILED", "exit_code": applied.returncode}
+        return {
+            "status": "inconclusive",
+            "code": "PROVISION_OUTCOME_UNKNOWN",
+            "exit_code": applied.returncode,
+        }
+    return {
+        "status": "failed",
+        "code": "PROVISION_ADD_FAILED",
+        "exit_code": applied.returncode,
+    }
 
 
 def provisioned_identity(snapshot, target):

@@ -46,7 +46,11 @@ trap 'rm -f "$tmp" "$template_tmp"' EXIT
 command -v sudo >/dev/null 2>&1 || [[ "$(id -u)" -eq 0 ]] ||
   die "sudo e obrigatorio para instalar a autorizacao de runtime"
 
-printf '%s ALL=(root) NOPASSWD: %s\n' "$invoking_user" "$TARGET_HELPER" > "$tmp"
+# /usr/bin/true and /bin/true are harmless bounded commands used only by the
+# existing runnerctl add administrative preflight (`sudo -n true`). Actual
+# systemd mutations remain restricted to the root-owned helper below.
+printf '%s ALL=(root) NOPASSWD: %s, /usr/bin/true, /bin/true\n' \
+  "$invoking_user" "$TARGET_HELPER" > "$tmp"
 chmod 0440 "$tmp"
 
 cat > "$template_tmp" <<EOF
@@ -89,6 +93,7 @@ if [[ "$(id -u)" -eq 0 ]]; then
   "$TARGET_HELPER" check
 else
   sudo -n "$TARGET_HELPER" check
+  sudo -n true >/dev/null
 fi
 systemctl cat "$template_unit" >/dev/null
 

@@ -26,6 +26,7 @@ class ProvisionRunOnceContracts(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.db = Path(self.temp.name) / "state" / "autoscale.db"
         self.now = datetime.now(timezone.utc).replace(microsecond=0)
+        self.job_created_at = self.now - timedelta(hours=1)
         self.provision_calls = []
         self.start_calls = []
 
@@ -101,8 +102,8 @@ class ProvisionRunOnceContracts(unittest.TestCase):
             "run_id": 201 + index,
             "run_attempt": 1,
             "status": "queued",
-            "created_at": (self.now - timedelta(hours=1)).isoformat(),
-            "queue_age_seconds": 3600,
+            "created_at": self.job_created_at.isoformat(),
+            "queue_age_seconds": int((self.now - self.job_created_at).total_seconds()),
             "queue_age_source": "job.created_at",
             "required_labels": ["self-hosted", "Linux", "X64", "runnerops"],
             "capacity_status": status,

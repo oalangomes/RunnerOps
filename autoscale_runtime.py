@@ -30,9 +30,10 @@ def _repo_key(repository):
 def read_planner_evidence(store, repository):
     """Read only the retained facts needed by the planner for one repository.
 
-    Exact queue episodes preserve per-job audit semantics. Aggregate pressure is a
-    separate v2 durable model whose observed segments can survive a bounded
-    suspended interval without counting unknown time.
+    Exact queue evidence is intentionally limited to currently open per-job
+    episodes. Historical episodes remain durable for audit/history, while
+    aggregate pressure is a separate v2 model whose observed segments can survive
+    a bounded suspended interval without counting unknown time.
     """
 
     repository = canonical_repo(repository)
@@ -42,7 +43,7 @@ def read_planner_evidence(store, repository):
             """SELECT q.*, r.repository
             FROM queue_observations q
             JOIN repository_observations r USING(repo_key)
-            WHERE q.repo_key=?
+            WHERE q.repo_key=? AND q.ended_at IS NULL
             ORDER BY q.last_seen_queued_at DESC, q.observation_id
             LIMIT ?""",
             (repo_key, MAX_PLANNER_QUEUE_ROWS + 1),

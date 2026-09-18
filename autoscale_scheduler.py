@@ -142,6 +142,7 @@ def unit_contents(repository, runnerctl_path, interval):
         "[Service]",
         "Type=oneshot",
         "Environment=RUNNER_AUTOSCALE_ENABLED=true",
+        f"Environment={_unit_quote('RUNNEROPS_CANONICAL_REPOSITORY=' + repository)}",
     ]
     service.extend(f"Environment={_unit_quote(key + '=' + value)}" for key, value in sorted(environment.items()))
     service.extend(

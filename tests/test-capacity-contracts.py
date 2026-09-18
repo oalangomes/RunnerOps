@@ -69,7 +69,6 @@ if tool == 'systemctl':
     sys.exit(0)
 if tool == 'git':
     assert args == ['remote', 'get-url', 'origin'], args
-    if data.get('identity_fail'): sys.exit(1)
     print(data.get('git_remote', 'git@github.com:Example/MixedCase.git')); sys.exit(0)
 raise AssertionError((tool, args))
 '''
@@ -246,6 +245,10 @@ class CapacityContracts(unittest.TestCase):
                            ('identity_fail', True), ('malformed', 'runners')]:
             with self.subTest(key=key):
                 self.data[key] = value
+                if key == 'identity_fail':
+                    # Keep a local normalized key available while forcing remote
+                    # canonicalization to fail.
+                    self.data['git_remote'] = 'Example/MixedCase'
                 result = self.invoke('capacity', expected=3)
                 self.assertEqual(result['status'], 'inconclusive')
                 if key in ('queue_fail', 'jobs_fail', 'identity_fail'):
@@ -253,6 +256,7 @@ class CapacityContracts(unittest.TestCase):
                 if key == 'identity_fail':
                     self.assertIsNone(result['repository']['nameWithOwner'])
                     self.assertEqual(result['repository']['match_key'], 'example/mixedcase')
+                    del self.data['git_remote']
                 del self.data[key]
 
     def test_systemd_failure_and_contradictions(self):

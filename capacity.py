@@ -16,6 +16,12 @@ import time
 CATEGORIES = ("available_now", "busy_capacity", "provisioned_idle", "inconclusive")
 RUN_STATUSES = ("queued", "in_progress", "waiting", "pending", "requested")
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+GITHUB_REMOTE_PREFIXES = (
+    "https://github.com/",
+    "http://github.com/",
+    "ssh://git@github.com/",
+    "git@github.com:",
+)
 COLLECTOR_CACHE_TTL_SECONDS = 60
 MAX_JOB_QUERY_WORKERS = 4
 JOB_QUERY_RETRIES = 1
@@ -64,12 +70,26 @@ def reset_process_cache():
     _REPO_CACHE.clear()
 
 
-def repo_key(value):
-    for prefix in ("https://github.com/", "http://github.com/",
-                   "ssh://git@github.com/", "git@github.com:"):
+def github_repo_from_remote(value):
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    for prefix in GITHUB_REMOTE_PREFIXES:
         if value.startswith(prefix):
             value = value[len(prefix):]
             break
+    else:
+        return None
+    value = value.rstrip("/")
+    if value.endswith(".git"):
+        value = value[:-4]
+    return value if re.fullmatch(REPO_PATTERN, value) else None
+
+
+def repo_key(value):
+    remote = github_repo_from_remote(value)
+    if remote is not None:
+        return remote.lower()
     value = value.rstrip("/")
     if value.endswith(".git"):
         value = value[:-4]
@@ -78,6 +98,16 @@ def repo_key(value):
 
 def _repo_cache_key(requested):
     return (requested, str(Path.cwd()) if requested == "." else None)
+
+
+def _cache_repository_identity(cache_key, canonical, now, metrics, source):
+    result = (canonical, canonical.lower())
+    cached_value = (*result, now + COLLECTOR_CACHE_TTL_SECONDS)
+    _REPO_CACHE[cache_key] = cached_value
+    _REPO_CACHE[_repo_cache_key(canonical)] = cached_value
+    if metrics is not None:
+        metrics["canonical_source"] = source
+    return result
 
 
 def resolve_repo(requested, metrics=None):
@@ -92,6 +122,26 @@ def resolve_repo(requested, metrics=None):
     if cached:
         _REPO_CACHE.pop(cache_key, None)
 
+    if requested == ".":
+        try:
+            origin = command("git", "remote", "get-url", "origin")
+        except EvidenceError:
+            origin = None
+        local_canonical = github_repo_from_remote(origin)
+        if local_canonical is not None:
+            return _cache_repository_identity(
+                cache_key, local_canonical, now, metrics, "git_remote"
+            )
+    else:
+        trusted = os.environ.get("RUNNEROPS_CANONICAL_REPOSITORY", "").strip()
+        if (
+            re.fullmatch(REPO_PATTERN, trusted)
+            and trusted.casefold() == requested.casefold()
+        ):
+            return _cache_repository_identity(
+                cache_key, trusted, now, metrics, "scheduler"
+            )
+
     target = [] if requested == "." else [requested]
     try:
         record_github_call(metrics, "repo_resolution_calls")
@@ -99,25 +149,17 @@ def resolve_repo(requested, metrics=None):
                             "--json", "nameWithOwner", "--jq", ".nameWithOwner")
         if not re.fullmatch(REPO_PATTERN, canonical):
             raise EvidenceError("invalid_response")
-        result = (canonical, canonical.lower())
-        cached_value = (*result, now + COLLECTOR_CACHE_TTL_SECONDS)
-        _REPO_CACHE[cache_key] = cached_value
-        # A remotely resolved canonical owner/repo is a safe alias for later calls
-        # in the same short-lived CLI process (fresh plan / verification polls).
-        _REPO_CACHE[_repo_cache_key(canonical)] = cached_value
-        if metrics is not None:
-            metrics["canonical_source"] = "remote"
-        return result
+        return _cache_repository_identity(
+            cache_key, canonical, now, metrics, "remote"
+        )
     except EvidenceError:
         if requested == ".":
-            try:
-                requested = command("git", "remote", "get-url", "origin")
-            except EvidenceError:
-                return None, None
-        key = repo_key(requested)
+            key = None
+        else:
+            key = repo_key(requested)
         if metrics is not None:
             metrics["canonical_source"] = "fallback"
-        return None, key if re.fullmatch(REPO_PATTERN, key) else None
+        return None, key if key and re.fullmatch(REPO_PATTERN, key) else None
 
 
 def api_pages(

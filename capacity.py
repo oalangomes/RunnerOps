@@ -122,12 +122,13 @@ def resolve_repo(requested, metrics=None):
     if cached:
         _REPO_CACHE.pop(cache_key, None)
 
+    local_origin = None
     if requested == ".":
         try:
-            origin = command("git", "remote", "get-url", "origin")
+            local_origin = command("git", "remote", "get-url", "origin")
         except EvidenceError:
-            origin = None
-        local_canonical = github_repo_from_remote(origin)
+            local_origin = None
+        local_canonical = github_repo_from_remote(local_origin)
         if local_canonical is not None:
             return _cache_repository_identity(
                 cache_key, local_canonical, now, metrics, "git_remote"
@@ -154,7 +155,7 @@ def resolve_repo(requested, metrics=None):
         )
     except EvidenceError:
         if requested == ".":
-            key = None
+            key = repo_key(local_origin) if local_origin else None
         else:
             key = repo_key(requested)
         if metrics is not None:

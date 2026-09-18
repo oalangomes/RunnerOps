@@ -69,7 +69,8 @@ if tool == 'systemctl':
     sys.exit(0)
 if tool == 'git':
     assert args == ['remote', 'get-url', 'origin'], args
-    print('git@github.com:Example/MixedCase.git'); sys.exit(0)
+    if data.get('identity_fail'): sys.exit(1)
+    print(data.get('git_remote', 'git@github.com:Example/MixedCase.git')); sys.exit(0)
 raise AssertionError((tool, args))
 '''
 
@@ -166,6 +167,37 @@ class CapacityContracts(unittest.TestCase):
         self.assertEqual(result['schema_version'], 1)
         self.assertEqual(result['kind'], 'CapacitySnapshot')
         self.assertEqual(result['repository']['nameWithOwner'], 'Example/MixedCase')
+
+    def test_current_repository_uses_local_github_origin_without_remote_canonicalization(self):
+        self.runner()
+        self.job()
+        result = self.invoke('capacity', '.')
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['repository']['nameWithOwner'], 'Example/MixedCase')
+        self.assertEqual(result['collector']['canonical_source'], 'git_remote')
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
+        self.assertIn(['git', 'remote', 'get-url', 'origin'], calls)
+        self.assertFalse(any(call[:3] == ['gh', 'repo', 'view'] for call in calls))
+
+    def test_scheduler_known_canonical_repository_skips_remote_resolution(self):
+        spec = importlib.util.spec_from_file_location('capacity_identity', ROOT / 'capacity.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.reset_process_cache()
+        metrics = module.collector_metrics()
+        with patch.dict(
+            os.environ,
+            {'RUNNEROPS_CANONICAL_REPOSITORY': 'Example/MixedCase'},
+            clear=False,
+        ):
+            with patch.object(module, 'command') as command_mock:
+                canonical, key = module.resolve_repo('example/mixedcase', metrics=metrics)
+        self.assertEqual(canonical, 'Example/MixedCase')
+        self.assertEqual(key, 'example/mixedcase')
+        self.assertEqual(metrics['canonical_source'], 'scheduler')
+        self.assertEqual(metrics['repo_resolution_calls'], 0)
+        self.assertEqual(metrics['github_calls'], 0)
+        command_mock.assert_not_called()
 
     def test_healthy_on_demand_is_provisioned_idle(self):
         self.runner(state='inactive')

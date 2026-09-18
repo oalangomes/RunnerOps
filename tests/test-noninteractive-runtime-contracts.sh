@@ -229,12 +229,156 @@ test_privileged_helper_rejects_scope_escape() {
   pass "helper privilegiado restringe verbo e namespace da unit"
 }
 
+test_authorized_template_migration_never_executes_user_script_as_root() {
+  local dir="$TMP_ROOT/template-migrate"
+  local platform="$dir/platform"
+  local runner_root="$dir/data"
+  local runner_dir="$runner_root/ci-a"
+  local bin="$dir/bin"
+  local helper="$dir/runnerops-systemctl"
+  local expected_unit="actions.runner.runnerops-$(id -un)@ci-a.service"
+  local output
+
+  mkdir -p "$platform" "$runner_dir" "$bin" "$dir/systemd" "$dir/state-root"
+  cp "$ROOT/runner-services.sh" "$platform/runner-services.sh"
+  cp "$ROOT/runner-runtime-env.sh" "$platform/runner-runtime-env.sh"
+  cp "$ROOT/runner-cache-env.sh" "$platform/runner-cache-env.sh"
+  chmod +x "$platform/runner-services.sh"
+
+  printf '%s\n' '{"agentId":42,"agentName":"host-ci-a"}' > "$runner_dir/.runner"
+  cat > "$runner_dir/svc.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'svc-root-path-called %s\n' "$*" >> "${TEST_SVC_LOG:?}"
+exit 92
+EOF
+  cat > "$runner_dir/runsvc.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$runner_dir/svc.sh" "$runner_dir/runsvc.sh"
+  : > "$dir/svc.log"
+  : > "$dir/sudo.log"
+  : > "$dir/mutation.log"
+  printf '%s\n' inactive > "$dir/state"
+
+  cat > "$dir/runners.conf" <<EOF
+# name|path|profile|repo|enabled|group
+ci-a|$runner_dir|python|example/project|true|example
+EOF
+
+  cat > "$bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cmd="${1:-}"
+shift || true
+case "$cmd" in
+  cat)
+    [[ "${1:-}" == actions.runner.runnerops-*'@.service' ]]
+    ;;
+  list-unit-files)
+    exit 0
+    ;;
+  show)
+    exit 1
+    ;;
+  is-active)
+    quiet=0
+    if [[ "${1:-}" == "--quiet" ]]; then quiet=1; shift; fi
+    state="$(cat "${TEST_STATE_FILE:?}")"
+    [[ "$quiet" -eq 1 ]] || printf '%s\n' "$state"
+    [[ "$state" == active ]]
+    ;;
+  is-enabled)
+    printf '%s\n' disabled
+    exit 1
+    ;;
+  start)
+    printf 'start %s\n' "${1:-}" >> "${TEST_MUTATION_LOG:?}"
+    printf '%s\n' active > "${TEST_STATE_FILE:?}"
+    ;;
+  stop)
+    printf 'stop %s\n' "${1:-}" >> "${TEST_MUTATION_LOG:?}"
+    printf '%s\n' inactive > "${TEST_STATE_FILE:?}"
+    ;;
+  enable|disable)
+    printf '%s %s\n' "$cmd" "${1:-}" >> "${TEST_MUTATION_LOG:?}"
+    ;;
+  status)
+    exit 0
+    ;;
+  *)
+    printf 'unexpected systemctl command: %s %s\n' "$cmd" "$*" >&2
+    exit 70
+    ;;
+esac
+EOF
+
+  cat > "$bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${TEST_SUDO_LOG:?}"
+[[ "${1:-}" == "-n" ]] || {
+  echo "interactive/arbitrary sudo forbidden" >&2
+  exit 91
+}
+shift
+[[ "${1:-}" == "${RUNNEROPS_SYSTEMCTL_HELPER:?}" ]] || exit 92
+shift
+if [[ "${1:-}" == check ]]; then
+  exit 0
+fi
+action="${1:-}"
+unit="${2:-}"
+systemctl "$action" "$unit"
+EOF
+
+  cat > "$helper" <<'EOF'
+#!/usr/bin/env bash
+exit 99
+EOF
+  chmod +x "$bin/systemctl" "$bin/sudo" "$helper"
+
+  output="$(
+    PATH="$bin:$PATH" \
+    ACTIONS_RUNNERS_ENV="$dir/missing.env" \
+    RUNNERS_CONFIG="$dir/runners.conf" \
+    RUNNER_DATA_ROOT="$runner_root" \
+    RUNNER_STATE_ROOT="$dir/state-root" \
+    RUNNER_CACHE_ROOT="$dir/cache" \
+    RUNNER_BOOT_POLICY=on-demand \
+    RUNNER_SYSTEMD_START_SETTLE_SECONDS=0 \
+    RUNNEROPS_SYSTEMCTL_HELPER="$helper" \
+    TEST_STATE_FILE="$dir/state" \
+    TEST_SUDO_LOG="$dir/sudo.log" \
+    TEST_MUTATION_LOG="$dir/mutation.log" \
+    TEST_SVC_LOG="$dir/svc.log" \
+      "$platform/runner-services.sh" migrate ci-a
+  )"
+
+  assert_contains "$output" "template RunnerOps autorizado" "migrate deve usar template root-owned"
+  assert_contains "$output" "policy=on-demand" "migrate deve terminar idle/on-demand"
+  [[ "$(cat "$runner_dir/.service")" == "$expected_unit" ]] ||
+    fail "runner deve persistir a unit template exata"
+  [[ ! -s "$dir/svc.log" ]] || fail "svc.sh user-writable jamais pode ser executado como root no caminho autorizado"
+  [[ "$(cat "$dir/state")" == inactive ]] || fail "runner provisionado deve terminar ocioso"
+  grep -F -- "-n $helper check" "$dir/sudo.log" >/dev/null || fail "migrate deve provar autorizacao"
+  grep -F -- "-n $helper start $expected_unit" "$dir/sudo.log" >/dev/null || fail "start deve usar helper limitado"
+  grep -F -- "-n $helper stop $expected_unit" "$dir/sudo.log" >/dev/null || fail "stop deve usar helper limitado"
+  if grep -Ev "^-n $helper (check|start|stop|enable|disable)( |$)" "$dir/sudo.log" | grep -q .; then
+    cat "$dir/sudo.log" >&2
+    fail "provisioning autorizado nao pode abrir sudo arbitrario"
+  fi
+
+  pass "provisioning autorizado usa unit template sem executar codigo user-writable como root"
+}
+
 main() {
   test_active_ensure_is_noop_without_sudo
   test_inactive_authorized_uses_noninteractive_helper
   test_inactive_without_authorization_fails_fast
   test_unknown_lifecycle_never_mutates
   test_privileged_helper_rejects_scope_escape
+  test_authorized_template_migration_never_executes_user_script_as_root
   printf '\nTodos os contratos de runtime nao-interativo passaram.\n'
 }
 

@@ -13,7 +13,12 @@ from pathlib import Path
 
 import capacity
 from autoscale_contracts import AuditError, canonical_repo, label_list, timestamp
-from autoscale_pressure import read_pressure_evidence
+from autoscale_runtime import read_planner_evidence
+from autoscale_provision import (
+    ProvisionPolicyError,
+    load_provision_policy,
+    provisioning_candidate,
+)
 
 SCHEMA_VERSION = 1
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -92,6 +97,10 @@ def _label_scope():
 
 def load_policy():
     """Load and normalize the intentionally small policy surface."""
+    try:
+        local_provision = load_provision_policy()
+    except ProvisionPolicyError:
+        raise PolicyError() from None
     return {
         "queue_threshold_seconds": _integer_env(
             "RUNNER_AUTOSCALE_QUEUE_THRESHOLD_SECONDS", 300, 0, 86400 * 30
@@ -114,6 +123,7 @@ def load_policy():
         ),
         "burst_enabled": _boolean_env("RUNNER_AUTOSCALE_BURST_ENABLED", False),
         "label_scope": _label_scope(),
+        "local_provision": local_provision,
     }
 
 
@@ -198,49 +208,7 @@ def load_audit_evidence(repository):
         from autoscale_store import AuditStore
 
         with AuditStore() as store:
-            history = store.history(limit=1000)
-            if history.get("truncated"):
-                return _empty_audit("inconclusive", "audit_history_truncated")
-
-            queue = [
-                row
-                for row in history["queue_observations"]
-                if row.get("repository", "").casefold() == repository.casefold()
-            ]
-            with store._read_transaction():
-                aggregate_pressure = read_pressure_evidence(
-                    store.connection,
-                    canonical_repo(repository).lower(),
-                    current_only=True,
-                    limit=1000,
-                )
-
-            active_burst = 0
-            started = []
-            for decision in history["decisions"]:
-                if decision.get("repository", "").casefold() != repository.casefold():
-                    continue
-                explanation = store.explain(decision["decision_id"])
-                for action in explanation["actions"]:
-                    if action.get("kind") == "BURST_CLOUD" and action.get("state") in (
-                        "planned",
-                        "started",
-                    ):
-                        active_burst += 1
-                    if action.get("started_at") is not None:
-                        started.append((timestamp(action["started_at"]), action["kind"]))
-
-        latest_started = max(started, default=(None, None))
-
-        return {
-            "status": "complete",
-            "error": None,
-            "queue": queue,
-            "aggregate_pressure": aggregate_pressure,
-            "active_burst_capacity": active_burst,
-            "last_scaling_action_started_at": latest_started[0],
-            "last_scaling_action_kind": latest_started[1],
-        }
+            return read_planner_evidence(store, repository)
     except ImportError:
         return _empty_audit("inconclusive", "sqlite_capability_unavailable")
     except AuditError as exc:
@@ -373,9 +341,6 @@ def _queue_evidence(jobs, audit, observed_at):
     for job in jobs:
         identity = _queue_identity(job)
         row = by_identity.get(identity) if identity is not None else None
-        # A job that arrived between observations has no exact episode yet. It
-        # must not invalidate an independently proven aggregate scope, but it
-        # also never becomes its own continuity evidence on this tick.
         if row is None:
             continue
         if _label_set(job["required_labels"]) != _label_set(row["required_labels"]):
@@ -388,11 +353,7 @@ def _queue_evidence(jobs, audit, observed_at):
 
 
 def _legacy_aggregate_queue_evidence(jobs, audit, observed_at):
-    """Compatibility for frozen pure-planner fixtures that predate audit schema v2.
-
-    Runtime readers always provide ``aggregate_pressure``. This path exists only
-    for direct callers/tests that construct the old internal audit dictionary.
-    """
+    """Compatibility for frozen pure-planner fixtures that predate audit schema v2."""
     if audit.get("status") != "complete" or not isinstance(audit.get("queue"), list):
         return None
     try:
@@ -700,6 +661,8 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
     queue_count = queue.get("queued_job_count")
     if type(queue_count) is not int or queue_count < 0:
         queue_count = None
+    provision = policy.get("local_provision") or {}
+    template = provision.get("template") or {}
     return {
         "observed_at": observed_at,
         "queue_status": (
@@ -728,6 +691,11 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
             "aggregate_sustained_pressure": [],
             "scoped_job_ids": [],
             "pressure_job_ids": [],
+            "current_local_pool_size": None,
+            "max_local_pool_size": provision.get("max_local_runners"),
+            "selected_provisioning_scope": None,
+            "provisioning_template_labels": template.get("labels", []),
+            "provisioning_target": None,
         },
         "audit": {
             "status": audit.get("status", "inconclusive"),
@@ -924,9 +892,10 @@ def plan(snapshot, policy, host, audit):
             }
         )
         latest_kind = audit.get("last_scaling_action_kind")
+        local_scale_candidate = capacity_deficit > 0
         cooldown = (
             policy["local_scale_out_cooldown_seconds"]
-            if latest_kind == "START_LOCAL" and local_start_candidate
+            if latest_kind in ("START_LOCAL", "PROVISION_LOCAL") and local_scale_candidate
             else policy["cooldown_seconds"]
         )
         evidence["audit"].update(
@@ -937,7 +906,7 @@ def plan(snapshot, policy, host, audit):
         )
         if cooldown and elapsed < cooldown:
             stabilization = ["COOLDOWN_ACTIVE"]
-            if latest_kind == "START_LOCAL" and local_start_candidate:
+            if latest_kind in ("START_LOCAL", "PROVISION_LOCAL") and local_scale_candidate:
                 stabilization.append("LOCAL_SCALE_OUT_STABILIZING")
             return decide("HOLD", *(reasons + stabilization))
 
@@ -960,14 +929,57 @@ def plan(snapshot, policy, host, audit):
         )
 
     if capacity_deficit > 0:
-        return decide(
-            "PROVISION_LOCAL",
-            *(reasons + ["LOCAL_CAPACITY_DEFICIT", "LOCAL_POOL_BELOW_MAX"]),
-            action={"kind": "PROVISION_LOCAL", "target": repository},
-            requested_capacity_delta=capacity_deficit,
-        )
+        provision_policy = policy.get("local_provision")
+        if provision_policy is None:
+            # Frozen pure-planner fixtures from before #73 preserve their old
+            # recommendation semantics. Production load_policy always supplies
+            # the explicit provisioning policy above.
+            return decide(
+                "PROVISION_LOCAL",
+                *(reasons + ["LOCAL_CAPACITY_DEFICIT", "LOCAL_POOL_BELOW_MAX"]),
+                action={"kind": "PROVISION_LOCAL", "target": repository},
+                requested_capacity_delta=capacity_deficit,
+            )
 
-    reasons.extend(["LOCAL_CAPACITY_TARGET_REACHED", "LOCAL_POOL_AT_MAX", "LOCAL_CAPACITY_SATURATED"])
+        candidate = provisioning_candidate(
+            snapshot,
+            provision_policy,
+            [row["required_labels"] for row in qualified_scopes],
+        )
+        evidence["scope"].update(
+            {
+                "current_local_pool_size": candidate.get("current_local_pool_size"),
+                "max_local_pool_size": candidate.get(
+                    "max_local_pool_size", provision_policy.get("max_local_runners")
+                ),
+                "selected_provisioning_scope": candidate.get("selected_scope"),
+                "provisioning_template_labels": candidate.get(
+                    "template_labels",
+                    (provision_policy.get("template") or {}).get("labels", []),
+                ),
+                "provisioning_target": candidate.get("target"),
+            }
+        )
+        if candidate["status"] == "inconclusive":
+            return decide("INCONCLUSIVE", *(reasons + [candidate["reason"]]))
+        if candidate["status"] == "candidate":
+            return decide(
+                "PROVISION_LOCAL",
+                *(reasons + ["LOCAL_CAPACITY_DEFICIT", candidate["reason"]]),
+                action={"kind": "PROVISION_LOCAL", "target": candidate["target"]},
+                requested_capacity_delta=capacity_deficit,
+            )
+        reasons.extend(
+            ["LOCAL_CAPACITY_DEFICIT", "LOCAL_CAPACITY_SATURATED", candidate["reason"]]
+        )
+    else:
+        reasons.extend(["LOCAL_CAPACITY_TARGET_REACHED", "LOCAL_CAPACITY_SATURATED"])
+        if policy.get("local_provision") is None:
+            # Legacy direct planner callers used max-active as their only local
+            # bound and named that state LOCAL_POOL_AT_MAX. Keep that frozen
+            # internal contract without leaking the old meaning into production.
+            reasons.append("LOCAL_POOL_AT_MAX")
+
     if not policy["burst_enabled"]:
         return decide("BLOCKED", *(reasons + ["BURST_DISABLED"]))
 
@@ -1003,6 +1015,14 @@ def render(result):
             scope.get("queue_threshold_seconds", "unknown"),
         )
     )
+    if scope.get("max_local_pool_size") is not None:
+        print(
+            "Local pool: current={} max={} provision_target={}".format(
+                scope.get("current_local_pool_size"),
+                scope.get("max_local_pool_size"),
+                scope.get("provisioning_target"),
+            )
+        )
     audit = result["evidence"].get("audit", {})
     if audit.get("read_only_evidence_lag_seconds") is not None:
         print(

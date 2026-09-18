@@ -2,19 +2,24 @@
 
 `runnerctl autoscale enable [owner/repo|.]` creates a deterministic pair of
 **systemd user** units for the canonical GitHub repository. The timer contains no
-autoscale policy or runner lifecycle logic. It only schedules the proven boundary:
+autoscale policy or runner mutation logic. It only schedules the governed boundary:
 
 ```text
 systemd --user timer
         -> runnerctl autoscale run-once owner/repo --json
-        -> existing governed controller
+        -> deterministic planner + governed controller
 ```
 
 The service receives `RUNNER_AUTOSCALE_ENABLED=true`, the operator's HOME/XDG
 paths, RunnerOps platform home, runtime configuration and GitHub CLI context. It
-is never a root service. The existing restricted lifecycle helper remains the only
-place that can use its separately authorized administrative boundary when an exact
-`START_LOCAL` action is eventually applied.
+is never a root service.
+
+Depending on explicit policy and fresh evidence, one scheduled invocation may:
+
+- activate one exact existing runner with `START_LOCAL`;
+- provision one exact bounded local runner with `PROVISION_LOCAL`;
+- make no mutation for `WAIT`, `HOLD`, `BLOCKED` or `INCONCLUSIVE`;
+- plan `BURST_CLOUD` without executing it.
 
 ## Operator flow
 
@@ -26,18 +31,16 @@ runnerctl autoscale disable .
 
 `enable` resolves `nameWithOwner`, updates the per-repository units in
 `${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user`, reloads the user manager and
-enables/starts the timer. It rejects root execution so the scheduled service stays
-with the normal RunnerOps operator user. Repeating it is safe. It schedules future
-controller invocations; it does not start a runner itself.
+enables/starts the timer. It rejects root execution so scheduled work stays with
+the normal RunnerOps operator user. Repeating it is safe. It schedules future
+controller invocations; it does not itself start or register a runner.
 
 `disable` stops and disables only that timer. It leaves runner registrations,
 runner directories and `RUNNER_BOOT_POLICY` unchanged, and does not stop active
-runner jobs. Repeating it is safe. Unit files are intentionally retained so a
-later `enable` can update and reactivate the same deterministic identity.
-For an explicit `owner/repo`, disable can still use that normalized identity when
-GitHub authentication is temporarily unavailable.
+runner jobs. Repeating it is safe. Unit files are retained so a later `enable` can
+reactivate the same deterministic scheduler identity.
 
-`status` retains the existing CapacitySnapshot shape and adds:
+`status` retains the CapacitySnapshot shape and adds scheduler state:
 
 ```json
 {
@@ -52,25 +55,52 @@ GitHub authentication is temporarily unavailable.
 }
 ```
 
-If user systemd is unavailable, capacity evidence remains visible and the
-scheduler field reports an explicit error rather than claiming a running timer.
-
 ## Cadence and safety
 
 The default `RUNNER_AUTOSCALE_INTERVAL_SECONDS` is 60 seconds. It must be a
 positive integer strictly below `RUNNER_AUTOSCALE_QUEUE_GAP_SECONDS`, whose
-default is 300 seconds. This makes scheduled observations frequent enough to
-maintain RunnerOps-owned queue continuity. GitHub `job.created_at` is still
-provenance, not the autoscaling clock.
+default is 300 seconds. This keeps scheduled observations frequent enough to
+maintain RunnerOps-owned queue/pressure continuity. GitHub `job.created_at`
+remains provenance, not the autoscaling clock.
 
-The scheduler does not duplicate the planner, controller lock, fresh
-revalidation, exact target selection, verification or audit trail. Overlap safety
-therefore remains owned by the controller's existing host lock. No automatic
-scale-in is implemented. `PROVISION_LOCAL`, `BURST_CLOUD`, `WAIT`, `HOLD`,
-`BLOCKED` and `INCONCLUSIVE` remain non-mutating.
+The scheduler does not duplicate:
 
-`runnerctl ensure .` remains a separate manual repository-wide activation
-override; continuous autoscale neither calls nor requires it.
+- queue qualification;
+- planner policy;
+- host/pool limits;
+- capability-scope matching;
+- controller lock;
+- fresh revalidation;
+- exact target selection;
+- provisioning/lifecycle recovery;
+- verification or audit receipts.
+
+Those remain controller responsibilities. One tick can perform at most one local
+mutation, even when the planner reports `requested_capacity_delta > 1`.
+
+## Provisioning through the timer
+
+Local pool growth requires its own explicit policy in addition to the scheduler:
+
+```properties
+RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=true
+RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS=4
+RUNNER_AUTOSCALE_LOCAL_PROVISION_PROFILE=python
+RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=my-project
+RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS=self-hosted,Linux,X64,python,local-runner
+RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX=my-project-auto
+```
+
+Without that policy, the timer cannot create local runner registrations.
+
+When provisioning is justified, the controller creates at most one deterministic
+pool slot through the existing safe `runnerctl add` boundary. The created runner
+remains on-demand/idle. If pressure persists, a later tick may independently
+produce `START_LOCAL` for that exact registration.
+
+No automatic scale-in is implemented. `runnerctl ensure .` remains a separate
+manual repository-wide activation override; continuous autoscale neither calls nor
+requires it.
 
 ## Diagnostics
 
@@ -83,6 +113,5 @@ journalctl --user -u runnerops-autoscale-<repository>-<id>.timer --since 30m
 journalctl --user -u runnerops-autoscale-<repository>-<id>.service --since 30m
 ```
 
-The scheduled controller's JSON result is written to the user journal. The
-controller's normal durable audit records remain the source of decisions and
-action outcomes.
+The scheduled controller's JSON result is written to the user journal. Durable
+audit records remain the source of queue evidence, decisions and action outcomes.

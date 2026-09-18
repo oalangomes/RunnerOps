@@ -11,13 +11,13 @@ if [[ "${1:-}" == "check" ]]; then
   exit 0
 fi
 
-[[ $# -eq 2 ]] || die "usage: runnerops-systemctl <start|stop|restart> <actions.runner.*.service>"
+[[ $# -eq 2 ]] || die "usage: runnerops-systemctl <start|stop|restart|enable|disable> <actions.runner.*.service>"
 
 action="$1"
 unit="$2"
 
 case "$action" in
-  start|stop|restart) ;;
+  start|stop|restart|enable|disable) ;;
   *) die "unsupported action: $action" ;;
 esac
 

@@ -29,8 +29,8 @@ class CapacityCollectorPerformanceContracts(unittest.TestCase):
 
         def fake_command(*args):
             calls.append(args)
-            self.assertEqual(args[:3], ("gh", "repo", "view"))
-            return "Example/MixedCase"
+            self.assertEqual(args, ("git", "remote", "get-url", "origin"))
+            return "git@github.com:Example/MixedCase.git"
 
         with patch.object(self.capacity, "command", side_effect=fake_command):
             first = self.capacity.collector_metrics()
@@ -50,8 +50,9 @@ class CapacityCollectorPerformanceContracts(unittest.TestCase):
             )
 
         self.assertEqual(len(calls), 1)
-        self.assertEqual(first["repo_resolution_calls"], 1)
-        self.assertEqual(first["github_calls"], 1)
+        self.assertEqual(first["canonical_source"], "git_remote")
+        self.assertEqual(first["repo_resolution_calls"], 0)
+        self.assertEqual(first["github_calls"], 0)
         self.assertEqual(second["repo_cache_hits"], 1)
         self.assertEqual(second["github_calls"], 0)
         self.assertEqual(alias["repo_cache_hits"], 1)
@@ -64,7 +65,8 @@ class CapacityCollectorPerformanceContracts(unittest.TestCase):
 
             def fake_command(*args):
                 calls.append(args)
-                return "Example/MixedCase"
+                self.assertEqual(args, ("git", "remote", "get-url", "origin"))
+                return "git@github.com:Example/MixedCase.git"
 
             try:
                 with patch.object(self.capacity, "command", side_effect=fake_command):

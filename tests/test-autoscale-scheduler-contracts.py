@@ -117,6 +117,10 @@ printf '%s\\n' 'Example/Project'
         service = (unit_dir / identity["service"]).read_text()
         timer = (unit_dir / identity["timer"]).read_text()
         self.assertIn("Environment=RUNNER_AUTOSCALE_ENABLED=true", service)
+        self.assertIn(
+            'Environment="RUNNEROPS_CANONICAL_REPOSITORY=Example/Project"',
+            service,
+        )
         self.assertIn(f'ExecStart="{self.runnerctl}" autoscale run-once Example/Project --json', service)
         self.assertIn("OnUnitActiveSec=60s", timer)
         self.assertIn("WantedBy=timers.target", timer)

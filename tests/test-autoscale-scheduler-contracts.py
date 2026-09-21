@@ -122,7 +122,11 @@ printf '%s\\n' 'Example/Project'
             'Environment="RUNNEROPS_CANONICAL_REPOSITORY=Example/Project"',
             service,
         )
-        policy_file = scheduler.policy_path("Example/Project")
+        policy_file = (
+            Path(self.env["RUNNER_STATE_ROOT"])
+            / "autoscale-scheduler"
+            / (identity["service"] + ".env")
+        )
         self.assertIn(
             f'Environment="RUNNEROPS_AUTOSCALE_POLICY_FILE={policy_file}"',
             service,
@@ -186,7 +190,11 @@ printf '%s\\n' 'Example/Project'
 
         result = self.run_cli("enable", "example/project", "--json", extra_env=requested)
         self.assertEqual(result.returncode, 0, result.stderr)
-        policy_file = scheduler.policy_path("Example/Project")
+        policy_file = (
+            Path(self.env["RUNNER_STATE_ROOT"])
+            / "autoscale-scheduler"
+            / (scheduler.unit_identity("Example/Project")["service"] + ".env")
+        )
         contents = policy_file.read_text(encoding="utf-8")
         self.assertIn("RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=7", contents)
         self.assertIn("RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=true", contents)

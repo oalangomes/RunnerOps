@@ -59,7 +59,7 @@ Description=RunnerOps GitHub Actions Runner (%i)
 After=network-online.target
 
 [Service]
-ExecStart=$RUNNER_DATA_ROOT/%i/runsvc.sh
+ExecStart=$RUNNER_DATA_ROOT/%i/bin/runsvc.sh
 User=$invoking_user
 WorkingDirectory=$RUNNER_DATA_ROOT/%i
 EnvironmentFile=-$RUNNER_STATE_ROOT/service-env/%i.env

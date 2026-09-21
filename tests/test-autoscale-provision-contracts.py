@@ -107,6 +107,20 @@ class ProvisionContracts(unittest.TestCase):
         self.assertEqual(policy["template"]["profile"], "python")
         self.assertIn("local-runner", policy["template"]["labels"])
 
+    def test_group_and_prefix_are_normalized_for_exact_identity(self):
+        policy = self.policy(
+            RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP="Example-Team",
+            RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX="Example-Auto",
+        )
+        self.assertEqual(policy["template"]["group"], "example-team")
+        self.assertEqual(policy["template"]["name_prefix"], "example-auto")
+        candidate = provisioning_candidate(
+            self.snapshot(),
+            policy,
+            [["self-hosted", "Linux", "X64", "python", "local-runner"]],
+        )
+        self.assertEqual(candidate["target"], "example-auto-01")
+
     def test_pool_limit_counts_idle_and_disabled_local_records(self):
         snapshot = self.snapshot(
             [
@@ -197,6 +211,16 @@ class ProvisionContracts(unittest.TestCase):
                 )
                 self.assertEqual(result["status"], "inconclusive")
                 self.assertEqual(result["code"], code)
+
+    def test_unmarked_nonzero_apply_is_inconclusive_after_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script, _ = self.fake_runnerctl(tmp, apply_rc=17)
+            result = provision_exact(
+                "Example/Project", "example-auto-01", self.policy(), runnerctl=script
+            )
+            self.assertEqual(result["status"], "inconclusive")
+            self.assertEqual(result["code"], "PROVISION_OUTCOME_UNKNOWN")
+            self.assertEqual(result["exit_code"], 17)
 
     def test_post_apply_name_mismatch_is_inconclusive(self):
         with tempfile.TemporaryDirectory() as tmp:

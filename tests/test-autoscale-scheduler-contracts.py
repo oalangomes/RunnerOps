@@ -232,6 +232,90 @@ printf '%s\\n' 'Example/Project'
         self.assertEqual(probe.returncode, 0, probe.stderr)
         self.assertEqual(probe.stdout.strip(), expected_fingerprint)
 
+    def test_explicit_cli_autoscale_env_overrides_machine_config(self):
+        config = Path(self.env["ACTIONS_RUNNERS_ENV"])
+        config.write_text(
+            "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=99\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=true\n"
+            "RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS=99\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_PROFILE=python\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=config-group\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS=self-hosted,Linux,X64,python,local-runner\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX=config-auto\n",
+            encoding="utf-8",
+        )
+        probe_env = self.env.copy()
+        probe_env.update(
+            {
+                "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS": "0",
+                "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED": "false",
+            }
+        )
+        probe = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'source "{ROOT / "runner-runtime-env.sh"}"; '
+                    "printf '%s|%s' "
+                    '"$RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS" '
+                    '"$RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED"'
+                ),
+            ],
+            env=probe_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertEqual(probe.stdout, "0|false")
+
+    def test_managed_scheduler_policy_overrides_cli_and_machine_config(self):
+        requested = {
+            "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS": "7",
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED": "false",
+        }
+        result = self.run_cli("enable", "example/project", "--json", extra_env=requested)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        identity = scheduler.unit_identity("Example/Project")
+        policy_file = (
+            Path(self.env["RUNNER_STATE_ROOT"])
+            / "autoscale-scheduler"
+            / (identity["service"] + ".env")
+        )
+        config = Path(self.env["ACTIONS_RUNNERS_ENV"])
+        config.write_text(
+            "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=99\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=true\n",
+            encoding="utf-8",
+        )
+        probe_env = self.env.copy()
+        probe_env.update(
+            {
+                "RUNNEROPS_AUTOSCALE_POLICY_FILE": str(policy_file),
+                "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS": "123",
+                "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED": "true",
+            }
+        )
+        probe = subprocess.run(
+            [
+                "bash",
+                "-c",
+                (
+                    f'source "{ROOT / "runner-runtime-env.sh"}"; '
+                    "printf '%s|%s' "
+                    '"$RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS" '
+                    '"$RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED"'
+                ),
+            ],
+            env=probe_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertEqual(probe.stdout, "7|false")
+
     def test_enable_rejects_invalid_autoscale_policy_before_installing_units(self):
         result = self.run_cli(
             "enable",

@@ -322,6 +322,81 @@ class ControllerContracts(unittest.TestCase):
         self.assertEqual(result["action_state"], "failed")
         self.assertEqual(result["diagnostic"], "GITHUB_VERIFICATION_FAILED")
 
+    def test_inconclusive_verification_keeps_started_action_recoverable(self):
+        self.seed_queue()
+        registration_id = str(self.registration_id("runner-a"))
+        result, code = self.run_controller(
+            verify_fn=lambda _repo, _target, _registration: (
+                False,
+                "EVIDENCE_INCONCLUSIVE",
+            )
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(result["diagnostic"], "EVIDENCE_INCONCLUSIVE")
+        self.assertEqual(result["action_state"], "started")
+        self.assertEqual(result["target"], "runner-a")
+        self.assertEqual(self.start_calls, ["runner-a"])
+        with self.store_factory() as store:
+            action = store.explain(result["decision_id"])["actions"][0]
+        self.assertEqual(action["external_id"], registration_id)
+        self.assertEqual(
+            [event["state"] for event in action["events"]],
+            ["planned", "started"],
+        )
+
+    def test_next_iteration_recovers_inconclusive_start_without_retry(self):
+        self.seed_queue()
+        inconclusive, inconclusive_code = self.run_controller(
+            verify_fn=lambda _repo, _target, _registration: (
+                False,
+                "EVIDENCE_INCONCLUSIVE",
+            )
+        )
+        self.assertEqual(inconclusive_code, 3)
+        self.now += timedelta(seconds=1)
+        online = self.snapshot(
+            category="available_now", active_local=1, observed_at=self.now
+        )
+        result, code = self.run_controller([online])
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["diagnostic"], "RECOVERED_VERIFIED_ACTION")
+        self.assertEqual(result["action_state"], "succeeded")
+        self.assertEqual(self.start_calls, ["runner-a"])
+        with self.store_factory() as store:
+            action = store.explain(inconclusive["decision_id"])["actions"][0]
+        self.assertEqual(
+            [event["state"] for event in action["events"]],
+            ["planned", "started", "succeeded"],
+        )
+        self.assertEqual(action["external_id"], str(self.registration_id("runner-a")))
+
+    def test_repeated_inconclusive_recovery_stays_started_without_retry(self):
+        self.seed_queue()
+        first, first_code = self.run_controller(
+            verify_fn=lambda _repo, _target, _registration: (
+                False,
+                "EVIDENCE_INCONCLUSIVE",
+            )
+        )
+        self.assertEqual(first_code, 3)
+        self.now += timedelta(seconds=1)
+        result, code = self.run_controller(
+            [self.snapshot(category="inconclusive", observed_at=self.now)]
+        )
+        self.assertEqual(code, 3)
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(result["diagnostic"], "EVIDENCE_INCONCLUSIVE")
+        self.assertEqual(result["action_state"], "started")
+        self.assertEqual(self.start_calls, ["runner-a"])
+        with self.store_factory() as store:
+            action = store.explain(first["decision_id"])["actions"][0]
+        self.assertEqual(
+            [event["state"] for event in action["events"]],
+            ["planned", "started"],
+        )
+
     def test_nonzero_start_can_succeed_only_after_structured_verification(self):
         self.seed_queue()
         result, code = self.run_controller(

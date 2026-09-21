@@ -342,6 +342,13 @@ def _finish_start_attempt(store, decision, action, repository, *, start_fn, veri
         ), 0
 
     diagnostic = "START_COMMAND_FAILED" if start_rc != 0 else verify_code
+    if start_rc == 0 and verify_code == "EVIDENCE_INCONCLUSIVE":
+        return _controller_result(
+            decision=decision,
+            status="inconclusive",
+            action=action,
+            diagnostic=diagnostic,
+        ), 3
     terminal = _transition_existing(
         action,
         "failed",
@@ -400,6 +407,13 @@ def _recover_pending_start(
         verified, code = verify_fn(
             repository, action["target"], expected_registration_id
         )
+        if not verified and code == "EVIDENCE_INCONCLUSIVE":
+            return _controller_result(
+                decision=decision,
+                status="inconclusive",
+                action=action,
+                diagnostic=code,
+            ), 3
         terminal = _transition_existing(
             action,
             "succeeded" if verified else "failed",

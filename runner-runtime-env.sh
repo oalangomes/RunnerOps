@@ -32,6 +32,27 @@ RUNNER_CACHE_ROOT="${RUNNER_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/actions-
 RUNNER_STATE_ROOT="${RUNNER_STATE_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/actions-runners}"
 RUNNER_BOOT_POLICY="${RUNNER_BOOT_POLICY:-on-demand}"
 
+# Managed autoscale snapshots are written by `runnerctl autoscale enable` and
+# intentionally load after general machine config so scheduled ticks reconstruct
+# the exact normalized policy captured at enable time.
+if [[ -n "${RUNNEROPS_AUTOSCALE_POLICY_FILE:-}" ]]; then
+  case "$RUNNEROPS_AUTOSCALE_POLICY_FILE" in
+    "$RUNNER_STATE_ROOT"/autoscale-scheduler/*.env) ;;
+    *)
+      echo "ERRO: RUNNEROPS_AUTOSCALE_POLICY_FILE fora de RUNNER_STATE_ROOT" >&2
+      return 1 2>/dev/null || exit 1
+      ;;
+  esac
+  [[ -f "$RUNNEROPS_AUTOSCALE_POLICY_FILE" && ! -L "$RUNNEROPS_AUTOSCALE_POLICY_FILE" ]] || {
+    echo "ERRO: autoscale scheduler policy ausente ou insegura: $RUNNEROPS_AUTOSCALE_POLICY_FILE" >&2
+    return 1 2>/dev/null || exit 1
+  }
+  set -a
+  # shellcheck source=/dev/null
+  source "$RUNNEROPS_AUTOSCALE_POLICY_FILE"
+  set +a
+fi
+
 case "$RUNNER_BOOT_POLICY" in
   on-demand|auto) ;;
   *)
@@ -40,4 +61,4 @@ case "$RUNNER_BOOT_POLICY" in
     ;;
 esac
 
-export ACTIONS_RUNNERS_ENV ACTIONS_RUNNERS_HOME RUNNERS_CONFIG RUNNER_DATA_ROOT RUNNER_CACHE_ROOT RUNNER_STATE_ROOT RUNNER_BOOT_POLICY
+export ACTIONS_RUNNERS_ENV ACTIONS_RUNNERS_HOME RUNNERS_CONFIG RUNNER_DATA_ROOT RUNNER_CACHE_ROOT RUNNER_STATE_ROOT RUNNER_BOOT_POLICY RUNNEROPS_AUTOSCALE_POLICY_FILE

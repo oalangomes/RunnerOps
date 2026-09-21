@@ -17,7 +17,8 @@ import sys
 from pathlib import Path
 
 import capacity
-from autoscale_planner import load_policy
+from autoscale_contracts import AuditError
+from autoscale_planner import PolicyError, load_policy
 from autoscale_store import Settings
 
 
@@ -115,8 +116,11 @@ def policy_path(repository):
 def _policy_environment(repository, interval):
     """Capture one normalized scheduler policy that survives later config changes."""
 
-    policy = load_policy()
-    settings = Settings.from_env()
+    try:
+        policy = load_policy()
+        settings = Settings.from_env()
+    except (PolicyError, AuditError):
+        raise SchedulerError("INVALID_AUTOSCALE_POLICY") from None
     provision = policy["local_provision"]
     template = provision["template"]
     cpu = policy["max_cpu_percent"]

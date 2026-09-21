@@ -4,6 +4,17 @@
 # This file is versioned; machine-specific values are not.
 RUNNER_RUNTIME_BASE_DIR="${BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNNER_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners"
+
+# Caller-provided autoscale environment is an explicit per-invocation override.
+# Preserve it across config.env loading; managed scheduler snapshots are loaded
+# later and intentionally have the highest precedence.
+RUNNEROPS_CALLER_AUTOSCALE_NAMES=()
+RUNNEROPS_CALLER_AUTOSCALE_VALUES=()
+while IFS= read -r name; do
+  RUNNEROPS_CALLER_AUTOSCALE_NAMES+=("$name")
+  RUNNEROPS_CALLER_AUTOSCALE_VALUES+=("${!name}")
+done < <(compgen -v RUNNER_AUTOSCALE_ || true)
+
 # Preserve the scheduler-provided policy pointer across general config loading.
 # config.env must never redirect or disable the managed policy snapshot.
 RUNNEROPS_SCHEDULED_POLICY_FILE="${RUNNEROPS_AUTOSCALE_POLICY_FILE:-}"
@@ -25,6 +36,13 @@ if [[ -f "$ACTIONS_RUNNERS_ENV" ]]; then
   source "$ACTIONS_RUNNERS_ENV"
   set +a
 fi
+
+for i in "${!RUNNEROPS_CALLER_AUTOSCALE_NAMES[@]}"; do
+  name="${RUNNEROPS_CALLER_AUTOSCALE_NAMES[$i]}"
+  printf -v "$name" '%s' "${RUNNEROPS_CALLER_AUTOSCALE_VALUES[$i]}"
+  export "$name"
+done
+unset RUNNEROPS_CALLER_AUTOSCALE_NAMES RUNNEROPS_CALLER_AUTOSCALE_VALUES name i
 
 if [[ -n "$RUNNEROPS_SCHEDULED_POLICY_FILE" ]]; then
   RUNNEROPS_AUTOSCALE_POLICY_FILE="$RUNNEROPS_SCHEDULED_POLICY_FILE"

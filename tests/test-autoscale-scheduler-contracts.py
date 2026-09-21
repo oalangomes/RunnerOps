@@ -203,11 +203,11 @@ printf '%s\\n' 'Example/Project'
 
         config = Path(self.env["ACTIONS_RUNNERS_ENV"])
         config.write_text(
-            "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=99\\n"
-            "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=false\\n"
-            "RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=wrong-group\\n"
-            "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX=wrong-prefix\\n"
-            "RUNNEROPS_AUTOSCALE_POLICY_FILE=/tmp/config-must-not-win.env\\n",
+            "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=99\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=false\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=wrong-group\n"
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX=wrong-prefix\n"
+            "RUNNEROPS_AUTOSCALE_POLICY_FILE=/tmp/config-must-not-win.env\n",
             encoding="utf-8",
         )
 

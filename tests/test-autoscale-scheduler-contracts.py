@@ -206,7 +206,8 @@ printf '%s\\n' 'Example/Project'
             "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=99\\n"
             "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=false\\n"
             "RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=wrong-group\\n"
-            "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX=wrong-prefix\\n",
+            "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX=wrong-prefix\\n"
+            "RUNNEROPS_AUTOSCALE_POLICY_FILE=/tmp/config-must-not-win.env\\n",
             encoding="utf-8",
         )
 
@@ -230,6 +231,20 @@ printf '%s\\n' 'Example/Project'
         )
         self.assertEqual(probe.returncode, 0, probe.stderr)
         self.assertEqual(probe.stdout.strip(), expected_fingerprint)
+
+    def test_enable_rejects_invalid_autoscale_policy_before_installing_units(self):
+        result = self.run_cli(
+            "enable",
+            "example/project",
+            "--json",
+            extra_env={
+                "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED": "true",
+                "RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS": "0",
+            },
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout)["diagnostic"], "INVALID_AUTOSCALE_POLICY")
+        self.assertFalse((self.root / "config" / "systemd" / "user").exists())
 
     def test_interval_must_be_positive_and_below_queue_gap(self):
         for interval, diagnostic in (("0", "INVALID_SCHEDULER_INTERVAL"), ("300", "INTERVAL_MUST_BE_BELOW_QUEUE_GAP")):

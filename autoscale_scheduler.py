@@ -19,7 +19,6 @@ from pathlib import Path
 import capacity
 from autoscale_contracts import AuditError
 from autoscale_planner import PolicyError, load_policy
-from autoscale_store import Settings
 
 
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -117,9 +116,11 @@ def _policy_environment(repository, interval):
     """Capture one normalized scheduler policy that survives later config changes."""
 
     try:
+        from autoscale_store import Settings
+
         policy = load_policy()
         settings = Settings.from_env()
-    except (PolicyError, AuditError):
+    except (ImportError, PolicyError, AuditError):
         raise SchedulerError("INVALID_AUTOSCALE_POLICY") from None
     provision = policy["local_provision"]
     template = provision["template"]

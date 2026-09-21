@@ -270,6 +270,12 @@ migrate_runner() {
       die "$name: registro remoto do GitHub foi deletado; reconfigure o runner antes de migrar/iniciar"
     fi
   elif authorized_runtime_available; then
+    local expected_path
+    expected_path="$(realpath -m "$RUNNER_DATA_ROOT/$name")"
+    [[ "$(realpath -m "$path")" == "$expected_path" ]] ||
+      die "$name: template autorizado exige runner dentro de RUNNER_DATA_ROOT"
+    [[ -x "$path/bin/runsvc.sh" ]] ||
+      die "$name: bin/runsvc.sh ausente ou nao executavel"
     unit="$(authorized_unit_for_runner "$name")"
     printf '%s\n' "$unit" > "$path/.service"
     echo "[MIGRATE] usando template RunnerOps autorizado para $name como usuario $AUTOSCALE_SERVICE_USER"

@@ -229,6 +229,15 @@ test_privileged_helper_rejects_scope_escape() {
   pass "helper privilegiado restringe verbo e namespace da unit"
 }
 
+test_authorized_template_uses_packaged_runsvc_path() {
+  grep -F 'ExecStart=$RUNNER_DATA_ROOT/%i/bin/runsvc.sh' "$ROOT/authorize-runtime.sh" >/dev/null ||
+    fail "template autorizado deve usar bin/runsvc.sh do pacote oficial"
+  if grep -F 'ExecStart=$RUNNER_DATA_ROOT/%i/runsvc.sh' "$ROOT/authorize-runtime.sh" >/dev/null; then
+    fail "template autorizado nao pode depender de runsvc.sh inexistente na raiz"
+  fi
+  pass "template autorizado usa layout real bin/runsvc.sh"
+}
+
 test_authorized_template_migration_never_executes_user_script_as_root() {
   local dir="$TMP_ROOT/template-migrate"
   local platform="$dir/platform"
@@ -239,7 +248,7 @@ test_authorized_template_migration_never_executes_user_script_as_root() {
   local expected_unit="actions.runner.runnerops-$(id -un)@ci-a.service"
   local output
 
-  mkdir -p "$platform" "$runner_dir" "$bin" "$dir/systemd" "$dir/state-root"
+  mkdir -p "$platform" "$runner_dir/bin" "$bin" "$dir/systemd" "$dir/state-root"
   cp "$ROOT/runner-services.sh" "$platform/runner-services.sh"
   cp "$ROOT/runner-runtime-env.sh" "$platform/runner-runtime-env.sh"
   cp "$ROOT/runner-cache-env.sh" "$platform/runner-cache-env.sh"
@@ -251,11 +260,11 @@ test_authorized_template_migration_never_executes_user_script_as_root() {
 printf 'svc-root-path-called %s\n' "$*" >> "${TEST_SVC_LOG:?}"
 exit 92
 EOF
-  cat > "$runner_dir/runsvc.sh" <<'EOF'
+  cat > "$runner_dir/bin/runsvc.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-  chmod +x "$runner_dir/svc.sh" "$runner_dir/runsvc.sh"
+  chmod +x "$runner_dir/svc.sh" "$runner_dir/bin/runsvc.sh"
   : > "$dir/svc.log"
   : > "$dir/sudo.log"
   : > "$dir/mutation.log"
@@ -378,6 +387,7 @@ main() {
   test_inactive_without_authorization_fails_fast
   test_unknown_lifecycle_never_mutates
   test_privileged_helper_rejects_scope_escape
+  test_authorized_template_uses_packaged_runsvc_path
   test_authorized_template_migration_never_executes_user_script_as_root
   printf '\nTodos os contratos de runtime nao-interativo passaram.\n'
 }

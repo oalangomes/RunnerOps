@@ -84,8 +84,12 @@ def load_provision_policy(env=None):
         re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}"),
         env=env,
     ).lower()
-    group = _bounded("RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP", GROUP_PATTERN, env=env)
-    prefix = _bounded("RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX", PREFIX_PATTERN, env=env)
+    group = _bounded(
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP", GROUP_PATTERN, env=env
+    ).lower()
+    prefix = _bounded(
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX", PREFIX_PATTERN, env=env
+    ).lower()
     version = _bounded(
         "RUNNER_AUTOSCALE_LOCAL_PROVISION_RUNNER_VERSION",
         VERSION_PATTERN,
@@ -366,9 +370,13 @@ def provision_exact(repository, target, policy, *, runnerctl=None, timeout=180):
             "code": "PROVISION_OUTCOME_UNKNOWN",
             "exit_code": applied.returncode,
         }
+    # Once apply has started, the registration boundary may already have been
+    # crossed even when the child exits without a RunnerOps marker.  Absence of
+    # positive pre-boundary proof is therefore an unknown outcome, never a
+    # retry-safe failure.
     return {
-        "status": "failed",
-        "code": "PROVISION_ADD_FAILED",
+        "status": "inconclusive",
+        "code": "PROVISION_OUTCOME_UNKNOWN",
         "exit_code": applied.returncode,
     }
 

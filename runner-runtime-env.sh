@@ -4,6 +4,9 @@
 # This file is versioned; machine-specific values are not.
 RUNNER_RUNTIME_BASE_DIR="${BASE_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 RUNNER_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners"
+# Preserve the scheduler-provided policy pointer across general config loading.
+# config.env must never redirect or disable the managed policy snapshot.
+RUNNEROPS_SCHEDULED_POLICY_FILE="${RUNNEROPS_AUTOSCALE_POLICY_FILE:-}"
 
 if [[ -z "${ACTIONS_RUNNERS_ENV:-}" ]]; then
   if [[ -f "$RUNNER_CONFIG_HOME/config.env" ]]; then
@@ -22,6 +25,13 @@ if [[ -f "$ACTIONS_RUNNERS_ENV" ]]; then
   source "$ACTIONS_RUNNERS_ENV"
   set +a
 fi
+
+if [[ -n "$RUNNEROPS_SCHEDULED_POLICY_FILE" ]]; then
+  RUNNEROPS_AUTOSCALE_POLICY_FILE="$RUNNEROPS_SCHEDULED_POLICY_FILE"
+else
+  unset RUNNEROPS_AUTOSCALE_POLICY_FILE
+fi
+unset RUNNEROPS_SCHEDULED_POLICY_FILE
 
 ACTIONS_RUNNERS_HOME="${ACTIONS_RUNNERS_HOME:-$RUNNER_RUNTIME_BASE_DIR}"
 

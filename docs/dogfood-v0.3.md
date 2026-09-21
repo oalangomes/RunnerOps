@@ -2,7 +2,7 @@
 
 This document records a real-world dogfood run of RunnerOps v0.3 against a live GitHub Actions workload.
 
-It is intended as engineering evidence, not as a benchmark or a claim of production-scale validation.
+It is intended as engineering evidence, not as a benchmark or a claim of production-scale validation. Repository and runner names are anonymized in this public record; timings, counts, decisions, and outcomes are preserved.
 
 ## Goal
 
@@ -23,7 +23,7 @@ The test specifically targeted already provisioned local capacity. It did not ex
 ## Environment
 
 - RunnerOps: `v0.3.0`
-- Repository under load: `oalangomes/AgentsOrchNext`
+- Repository under load: real application repository (public name anonymized)
 - Host: WSL2 with systemd
 - Runner lifecycle: on-demand
 - Matching runner labels: `self-hosted`, `linux`, `local-runner`
@@ -83,9 +83,9 @@ The successful controller result was:
     "MATCHING_LOCAL_RUNNER_IDLE",
     "OBSERVED_QUEUE_THRESHOLD_MET"
   ],
-  "repository": "oalangomes/AgentsOrchNext",
+  "repository": "example/workload-repo",
   "status": "ok",
-  "target": "agentsorchnext"
+  "target": "workload-runner-01"
 }
 ```
 
@@ -127,7 +127,7 @@ inconclusive=0
 The selected runner was:
 
 ```text
-agentsorchnext:
+workload-runner-01:
   local=active
   github=online
   busy=True

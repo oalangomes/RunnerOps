@@ -11,11 +11,14 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import capacity
+from autoscale_planner import load_policy
+from autoscale_store import Settings
 
 
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -104,6 +107,58 @@ def unit_directory():
     return _xdg_config_home() / "systemd" / "user"
 
 
+def policy_path(repository):
+    identity = unit_identity(repository)
+    return _state_root() / "autoscale-scheduler" / (identity["service"] + ".env")
+
+
+def _policy_environment(repository, interval):
+    """Capture one normalized scheduler policy that survives later config changes."""
+
+    policy = load_policy()
+    settings = Settings.from_env()
+    provision = policy["local_provision"]
+    template = provision["template"]
+    cpu = policy["max_cpu_percent"]
+    return {
+        "RUNNER_AUTOSCALE_ENABLED": "true",
+        "RUNNEROPS_CANONICAL_REPOSITORY": repository,
+        "RUNNER_AUTOSCALE_INTERVAL_SECONDS": str(interval),
+        "RUNNER_AUTOSCALE_QUEUE_GAP_SECONDS": str(settings.queue_gap_seconds),
+        "RUNNER_AUTOSCALE_RETENTION_DAYS": str(settings.retention_days),
+        "RUNNER_AUTOSCALE_MAX_RECORDS": str(settings.max_records),
+        "RUNNER_AUTOSCALE_BUSY_TIMEOUT_MS": str(settings.busy_timeout_ms),
+        "RUNNER_AUTOSCALE_QUEUE_THRESHOLD_SECONDS": str(policy["queue_threshold_seconds"]),
+        "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS": str(policy["max_active_local_runners"]),
+        "RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB": str(policy["min_memory_available_mib"]),
+        "RUNNER_AUTOSCALE_MAX_CPU_PERCENT": "" if cpu is None else str(cpu),
+        "RUNNER_AUTOSCALE_MAX_BURST_RUNNERS": str(policy["max_burst_runners"]),
+        "RUNNER_AUTOSCALE_COOLDOWN_SECONDS": str(policy["cooldown_seconds"]),
+        "RUNNER_AUTOSCALE_LOCAL_SCALE_OUT_COOLDOWN_SECONDS": str(
+            policy["local_scale_out_cooldown_seconds"]
+        ),
+        "RUNNER_AUTOSCALE_BURST_ENABLED": "true" if policy["burst_enabled"] else "false",
+        "RUNNER_AUTOSCALE_LABEL_SCOPE": ",".join(policy["label_scope"]),
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED": (
+            "true" if provision["enabled"] else "false"
+        ),
+        "RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS": str(provision["max_local_runners"]),
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_PROFILE": template["profile"] or "",
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP": template["group"] or "",
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS": ",".join(template["labels"]),
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX": template["name_prefix"] or "",
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_RUNNER_VERSION": template["runner_version"],
+        "RUNNER_AUTOSCALE_LOCAL_PROVISION_RUNNER_ARCH": template["runner_arch"],
+    }
+
+
+def _policy_contents(repository, interval):
+    values = _policy_environment(repository, interval)
+    return "".join(
+        f"export {key}={shlex.quote(value)}\\n" for key, value in sorted(values.items())
+    )
+
+
 def _unit_quote(value):
     """Quote values for systemd unit parsing without allowing substitutions."""
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "$$").replace("%", "%%") + '"'
@@ -135,6 +190,7 @@ def _environment():
 def unit_contents(repository, runnerctl_path, interval):
     identity = unit_identity(repository)
     environment = _environment()
+    policy_file = policy_path(repository)
     service = [
         "[Unit]",
         f"Description=RunnerOps governed autoscale for {repository}",
@@ -143,6 +199,7 @@ def unit_contents(repository, runnerctl_path, interval):
         "Type=oneshot",
         "Environment=RUNNER_AUTOSCALE_ENABLED=true",
         f"Environment={_unit_quote('RUNNEROPS_CANONICAL_REPOSITORY=' + repository)}",
+        f"Environment={_unit_quote('RUNNEROPS_AUTOSCALE_POLICY_FILE=' + str(policy_file))}",
     ]
     service.extend(f"Environment={_unit_quote(key + '=' + value)}" for key, value in sorted(environment.items()))
     service.extend(
@@ -240,6 +297,9 @@ def enable(repository):
     repository = canonical_repository(repository)
     interval = interval_seconds()
     runnerctl_path = _runnerctl_path()
+    policy_file = policy_path(repository)
+    policy_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _write_if_changed(policy_file, _policy_contents(repository, interval))
     units = unit_contents(repository, runnerctl_path, interval)
     directory = unit_directory()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)

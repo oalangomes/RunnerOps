@@ -160,7 +160,7 @@ def _policy_environment(repository, interval):
 def _policy_contents(repository, interval):
     values = _policy_environment(repository, interval)
     return "".join(
-        f"export {key}={shlex.quote(value)}\\n" for key, value in sorted(values.items())
+        f"export {key}={shlex.quote(value)}\n" for key, value in sorted(values.items())
     )
 
 

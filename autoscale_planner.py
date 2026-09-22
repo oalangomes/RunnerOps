@@ -621,6 +621,70 @@ def _local_capacity_evidence(scoped_jobs, pressure_jobs, snapshot):
     }
 
 
+def _pressure_jobs_from_available_capacity(scoped_jobs, snapshot):
+    """Allocate each currently available matching runner to at most one job."""
+    runners = snapshot.get("capacity", {}).get("runners")
+    if not isinstance(runners, list):
+        return None
+
+    categories = {}
+    for runner in runners:
+        if not isinstance(runner, dict) or not isinstance(runner.get("name"), str):
+            return None
+        name = runner["name"]
+        category = runner.get("category")
+        if name in categories or category not in (
+            "available_now",
+            "busy_capacity",
+            "provisioned_idle",
+            "inconclusive",
+        ):
+            return None
+        categories[name] = category
+
+    candidates = {}
+    for index, job in enumerate(scoped_jobs):
+        names = job.get("matching_local_runner_names")
+        if not isinstance(names, list) or any(
+            not isinstance(name, str) or name not in categories for name in names
+        ) or len(set(names)) != len(names):
+            return None
+        candidates[index] = sorted(
+            name for name in names if categories[name] == "available_now"
+        )
+
+    ordered_indexes = sorted(
+        candidates,
+        key=lambda index: (
+            scoped_jobs[index].get("job_id")
+            if type(scoped_jobs[index].get("job_id")) is int
+            else 0,
+            scoped_jobs[index].get("run_id")
+            if type(scoped_jobs[index].get("run_id")) is int
+            else 0,
+            index,
+        ),
+    )
+    assigned = {}
+
+    def assign(index, visited):
+        for name in candidates[index]:
+            if name in visited:
+                continue
+            visited.add(name)
+            previous = assigned.get(name)
+            if previous is None or assign(previous, visited):
+                assigned[name] = index
+                return True
+        return False
+
+    for index in ordered_indexes:
+        assign(index, set())
+
+    covered = set(assigned.values())
+    return [job for index, job in enumerate(scoped_jobs) if index not in covered]
+
+
 def _plan_id(repository, policy, evidence):
     basis = {
         "schema_version": SCHEMA_VERSION,
@@ -780,9 +844,9 @@ def plan(snapshot, policy, host, audit):
     if any(status == "inconclusive" or status not in KNOWN_CAPACITY_STATUSES for status in statuses):
         return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
 
-    pressure_jobs = [
-        job for job in scoped_jobs if job.get("capacity_status") != "available_now"
-    ]
+    pressure_jobs = _pressure_jobs_from_available_capacity(scoped_jobs, snapshot)
+    if pressure_jobs is None:
+        return decide("INCONCLUSIVE", "EVIDENCE_INCONCLUSIVE")
     evidence["scope"].update(
         {
             "pressure_queued_job_count": len(pressure_jobs),

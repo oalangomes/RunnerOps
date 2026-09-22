@@ -184,6 +184,60 @@ class PlannerContracts(unittest.TestCase):
         snapshot["queue"]["oldest_matching_queued_job_id"] = jobs[0]["job_id"] if jobs else None
         return snapshot
 
+    def matching_snapshot(self, job_names, runner_categories, active_local=1):
+        snapshot = self.snapshot(status="no_matching_capacity", active_local=active_local, names=[])
+        runners = [
+            self.runner(name, category)
+            for name, category in runner_categories.items()
+        ]
+        jobs = []
+        for offset, names in enumerate(job_names):
+            categories = [runner_categories[name] for name in names if name in runner_categories]
+            status = next(
+                (category for category in ("available_now", "busy_capacity", "provisioned_idle")
+                 if category in categories),
+                "no_matching_capacity",
+            )
+            job = self.job(status=status, names=list(names))
+            job["job_id"] = 101 + offset
+            job["run_id"] = 201 + offset
+            job["matching_capacity"] = {
+                key: sum(category == key for category in categories)
+                for key in ("available_now", "busy_capacity", "provisioned_idle", "inconclusive")
+            }
+            job["matching_runner_ids"] = [index + 1 for index in range(len(names))]
+            jobs.append(job)
+        counts = {
+            key: sum(runner["category"] == key for runner in runners)
+            for key in ("available_now", "busy_capacity", "provisioned_idle", "inconclusive")
+        }
+        snapshot["queue"].update(
+            {
+                "observed_queued_job_count": len(jobs),
+                "queued_job_count": len(jobs),
+                "oldest_queued_job_id": jobs[0]["job_id"] if jobs else None,
+                "oldest_matching_queued_job_id": jobs[0]["job_id"] if jobs else None,
+                "jobs": jobs,
+            }
+        )
+        snapshot["capacity"].update({"counts": counts, "runners": runners})
+        return snapshot
+
+    def audit_for_jobs(self, snapshot):
+        audit = self.audit()
+        template = audit["queue"][0]
+        audit["queue"] = [
+            {
+                **template,
+                "observation_id": f"observation-{job['job_id']}",
+                "job_id": job["job_id"],
+                "run_id": job["run_id"],
+                "required_labels": sorted(job["required_labels"]),
+            }
+            for job in snapshot["queue"]["jobs"]
+        ]
+        return audit
+
     def two_scope_pressure(
         self,
         *,
@@ -375,6 +429,57 @@ class PlannerContracts(unittest.TestCase):
         self.assertEqual(result["evidence"]["scope"]["scoped_queued_job_count"], 2)
         self.assertEqual(result["evidence"]["scope"]["pressure_queued_job_count"], 1)
         self.assertEqual(result["evidence"]["scope"]["pressure_job_ids"], [102])
+
+    def test_one_available_runner_covers_only_one_of_three_queued_jobs(self):
+        snapshot = self.matching_snapshot(
+            [["runner-ready", "runner-idle-a", "runner-idle-b"]] * 3,
+            {
+                "runner-ready": "available_now",
+                "runner-idle-a": "provisioned_idle",
+                "runner-idle-b": "provisioned_idle",
+            },
+        )
+        result = self.decision(
+            snapshot=snapshot,
+            policy=self.policy(max_active_local_runners=5),
+            audit=self.audit_for_jobs(snapshot),
+        )
+        self.assertEqual(result["decision"], "START_LOCAL")
+        self.assertEqual(result["evidence"]["scope"]["pressure_queued_job_count"], 2)
+        self.assertEqual(result["evidence"]["scope"]["qualified_pressure_job_ids"], [102, 103])
+        self.assertEqual(result["requested_capacity_delta"], 2)
+        self.assertNotEqual(result["reason_codes"], ["MATCHING_LOCAL_RUNNER_AVAILABLE"])
+
+    def test_available_capacity_waits_when_each_job_has_a_distinct_runner(self):
+        snapshot = self.matching_snapshot(
+            [["runner-a"], ["runner-b"]],
+            {"runner-a": "available_now", "runner-b": "available_now"},
+        )
+        result = self.decision(snapshot=snapshot, audit={"status": "missing", "queue": []})
+        self.assertEqual(result["decision"], "WAIT")
+        self.assertEqual(result["reason_codes"], ["MATCHING_LOCAL_RUNNER_AVAILABLE"])
+
+    def test_overlapping_candidate_sets_are_allocated_deterministically(self):
+        snapshot = self.matching_snapshot(
+            [["runner-a"], ["runner-a", "runner-b"], ["runner-b"]],
+            {"runner-a": "available_now", "runner-b": "available_now"},
+        )
+        result = self.decision(
+            snapshot=snapshot,
+            audit=self.audit_for_jobs(snapshot),
+        )
+        self.assertEqual(result["decision"], "PROVISION_LOCAL")
+        self.assertEqual(result["evidence"]["scope"]["pressure_job_ids"], [103])
+
+    def test_malformed_matching_evidence_is_inconclusive(self):
+        snapshot = self.matching_snapshot(
+            [["runner-ready"]],
+            {"runner-ready": "available_now"},
+        )
+        snapshot["queue"]["jobs"][0]["matching_local_runner_names"] = ["missing-runner"]
+        result = self.decision(snapshot=snapshot, audit={"status": "missing", "queue": []})
+        self.assertEqual(result["decision"], "INCONCLUSIVE")
+        self.assertEqual(result["reason_codes"], ["EVIDENCE_INCONCLUSIVE"])
 
     def test_label_scope_can_explicitly_block_unselected_self_hosted_work(self):
         result = self.decision(policy=self.policy(label_scope=["gpu"]))

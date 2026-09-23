@@ -298,7 +298,7 @@ jobs:
     name: RunnerOps self-hosted dogfood
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: static-validation
-    runs-on: [self-hosted, Linux, X64, runnerops, local-runner]
+    runs-on: [self-hosted, Linux, X64, runnerops, local-runner, runnerops-provision-gate-113]
     timeout-minutes: 10
     permissions:
       contents: read

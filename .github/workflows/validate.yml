@@ -69,6 +69,8 @@ jobs:
             autoscale_store.py \
             autoscale_audit.py \
             autoscale_planner.py \
+            autoscale_provision.py \
+            autoscale_provision_controller.py \
             autoscale_runtime.py \
             autoscale_controller.py \
             autoscale_scheduler.py \
@@ -80,6 +82,10 @@ jobs:
             tests/test-autoscale-pressure-contracts.py \
             tests/test-autoscale-pressure-planner-contracts.py \
             tests/test-autoscale-planner-contracts.py \
+            tests/test-autoscale-provision-contracts.py \
+            tests/test-autoscale-provision-controller-contracts.py \
+            tests/test-autoscale-provision-planner-contracts.py \
+            tests/test-autoscale-provision-run-once-contracts.py \
             tests/test-autoscale-readonly-plan-timing.py \
             tests/test-autoscale-controller-contracts.py \
             tests/test-autoscale-scheduler-contracts.py
@@ -146,6 +152,10 @@ jobs:
           python3 -B tests/test-autoscale-pressure-contracts.py
           python3 -B tests/test-autoscale-pressure-planner-contracts.py
           python3 -B tests/test-autoscale-planner-contracts.py
+          python3 -B tests/test-autoscale-provision-contracts.py
+          python3 -B tests/test-autoscale-provision-controller-contracts.py
+          python3 -B tests/test-autoscale-provision-planner-contracts.py
+          python3 -B tests/test-autoscale-provision-run-once-contracts.py
           python3 -B tests/test-autoscale-readonly-plan-timing.py
           python3 -B tests/test-autoscale-controller-contracts.py
           python3 -B tests/test-autoscale-scheduler-contracts.py

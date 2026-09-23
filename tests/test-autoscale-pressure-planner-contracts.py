@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """End-to-end planner contract for resumable aggregate pressure (#107)."""
 
+import json
+import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,8 +14,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from autoscale_contracts import timestamp  # noqa: E402
-from autoscale_planner import plan  # noqa: E402
-from autoscale_runtime import read_planner_evidence  # noqa: E402
+from autoscale_planner import load_audit_evidence, plan  # noqa: E402
+from autoscale_runtime import MAX_PLANNER_QUEUE_ROWS, read_planner_evidence  # noqa: E402
 from autoscale_store import AuditStore, Settings  # noqa: E402
 
 
@@ -179,6 +182,56 @@ class ResumedPressurePlannerContracts(unittest.TestCase):
         # episode even though aggregate pressure retains the 360 proven seconds.
         self.assertEqual([row["job_id"] for row in result["evidence"]["queue"]], [2])
         self.assertEqual(result["evidence"]["queue"][0]["first_seen_queued_at"], self.at())
+
+
+    def test_historical_queue_volume_does_not_poison_current_planner_evidence(self):
+        with AuditStore(
+            self.path,
+            writable=True,
+            clock=lambda: self.now,
+            settings=self.settings,
+        ) as store:
+            current = self.snapshot(999999)
+            store.observe(current)
+            repo_key = "example/resume"
+            at = self.at()
+
+            with store.transaction():
+                for index in range(MAX_PLANNER_QUEUE_ROWS + 1):
+                    store.connection.execute(
+                        """INSERT INTO queue_observations (
+                        observation_id,repo_key,run_id,run_attempt,job_id,
+                        first_seen_queued_at,last_seen_queued_at,github_created_at,
+                        required_labels,observation_count,max_gap_seconds,ended_at,end_reason
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (
+                            f"historical-{index}",
+                            repo_key,
+                            2000000 + index,
+                            1,
+                            3000000 + index,
+                            at,
+                            at,
+                            "2026-01-01T00:00:00.000000+00:00",
+                            json.dumps(self.labels),
+                            1,
+                            300,
+                            at,
+                            "left_queue",
+                        ),
+                    )
+
+            audit = read_planner_evidence(store, "Example/Resume")
+
+        self.assertEqual(audit["status"], "complete")
+        self.assertEqual([row["job_id"] for row in audit["queue"]], [999999])
+
+        with patch.dict(os.environ, {"RUNNER_STATE_ROOT": str(self.path.parent)}):
+            readonly = load_audit_evidence("Example/Resume")
+        self.assertEqual(readonly["status"], "complete")
+        self.assertEqual(readonly["error"], None)
+        self.assertEqual([row["job_id"] for row in readonly["queue"]], [999999])
+
 
 
 if __name__ == "__main__":

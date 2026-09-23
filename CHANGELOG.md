@@ -6,6 +6,8 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ## Unreleased
 
+## v0.4.0 — 2026-09-23
+
 ### Added
 
 - `PROVISION_LOCAL` passa a ser uma mutação local governada e **opt-in**, executada por `runnerctl autoscale run-once` somente quando pressão qualificada, headroom do host, template explícito e limites de pool permitem crescimento. Cada execução cria no máximo um runner e reutiliza o caminho seguro existente de `runnerctl add`.

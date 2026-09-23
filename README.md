@@ -6,7 +6,7 @@
 
 **Website:** https://oalangomes.github.io/RunnerOps/
 
-**Release estável atual:** [v0.3.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.3.0)
+**Release estável atual:** [v0.4.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.4.0)
 
 **CLI pública:** `runnerctl`
 
@@ -24,7 +24,7 @@ O repositório contém a plataforma de gerenciamento. O inventário real de runn
 - operação por runner, grupo ou frota;
 - health, doctor, logs e planejamento de migração;
 - observabilidade read-only de fila/capacidade e planejamento determinístico de autoscale;
-- ativação local governada e opt-in de capacidade já provisionada;
+- ativação e provisionamento local governados e opt-in, com crescimento limitado do pool;
 - audit store local opcional para continuidade de fila e decisões/ações persistidas internamente;
 - Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
@@ -58,7 +58,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Aguardar resultado do CI | `runnerctl ci watch .` |
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
 | Planejar autoscale (read-only) | `runnerctl autoscale plan .` |
-| Aplicar `START_LOCAL` governado | `runnerctl autoscale run-once .` |
+| Aplicar `START_LOCAL` / `PROVISION_LOCAL` governados | `runnerctl autoscale run-once .` |
 | Agendar autoscale contínuo | `runnerctl autoscale enable .` |
 | Histórico/auditoria de autoscale | `runnerctl autoscale history`, `runnerctl autoscale explain` |
 | Agent Skills | `runnerctl skills list/install` |

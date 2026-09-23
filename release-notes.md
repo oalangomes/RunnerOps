@@ -1,143 +1,101 @@
-## RunnerOps v0.3.0 — Governed autoscaling + operator UX
+## RunnerOps v0.4.0 — Governed local provisioning
 
-RunnerOps v0.3.0 evolves the project from local self-hosted runner operations into an **observable, explainable and governed capacity control plane**.
+RunnerOps v0.4.0 extends the governed autoscaling boundary from activating existing capacity to **bounded local runner provisioning**.
 
-The core flow introduced in this release is:
+The local scale-out path is now:
 
 ```text
 queue/capacity observation
-→ durable evidence
+→ durable pressure evidence
 → deterministic planning
-→ governed START_LOCAL
-→ structured verification
+→ governed PROVISION_LOCAL
+→ verified provisioned_idle
+→ later START_LOCAL
+→ VERIFIED_ONLINE
 → auditable outcome
 ```
 
-### Capacity observability
+### Bounded local pool growth
 
-RunnerOps can now inspect GitHub Actions queue pressure together with matching local runner capacity:
+`runnerctl autoscale run-once` can now execute `PROVISION_LOCAL` when local provisioning is explicitly enabled and policy allows pool growth.
 
-```bash
-runnerctl capacity .
-runnerctl autoscale status .
+Provisioning is:
+
+- opt-in and disabled by default;
+- limited separately from active-runner capacity;
+- one registration at most per controller iteration;
+- deterministic, using the lowest free `<prefix>-NN` slot;
+- constrained to an explicit profile, group and label template.
+
+Existing compatible `provisioned_idle` capacity still takes precedence: the planner selects `START_LOCAL` before provisioning another runner.
+
+### Replay-safe provisioning
+
+Provisioning now has a durable action lifecycle:
+
+```text
+planned
+→ started
+→ succeeded | failed | inconclusive
 ```
 
-Capacity is explicitly classified as:
+Once an action crosses the provisioning boundary, RunnerOps never blindly calls `runnerctl add` again for that action. A later iteration reconciles the exact persisted target against fresh local + GitHub evidence.
 
-- `available_now`
-- `busy_capacity`
-- `provisioned_idle`
-- `inconclusive`
+This prevents an inconclusive verification window from becoming duplicate infrastructure.
 
-Unknown or contradictory evidence remains inconclusive instead of triggering speculative action.
+### Exact target safety
 
-### Deterministic autoscale planning
+The governed autoscaler does not use the human-friendly auto-suffix behavior of interactive `runnerctl add`.
 
-```bash
-runnerctl autoscale plan .
-```
+For autoscale provisioning:
 
-The new planner turns normalized capacity evidence and policy into deterministic decisions:
+- the target identity is immutable;
+- collisions are rejected rather than silently becoming `target-2`;
+- success requires the exact target to be observed as a healthy local `provisioned_idle` registration;
+- the GitHub registration identity is persisted in the audit trail.
 
-- `WAIT`
-- `START_LOCAL`
-- `PROVISION_LOCAL`
-- `BURST_CLOUD`
-- `HOLD`
-- `BLOCKED`
-- `INCONCLUSIVE`
+### Independent limits
 
-Plans include stable reason codes, policy fingerprints and structured evidence.
+v0.4.0 separates:
 
-Planning is completely read-only.
+- `RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS` — active local capacity;
+- `RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS` — total registered local pool size.
 
-### Durable autoscale evidence
+This allows RunnerOps to keep a bounded idle pool without conflating registrations with active processes.
 
-RunnerOps now uses a local SQLite audit/evidence store to retain bounded operational evidence for:
+### Real-host qualification
 
-- queue observations;
-- autoscale decisions;
-- actions;
-- action lifecycle transitions;
-- replay and recovery.
+The v0.4.0 path was qualified on a real Linux/WSL2 + systemd host with a real GitHub Actions workload.
 
-Historical decisions can be inspected with:
+Observed end-to-end evidence included:
 
-```bash
-runnerctl autoscale history
-runnerctl autoscale explain --decision <id>
-```
+- real sustained queued pressure with no matching capacity;
+- deterministic `PROVISION_LOCAL` selection;
+- pool growth from 4 to the configured maximum of 5;
+- one exact new registration;
+- an inconclusive post-provision verification followed by recovery of the same action without a second add;
+- `PROVISION_VERIFIED_IDLE`;
+- a later planner decision selecting `START_LOCAL` for that same runner;
+- `VERIFIED_ONLINE`;
+- the queued GitHub Actions job executing successfully on the newly provisioned runner;
+- no duplicate registration;
+- final scheduler state disabled/inactive for the controlled qualification.
 
-### Governed local autoscaling
-
-v0.3.0 introduces the first mutating autoscale path:
-
-```bash
-RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
-```
-
-Mutation is intentionally limited to `START_LOCAL`: activating one exact, already provisioned local runner selected by the deterministic planner.
-
-Before mutation, RunnerOps:
-
-1. persists the decision;
-2. acquires a host-level lock;
-3. collects fresh capacity evidence;
-4. re-runs the planner;
-5. revalidates policy, target and registration identity.
-
-After the lifecycle operation, success is determined from fresh structured local + GitHub evidence rather than from the start command alone.
-
-Every action remains reconstructable through the audit trail.
-
-### Operator UX
-
-This release also improves everyday CLI operation:
-
-```bash
-runnerctl add . --plan
-runnerctl overview .
-runnerctl help logs
-runnerctl logs my-runner --since 30m --follow
-runnerctl completion install bash
-```
-
-Highlights include:
-
-- read-only provisioning previews;
-- repository overview;
-- hierarchical command help;
-- actionable `[SUMMARY]` and `[NEXT]` feedback;
-- bounded log controls;
-- Bash, Zsh and Fish completion;
-- TTY-only progress for mutable bootstrap operations;
-- safer non-interactive systemd lifecycle authorization.
+The focused qualification suite passed 133 tests, followed by green repository CI and public-portability validation.
 
 ### Safety boundaries
 
-v0.3.0 deliberately does **not** execute:
+v0.4.0 still does **not** execute:
 
-- `PROVISION_LOCAL`;
 - `BURST_CLOUD`;
-- continuous autonomous autoscaling.
+- scale-in;
+- batch provisioning;
+- `ensure .` as an autoscale fallback;
+- LLM-based scaling policy or target selection.
 
-Autoscaling remains opt-in, and the deterministic planner remains the scaling authority.
+The deterministic planner remains the scaling authority, and local provisioning remains explicit policy.
 
-RunnerOps does not delegate scaling policy or target selection to an LLM.
-
-### Validation
-
-The release was validated through:
-
-- hosted contract validation;
-- GitHub API smoke tests;
-- RunnerOps-managed self-hosted dogfood;
-- controlled real-host `START_LOCAL` dogfood;
-- release identity and GitHub Pages validation.
-
-This release closes the first governed autoscaling boundary for **already provisioned local capacity**.
-
-Agent-native operation, Agent Skills v2, managed skill distribution, bounded local provisioning and cloud burst remain future work.
+This release closes the governed local scale-out loop: RunnerOps can now both **activate existing local capacity** and **grow the bounded local runner pool**.
 
 **Full changelog:**  
-https://github.com/oalangomes/RunnerOps/compare/v0.2.2...v0.3.0
+https://github.com/oalangomes/RunnerOps/compare/v0.3.0...v0.4.0

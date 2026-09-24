@@ -5,11 +5,13 @@ import argparse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import time
 
 
@@ -23,6 +25,7 @@ GITHUB_REMOTE_PREFIXES = (
     "git@github.com:",
 )
 COLLECTOR_CACHE_TTL_SECONDS = 60
+QUEUE_CACHE_VERSION = 1
 MAX_JOB_QUERY_WORKERS = 4
 JOB_QUERY_RETRIES = 1
 _REPO_CACHE = {}
@@ -53,6 +56,13 @@ def collector_metrics():
         "job_query_retry_calls": 0,
         "job_query_workers": 0,
         "repo_cache_hits": 0,
+        "job_cache_hits": 0,
+        "job_cache_misses": 0,
+        "job_cache_invalidations": 0,
+        "scheduler_interval_seconds": None,
+        "scheduler_headroom_ms": None,
+        "scheduler_overrun": False,
+        "scheduler_near_overrun": False,
         "canonical_source": None,
     }
 
@@ -68,6 +78,66 @@ def record_github_call(metrics, kind):
 def reset_process_cache():
     """Test/support hook; collector caches never persist beyond this process."""
     _REPO_CACHE.clear()
+
+
+def _queue_cache_path(repo):
+    root = os.environ.get("RUNNER_CACHE_ROOT")
+    if not root:
+        root = os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    digest = hashlib.sha256(repo_key(repo).encode("utf-8")).hexdigest()[:16]
+    return Path(root) / "runnerops" / "capacity" / f"{digest}.json"
+
+
+def _load_queue_cache(repo):
+    try:
+        payload = json.loads(_queue_cache_path(repo).read_text(encoding="utf-8"))
+        if payload.get("version") != QUEUE_CACHE_VERSION:
+            return {}
+        return payload.get("runs", {}) if isinstance(payload.get("runs"), dict) else {}
+    except (OSError, UnicodeError, ValueError, AttributeError):
+        return {}
+
+
+def _save_queue_cache(repo, runs):
+    path = _queue_cache_path(repo)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as handle:
+            json.dump({"version": QUEUE_CACHE_VERSION, "runs": runs}, handle)
+            temporary = Path(handle.name)
+        temporary.replace(path)
+    except (OSError, TypeError, ValueError):
+        try:
+            temporary.unlink()
+        except (UnboundLocalError, OSError):
+            pass
+
+
+def _run_fingerprint(run):
+    changed = {
+        key: run.get(key)
+        for key in ("status", "conclusion", "updated_at", "head_sha", "run_attempt")
+    }
+    if not changed["updated_at"]:
+        return None
+    return changed
+
+
+def _record_scheduler_timing(metrics, wall_time_ms):
+    raw_interval = os.environ.get("RUNNER_AUTOSCALE_INTERVAL_SECONDS", "").strip()
+    try:
+        interval = int(raw_interval)
+    except ValueError:
+        return
+    if interval < 1:
+        return
+    interval_ms = interval * 1000
+    metrics["scheduler_interval_seconds"] = interval
+    metrics["scheduler_headroom_ms"] = interval_ms - wall_time_ms
+    metrics["scheduler_overrun"] = wall_time_ms >= interval_ms
+    metrics["scheduler_near_overrun"] = wall_time_ms >= int(interval_ms * 0.8)
 
 
 def github_repo_from_remote(value):
@@ -242,6 +312,7 @@ def _collect_run_jobs(repo, run):
 
 
 def collect_queue(repo, now, errors, metrics=None):
+    queue_error_start = len(errors)
     runs = {}
     for status in RUN_STATUSES:
         for run in api_pages(f"repos/{repo}/actions/runs?status={status}",
@@ -255,16 +326,37 @@ def collect_queue(repo, now, errors, metrics=None):
                 runs[run["id"]] = run
 
     ordered_runs = sorted(runs.values(), key=lambda run: (run["id"], run["run_attempt"]))
-    workers = min(MAX_JOB_QUERY_WORKERS, len(ordered_runs))
+    cached_runs = _load_queue_cache(repo)
+    job_batches = []
+    runs_to_query = []
+    cache_records = {}
+    now_epoch = time.time()
+    for run in ordered_runs:
+        fingerprint = _run_fingerprint(run)
+        cache_key = f"{run['id']}:{run['run_attempt']}"
+        cached = cached_runs.get(cache_key, {})
+        cached_at = cached.get("cached_at", 0) if isinstance(cached, dict) else 0
+        if (not errors and fingerprint is not None and isinstance(cached, dict)
+                and cached.get("fingerprint") == fingerprint
+                and isinstance(cached.get("jobs"), list)
+                and now_epoch - cached_at <= COLLECTOR_CACHE_TTL_SECONDS):
+            job_batches.append((run, cached["jobs"], [], collector_metrics()))
+            if metrics is not None:
+                metrics["job_cache_hits"] += 1
+        else:
+            runs_to_query.append(run)
+            if metrics is not None and cached:
+                metrics["job_cache_misses"] += 1
+
+    workers = min(MAX_JOB_QUERY_WORKERS, len(runs_to_query))
     if metrics is not None:
         metrics["job_query_workers"] = workers
 
     if workers:
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runnerops-jobs") as executor:
-            collected = executor.map(lambda run: _collect_run_jobs(repo, run), ordered_runs)
-            job_batches = list(collected)
-    else:
-        job_batches = []
+            job_batches.extend(executor.map(
+                lambda run: _collect_run_jobs(repo, run), runs_to_query
+            ))
 
     jobs = {}
     for run, rows, batch_errors, batch_metrics in job_batches:
@@ -273,6 +365,12 @@ def collect_queue(repo, now, errors, metrics=None):
             metrics["github_calls"] += batch_metrics["github_calls"]
             metrics["job_list_calls"] += batch_metrics["job_list_calls"]
             metrics["job_query_retry_calls"] += batch_metrics["job_query_retry_calls"]
+        if not batch_errors and _run_fingerprint(run) is not None:
+            cache_records[f"{run['id']}:{run['run_attempt']}"] = {
+                "fingerprint": _run_fingerprint(run),
+                "cached_at": now_epoch,
+                "jobs": rows,
+            }
         for job in rows:
             if job.get("status") != "queued":
                 if job.get("status") not in ("in_progress", "completed", "waiting", "pending"):
@@ -299,6 +397,10 @@ def collect_queue(repo, now, errors, metrics=None):
                 "queue_age_source": "job.created_at" if age is not None else None,
                 "required_labels": labels(job.get("labels")),
             }
+    if len(errors) == queue_error_start and cache_records:
+        _save_queue_cache(repo, cache_records)
+    elif metrics is not None:
+        metrics["job_cache_invalidations"] += 1
     return sorted(jobs.values(), key=lambda j: (-(j["queue_age_seconds"] or 0), j["job_id"]))
 
 
@@ -513,7 +615,8 @@ def snapshot(requested):
                     or not host_complete or any(j["capacity_status"] == "inconclusive"
                                                or j["queue_age_seconds"] is None for j in jobs))
     metrics["wall_time_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
-    metrics["cache_scope"] = "process"
+    _record_scheduler_timing(metrics, metrics["wall_time_ms"])
+    metrics["cache_scope"] = "persistent_queue_and_process_identity"
     metrics["cache_ttl_seconds"] = COLLECTOR_CACHE_TTL_SECONDS
     return {
         "schema_version": 1, "kind": "CapacitySnapshot", "observed_at": now.isoformat(),

@@ -14,6 +14,29 @@ RunnerOps é uma central Linux leve para operar múltiplos runners self-hosted d
 
 O repositório contém a plataforma de gerenciamento. O inventário real de runners, caminhos locais e credenciais ficam fora do Git.
 
+## Por que este projeto existe
+
+RunnerOps é duas coisas ao mesmo tempo:
+
+- uma ferramenta open source funcional para operar capacidade local do GitHub Actions;
+- um **laboratório público de engenharia** para estudar DevOps, CI/CD, performance, automação e AI Engineering em um sistema real.
+
+O objetivo não é reivindicar originalidade para cada mecanismo. O projeto é usado para **construir, medir, quebrar, corrigir e documentar** problemas reais de infraestrutura e automação, com espaço para explorar:
+
+- lifecycle, systemd e operação de hosts Linux;
+- filas, capacidade, concorrência e performance de CI;
+- uso de hardware local, custo, energia e trade-offs contra compute hospedado;
+- observabilidade, evidência estruturada, recuperação e idempotência;
+- automação para pessoas, scripts e coding agents;
+- Agent Skills, tool use e análise assistida por IA;
+- comparação de modelos locais e remotos quando houver um experimento reproduzível que justifique isso.
+
+Nem todo experimento precisa virar feature. As capacidades efetivamente entregues permanecem descritas no catálogo abaixo e nas releases; ideias de estudo não são apresentadas como funcionalidades existentes.
+
+O control plane também preserva uma fronteira importante: decisões de autoscaling continuam **determinísticas e governadas**. Modelos generativos podem consumir evidência, explicar estado e ajudar na análise, mas não substituem silenciosamente policy, planner ou limites operacionais.
+
+> **Build → measure → explain → improve → document.**
+
 ## O que este projeto oferece
 
 - múltiplos runners por repositório;
@@ -397,8 +420,7 @@ O JSON preserva o `nameWithOwner` canônico e usa `schema_version: 1`. Evidênci
 ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
-planejamento read-only e leitura do histórico. A primeira mutação governada é
-`autoscale run-once`, limitada a `START_LOCAL` e desabilitada por padrão.
+planejamento read-only e leitura do histórico. As mutações locais governadas são executadas por `autoscale run-once`: `START_LOCAL` para capacidade já provisionada e, desde a v0.4.0, `PROVISION_LOCAL` para crescimento limitado do pool quando o provisioning local estiver explicitamente habilitado. `BURST_CLOUD` continua somente planejável e sem execução.
 
 ### Planejar autoscale sem aplicar
 
@@ -424,6 +446,11 @@ Política principal:
 RUNNER_AUTOSCALE_QUEUE_THRESHOLD_SECONDS=300
 RUNNER_AUTOSCALE_INTERVAL_SECONDS=60
 RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS=1
+RUNNER_AUTOSCALE_LOCAL_PROVISION_ENABLED=false
+RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS=0
+RUNNER_AUTOSCALE_LOCAL_PROVISION_PROFILE=
+RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=
+RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS=
 RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB=1024
 RUNNER_AUTOSCALE_MAX_CPU_PERCENT=
 RUNNER_AUTOSCALE_MAX_BURST_RUNNERS=0
@@ -447,16 +474,19 @@ mas o controller ainda inicia somente um runner local exato por execução. Entr
 capacidade já provisionada sem enfraquecer o threshold de fila nem o cooldown
 mais longo de outras ações.
 
-### Aplicar uma ativação local governada
+### Aplicar uma mutação local governada
 
 ```bash
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once example/my-api --json
 ```
 
-O controller executa o mesmo planner determinístico e aplica **somente
-`START_LOCAL`** para um runner local exato, já provisionado, saudável e
-on-demand. `PROVISION_LOCAL` e `BURST_CLOUD` continuam sem execução.
+O controller executa o mesmo planner determinístico e pode aplicar duas mutações locais governadas:
+
+- `START_LOCAL` — ativa um runner local exato, já provisionado, saudável e on-demand;
+- `PROVISION_LOCAL` — cria no máximo um runner local exato por execução, somente quando provisioning local está explicitamente habilitado, o template é compatível e o pool permanece abaixo de `RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS`.
+
+`BURST_CLOUD` continua sem execução.
 
 Ao chegar a um `START_LOCAL` válido, `run-once` persiste primeiro a decisão e só
 então tenta entrar na seção mutante protegida pelo lock do host. Com o lock adquirido,
@@ -466,6 +496,8 @@ identity continuarem válidos o controller persiste `planned -> started` e chama
 start existente daquele runner. O sucesso é provado por evidência estruturada local
 + GitHub em um snapshot fresco; `status`/`health` permanecem diagnósticos humanos e
 o exit code de `start` isoladamente não prova sucesso.
+
+Em `PROVISION_LOCAL`, a identidade alvo é determinística e persistida antes da mutação. Se a verificação pós-cadastro ficar parcial ou inconclusiva, uma execução posterior reconcilia **o mesmo target** contra evidência local + GitHub em vez de repetir `runnerctl add` às cegas. Capacidade `provisioned_idle` compatível continua tendo preferência por `START_LOCAL` antes de criar outro registro.
 
 `RUNNER_AUTOSCALE_ENABLED` é `false` por padrão. Desabilitado, `run-once` não
 coleta snapshot, não cria SQLite/lock e não toca no lifecycle.
@@ -482,9 +514,7 @@ runnerctl autoscale disable .
 canônico. O timer roda a cada 60 segundos por padrão e só agenda o controller
 governado já existente como `RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale
 run-once owner/repo --json`. Ele não inicia runners durante o enable, não chama
-`ensure .` e não executa scale-in. A única mutação automática continua sendo
-`START_LOCAL` para um runner local exato; todos os demais outcomes continuam
-no-op.
+`ensure .` e não executa scale-in. Cada tick delega a decisão ao mesmo planner/controller governado: pode ativar um runner exato com `START_LOCAL`, provisionar no máximo um runner exato com `PROVISION_LOCAL` quando a policy explícita permitir, ou permanecer sem mutação em `WAIT`, `HOLD`, `BLOCKED` e `INCONCLUSIVE`. `BURST_CLOUD` continua sem execução.
 
 Defina `RUNNER_AUTOSCALE_INTERVAL_SECONDS` no `config.env` para ajustar a
 cadência. O valor deve ser positivo e estritamente menor que
@@ -715,7 +745,7 @@ runnerctl health all
 
 Para contribuidores, o CI valida sintaxe shell/Python, defaults XDG, instalação e routing do `runnerctl`, plano de remoção governada, contratos de `CapacitySnapshot`, audit store, planner determinístico e controller governado, portabilidade das Agent Skills e ausência de pressupostos específicos da máquina do mantenedor.
 
-A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. A `v0.2.0` repetiu o gate em WSL2 + systemd, comprovando instalação/upgrade, operação on-demand repo-scoped, workflow real em self-hosted runner e o bridge `ci watch` contra GitHub Actions. A `v0.3.0` acrescenta observabilidade de capacidade, audit store, planner determinístico, `START_LOCAL` governado e o novo UX operacional; o controller foi dogfoodado em host real e o workflow completo de `master` permaneceu verde após a consolidação da release candidate.
+A `v0.1.0` foi validada com smoke/E2E real em WSL2 + systemd, incluindo cadastro de runner, execução de workflow self-hosted, remoção governada, checkout em caminho arbitrário e fresh config XDG. A `v0.2.0` repetiu o gate em WSL2 + systemd, comprovando instalação/upgrade, operação on-demand repo-scoped, workflow real em self-hosted runner e o bridge `ci watch` contra GitHub Actions. A `v0.3.0` acrescentou observabilidade de capacidade, audit store, planner determinístico, `START_LOCAL` governado e o novo UX operacional. A `v0.4.0` fechou o próximo boundary local com `PROVISION_LOCAL` governado: em qualificação real, o pool cresceu de 4 para 5, uma verificação inicialmente inconclusiva foi recuperada sem segundo cadastro, o mesmo runner avançou para `START_LOCAL` / `VERIFIED_ONLINE` e consumiu um workload real do GitHub Actions. O gate focado terminou com 133 testes passando, seguido por CI e public portability verdes.
 
 O workflow de `master` também dogfooda o produto em um runner dedicado gerenciado pelo próprio RunnerOps: PRs continuam no GitHub-hosted por segurança, enquanto pushes confiáveis validam identidade local/remota, `platform-doctor`, status/health/plan e o bridge `ci watch` no host real.
 
@@ -749,5 +779,7 @@ Distribuído sob a licença **Apache License 2.0**. Consulte [LICENSE](LICENSE).
 ## Estado do projeto
 
 A direção atual é **systemd-first + on-demand + configuração local por máquina**, com observabilidade, decisão determinística e mutação governada separadas em boundaries explícitas.
+
+Como projeto de engenharia, RunnerOps também funciona como um laboratório público: novas ideias devem nascer de uso real, produzir aprendizado ou evidência mensurável e permanecer pequenas o bastante para serem entendidas, testadas e documentadas. Originalidade não é requisito; execução, clareza de trade-offs e capacidade de reproduzir o que foi aprendido são.
 
 A compatibilidade com ciclo de vida legado existe apenas para migração; novas instalações devem usar systemd.

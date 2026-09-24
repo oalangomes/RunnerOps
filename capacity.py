@@ -59,6 +59,7 @@ def collector_metrics():
         "job_cache_hits": 0,
         "job_cache_misses": 0,
         "job_cache_invalidations": 0,
+        "job_cache_enabled": False,
         "scheduler_interval_seconds": None,
         "scheduler_headroom_ms": None,
         "scheduler_overrun": False,
@@ -76,7 +77,7 @@ def record_github_call(metrics, kind):
 
 
 def reset_process_cache():
-    """Test/support hook; collector caches never persist beyond this process."""
+    """Test/support hook for the process-local repository identity cache."""
     _REPO_CACHE.clear()
 
 
@@ -123,6 +124,30 @@ def _run_fingerprint(run):
     if not changed["updated_at"]:
         return None
     return changed
+
+
+def _cacheable_run(run):
+    # Only workflow runs that are themselves still queued may reuse cached jobs.
+    # Active runs always refresh job-level state.
+    return run.get("status") == "queued" and _run_fingerprint(run) is not None
+
+
+def _cache_job_rows(rows):
+    # Persist only fields required by queue classification.
+    keys = ("id", "name", "status", "created_at", "labels")
+    return [{key: row.get(key) for key in keys} for row in rows]
+
+
+def _managed_queue_cache_context(repo):
+    if not repo:
+        return False
+    trusted = os.environ.get("RUNNEROPS_CANONICAL_REPOSITORY", "").strip()
+    enabled = os.environ.get("RUNNER_AUTOSCALE_ENABLED", "").strip().lower()
+    return (
+        enabled in ("1", "true", "yes", "on")
+        and bool(re.fullmatch(REPO_PATTERN, trusted))
+        and trusted.casefold() == repo.casefold()
+    )
 
 
 def _record_scheduler_timing(metrics, wall_time_ms):
@@ -311,8 +336,11 @@ def _collect_run_jobs(repo, run):
     return run, rows, local_errors, local_metrics
 
 
-def collect_queue(repo, now, errors, metrics=None):
+def collect_queue(repo, now, errors, metrics=None, *, allow_persistent_cache=False):
     queue_error_start = len(errors)
+    if metrics is not None:
+        metrics["job_cache_enabled"] = bool(allow_persistent_cache)
+
     runs = {}
     for status in RUN_STATUSES:
         for run in api_pages(f"repos/{repo}/actions/runs?status={status}",
@@ -326,26 +354,34 @@ def collect_queue(repo, now, errors, metrics=None):
                 runs[run["id"]] = run
 
     ordered_runs = sorted(runs.values(), key=lambda run: (run["id"], run["run_attempt"]))
-    cached_runs = _load_queue_cache(repo)
+    cached_runs = _load_queue_cache(repo) if allow_persistent_cache else {}
     job_batches = []
     runs_to_query = []
     cache_records = {}
+    cache_record_times = {}
     now_epoch = time.time()
+
     for run in ordered_runs:
         fingerprint = _run_fingerprint(run)
         cache_key = f"{run['id']}:{run['run_attempt']}"
-        cached = cached_runs.get(cache_key, {})
+        cacheable = allow_persistent_cache and _cacheable_run(run)
+        cached = cached_runs.get(cache_key, {}) if cacheable else {}
         cached_at = cached.get("cached_at", 0) if isinstance(cached, dict) else 0
-        if (not errors and fingerprint is not None and isinstance(cached, dict)
-                and cached.get("fingerprint") == fingerprint
-                and isinstance(cached.get("jobs"), list)
-                and now_epoch - cached_at <= COLLECTOR_CACHE_TTL_SECONDS):
+        if (
+            cacheable
+            and len(errors) == queue_error_start
+            and isinstance(cached, dict)
+            and cached.get("fingerprint") == fingerprint
+            and isinstance(cached.get("jobs"), list)
+            and now_epoch - cached_at <= COLLECTOR_CACHE_TTL_SECONDS
+        ):
             job_batches.append((run, cached["jobs"], [], collector_metrics()))
+            cache_record_times[cache_key] = cached_at
             if metrics is not None:
                 metrics["job_cache_hits"] += 1
         else:
             runs_to_query.append(run)
-            if metrics is not None and cached:
+            if metrics is not None and cacheable:
                 metrics["job_cache_misses"] += 1
 
     workers = min(MAX_JOB_QUERY_WORKERS, len(runs_to_query))
@@ -365,12 +401,16 @@ def collect_queue(repo, now, errors, metrics=None):
             metrics["github_calls"] += batch_metrics["github_calls"]
             metrics["job_list_calls"] += batch_metrics["job_list_calls"]
             metrics["job_query_retry_calls"] += batch_metrics["job_query_retry_calls"]
-        if not batch_errors and _run_fingerprint(run) is not None:
-            cache_records[f"{run['id']}:{run['run_attempt']}"] = {
+
+        if allow_persistent_cache and not batch_errors and _cacheable_run(run):
+            cache_key = f"{run['id']}:{run['run_attempt']}"
+            cache_records[cache_key] = {
                 "fingerprint": _run_fingerprint(run),
-                "cached_at": now_epoch,
-                "jobs": rows,
+                # Hits keep the original fetch time so TTL cannot slide forever.
+                "cached_at": cache_record_times.get(cache_key, now_epoch),
+                "jobs": _cache_job_rows(rows),
             }
+
         for job in rows:
             if job.get("status") != "queued":
                 if job.get("status") not in ("in_progress", "completed", "waiting", "pending"):
@@ -397,12 +437,14 @@ def collect_queue(repo, now, errors, metrics=None):
                 "queue_age_source": "job.created_at" if age is not None else None,
                 "required_labels": labels(job.get("labels")),
             }
-    if len(errors) == queue_error_start and cache_records:
-        _save_queue_cache(repo, cache_records)
-    elif metrics is not None:
-        metrics["job_cache_invalidations"] += 1
-    return sorted(jobs.values(), key=lambda j: (-(j["queue_age_seconds"] or 0), j["job_id"]))
 
+    if allow_persistent_cache:
+        if len(errors) == queue_error_start:
+            _save_queue_cache(repo, cache_records)
+        elif metrics is not None:
+            metrics["job_cache_invalidations"] += 1
+
+    return sorted(jobs.values(), key=lambda j: (-(j["queue_age_seconds"] or 0), j["job_id"]))
 
 def read_registry(errors):
     records = []
@@ -574,7 +616,7 @@ def match_jobs(jobs, runners, complete):
                    matching_local_runner_names=[r["name"] for r in matched if r["scope"] == "local"])
 
 
-def snapshot(requested):
+def snapshot(requested, *, allow_persistent_queue_cache=False):
     started = time.monotonic()
     metrics = collector_metrics()
     now = datetime.now(timezone.utc)
@@ -587,7 +629,16 @@ def snapshot(requested):
     selected = [record for record in records if key and record["repo"] == key]
     jobs, remote = [], []
     if canonical:
-        jobs = collect_queue(canonical, now, errors, metrics=metrics)
+        queue_cache_allowed = (
+            allow_persistent_queue_cache and _managed_queue_cache_context(canonical)
+        )
+        jobs = collect_queue(
+            canonical,
+            now,
+            errors,
+            metrics=metrics,
+            allow_persistent_cache=queue_cache_allowed,
+        )
         remote = api_pages(f"repos/{canonical}/actions/runners", "runners", errors, "github_runners",
                            metrics=metrics, metric_kind="runner_list_calls")
         valid_remote = [r for r in remote if positive_id(r.get("id")) and isinstance(r.get("name"), str)]
@@ -616,8 +667,14 @@ def snapshot(requested):
                                                or j["queue_age_seconds"] is None for j in jobs))
     metrics["wall_time_ms"] = max(0, int(round((time.monotonic() - started) * 1000)))
     _record_scheduler_timing(metrics, metrics["wall_time_ms"])
-    metrics["cache_scope"] = "persistent_queue_and_process_identity"
-    metrics["cache_ttl_seconds"] = COLLECTOR_CACHE_TTL_SECONDS
+    metrics["cache_scope"] = (
+        "persistent_queue_and_process_identity"
+        if metrics["job_cache_enabled"]
+        else "process_identity"
+    )
+    metrics["cache_ttl_seconds"] = (
+        COLLECTOR_CACHE_TTL_SECONDS if metrics["job_cache_enabled"] else None
+    )
     return {
         "schema_version": 1, "kind": "CapacitySnapshot", "observed_at": now.isoformat(),
         "status": "inconclusive" if inconclusive else "complete",

@@ -4,9 +4,9 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#020b07" />
-  <meta name="description" content="RunnerOps is a lightweight Linux operations layer for GitHub Actions self-hosted runners. runnerctl provides systemd-first, on-demand operations, CI feedback and portable Agent Skills." />
+  <meta name="description" content="RunnerOps is a lightweight Linux operations layer for GitHub Actions self-hosted runners and a public engineering lab for CI, local compute, automation and AI-assisted operations." />
   <meta property="og:title" content="RunnerOps — GitHub Actions self-hosted runner operations" />
-  <meta property="og:description" content="Lightweight, systemd-first operations for on-demand GitHub Actions self-hosted runners, powered by the runnerctl CLI." />
+  <meta property="og:description" content="Systemd-first operations for local GitHub Actions capacity, built and measured as a public engineering lab." />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://oalangomes.github.io/RunnerOps/" />
   <meta property="og:image" content="https://oalangomes.github.io/RunnerOps/social-preview.jpg" />
@@ -30,6 +30,7 @@
     <div class="header-actions">
       <nav data-i18n-aria="navAria" aria-label="Primary navigation">
         <a href="#why" data-i18n="navWhy">Why</a>
+        <a href="#lab" data-i18n="navLab">Lab</a>
         <a href="#architecture" data-i18n="navArchitecture">Architecture</a>
         <a href="#evidence" data-i18n="navEvidence">Evidence</a>
         <a class="nav-github" href="https://github.com/oalangomes/RunnerOps">GitHub</a>
@@ -58,7 +59,7 @@
         <h1 data-i18n-html="heroTitle">Operate self-hosted runners.<br /><span>Without babysitting them.</span></h1>
         <p class="lede" data-i18n-html="heroLede">
           RunnerOps is a lightweight Linux operations layer for GitHub Actions self-hosted runners.
-          Its public CLI, <code>runnerctl</code>, keeps lifecycle, machine-local state, diagnostics and CI feedback behind one stable interface.
+          Its public CLI, <code>runnerctl</code>, keeps lifecycle, CI feedback, capacity evidence and governed local autoscaling behind one stable interface.
         </p>
 
         <div class="hero-actions">
@@ -135,9 +136,42 @@ runnerctl platform-doctor</code></pre>
         </article>
         <article class="feature">
           <span class="feature-index">04</span>
-          <h3 data-i18n="feature4Title">CI feedback for humans and agents</h3>
-          <p data-i18n="feature4Body">Correlate GitHub Actions by repository + SHA or PR, keep CI failures distinct from runner infrastructure failures, and emit structured JSON.</p>
-          <code>runnerctl ci watch . --json</code>
+          <h3 data-i18n="feature4Title">Evidence before automation</h3>
+          <p data-i18n="feature4Body">Observe queue and capacity, keep decisions deterministic, and persist enough evidence to explain why RunnerOps acted — or refused to act.</p>
+          <code>runnerctl autoscale explain --decision &lt;id&gt;</code>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="lab">
+      <div class="section-heading">
+        <p class="eyebrow" data-i18n="labEyebrow">Engineering lab</p>
+        <h2 data-i18n-html="labTitle">A working tool.<br /><span>And a place to learn in public.</span></h2>
+        <p data-i18n="labBody">
+          RunnerOps is also a public engineering lab for exploring CI infrastructure, local compute, automation and AI-assisted operations in a real system. Experiments stay experiments until evidence justifies turning them into product capabilities.
+        </p>
+      </div>
+
+      <div class="evidence-grid">
+        <article>
+          <span class="evidence-icon">↗</span>
+          <h3 data-i18n="lab1Title">DevOps & CI performance</h3>
+          <p data-i18n="lab1Body">Study queueing, concurrency, capacity, CI critical paths, failure modes and the trade-offs behind self-hosted infrastructure.</p>
+        </article>
+        <article>
+          <span class="evidence-icon">↗</span>
+          <h3 data-i18n="lab2Title">Local compute economics</h3>
+          <p data-i18n="lab2Body">Measure existing Linux hardware as infrastructure: utilization, throughput, energy, cost and when hosted compute is still the better answer.</p>
+        </article>
+        <article>
+          <span class="evidence-icon">↗</span>
+          <h3 data-i18n="lab3Title">Agents & AI tooling</h3>
+          <p data-i18n="lab3Body">Explore Agent Skills, bounded tool use and evidence-grounded generative AI without making an LLM the hidden scaling policy.</p>
+        </article>
+        <article>
+          <span class="evidence-icon">↗</span>
+          <h3 data-i18n="lab4Title">Build, measure, explain</h3>
+          <p data-i18n="lab4Body">Originality is optional. Reproducible experiments, explicit trade-offs, tests, failures, corrections and useful documentation are not.</p>
         </article>
       </div>
     </section>
@@ -192,8 +226,8 @@ runnerctl platform-doctor</code></pre>
         </article>
         <article>
           <span class="evidence-icon">✓</span>
-          <h3 data-i18n="evidence3Title">WSL2 + systemd smoke</h3>
-          <p data-i18n="evidence3Body">Release validation has exercised installation, on-demand lifecycle, repository-scoped operations and real self-hosted workflow execution.</p>
+          <h3 data-i18n="evidence3Title">Real-host qualification</h3>
+          <p data-i18n="evidence3Body">v0.4.0 proved bounded local provisioning, recovery without duplicate registration, exact activation and a real GitHub Actions workload on the newly provisioned runner.</p>
         </article>
         <article>
           <span class="evidence-icon">✓</span>
@@ -224,7 +258,7 @@ $ runnerctl skills install all
 
     <section class="cta">
       <p class="eyebrow">RunnerOps v0.4.0</p>
-      <h2 data-i18n-html="ctaTitle">Small enough to understand.<br />Useful enough to run for real.</h2>
+      <h2 data-i18n-html="ctaTitle">Build it. Measure it.<br />Run it for real.</h2>
       <div class="hero-actions">
         <a class="button primary" href="https://github.com/oalangomes/RunnerOps" data-i18n="exploreRepo">Explore the repository</a>
         <a class="button secondary" href="https://github.com/oalangomes/RunnerOps/blob/master/README.md" data-i18n="readDocs">Read the docs</a>

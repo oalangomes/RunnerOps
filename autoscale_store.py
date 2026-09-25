@@ -563,17 +563,19 @@ class AuditStore:
             result.append(item)
         return result
 
-    def history(self, since=None, limit=100, repository=None, include_actions=False):
+    def history(self, since=None, limit=100, repository=None, include_actions=False, *, until=None):
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise AuditError("invalid_limit")
         since = timestamp(since) if since is not None else ""
+        until = timestamp(until) if until is not None else None
         repository = canonical_repo(repository) if repository is not None else None
         with self._read_transaction():
             rows = self.connection.execute(
                 "SELECT decision_id,updated_at,payload FROM decisions "
-                "WHERE updated_at>=? AND (? IS NULL OR lower(repository)=lower(?)) "
+                "WHERE updated_at>=? AND (? IS NULL OR updated_at<?) "
+                "AND (? IS NULL OR lower(repository)=lower(?)) "
                 "ORDER BY updated_at DESC,decision_id LIMIT ?",
-                (since, repository, repository, limit + 1),
+                (since, until, until, repository, repository, limit + 1),
             ).fetchall()
             decisions = [
                 {**decision_record(json.loads(row["payload"])), "updated_at": row["updated_at"]}
@@ -582,19 +584,22 @@ class AuditStore:
             queue_rows = self.connection.execute(
                 "SELECT q.*,r.repository FROM queue_observations q "
                 "JOIN repository_observations r USING(repo_key) "
-                "WHERE last_seen_queued_at>=? AND (? IS NULL OR lower(r.repository)=lower(?)) "
+                "WHERE last_seen_queued_at>=? AND (? IS NULL OR last_seen_queued_at<?) "
+                "AND (? IS NULL OR lower(r.repository)=lower(?)) "
                 "ORDER BY last_seen_queued_at DESC,observation_id LIMIT ?",
-                (since, repository, repository, limit + 1),
+                (since, until, until, repository, repository, limit + 1),
             ).fetchall()
             queue = self._queue_rows_from_rows(queue_rows)
             actions = []
-            if include_actions and decisions:
-                decision_ids = [item["decision_id"] for item in decisions]
+            returned_decisions = decisions[:limit]
+            if include_actions and returned_decisions:
+                decision_ids = [item["decision_id"] for item in returned_decisions]
                 placeholders = ",".join("?" for _ in decision_ids)
                 action_rows = self.connection.execute(
                     f"SELECT action_id,payload FROM actions WHERE decision_id IN ({placeholders}) "
+                    "AND updated_at>=? AND (? IS NULL OR updated_at<?) "
                     "ORDER BY action_id",
-                    decision_ids,
+                    [*decision_ids, since, until, until],
                 ).fetchall()
                 actions = [action_record(json.loads(row["payload"])) for row in action_rows]
         result = {
@@ -602,7 +607,8 @@ class AuditStore:
             "kind": "AutoscaleHistory",
             "status": "ok",
             "since": since or None,
-            "decisions": decisions[:limit],
+            "until": until,
+            "decisions": returned_decisions,
             "queue_observations": queue[:limit],
             "limit": limit,
             "truncated": len(decisions) > limit or len(queue) > limit,

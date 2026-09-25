@@ -426,6 +426,9 @@ ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
 histórico de auditoria é lido sem mutação; capacidade e métricas do collector
 atuais são marcadas separadamente de histórico não persistido. Consulte o
 [contrato de OperationalEvidence](docs/operational-evidence.md) para o schema.
+Limitações estruturais documentadas da v1 permanecem no JSON, mas não causam
+falha: `report` retorna 0 quando toda evidência disponível foi coletada e 3
+quando há falha/inconclusão de coleta ou histórico truncado.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
 planejamento read-only e leitura do histórico. As mutações locais governadas são executadas por `autoscale run-once`: `START_LOCAL` para capacidade já provisionada e, desde a v0.4.0, `PROVISION_LOCAL` para crescimento limitado do pool quando o provisioning local estiver explicitamente habilitado. `BURST_CLOUD` continua somente planejável e sem execução.

@@ -13,6 +13,18 @@ from autoscale_contracts import AuditError, utcnow
 from autoscale_store import AuditStore
 
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+CAPABILITY_LIMITATIONS = frozenset({
+    "ci_history_not_persisted",
+    "historical_capacity_not_persisted",
+    "historical_collector_metrics_unavailable",
+})
+COLLECTOR_FIELDS = (
+    "wall_time_ms", "github_calls", "repo_resolution_calls", "run_list_calls",
+    "job_list_calls", "runner_list_calls", "job_query_retry_calls",
+    "job_query_workers", "repo_cache_hits", "scheduler_interval_seconds",
+    "scheduler_headroom_ms", "scheduler_overrun", "scheduler_near_overrun",
+    "canonical_source", "cache_scope", "cache_ttl_seconds",
+)
 
 
 def duration(value):
@@ -92,13 +104,20 @@ def _autoscale(history):
     }
 
 
-def _read_history(target, period_from, store_factory, incomplete):
+def _read_history(target, period_from, period_to, store_factory, incomplete):
     if target is None:
         _add_incomplete(incomplete, "autoscale", "audit_history_unavailable")
         return None
     try:
         with store_factory() as store:
-            return store.history(period_from.isoformat(), repository=target, include_actions=True)
+            try:
+                return store.history(
+                    period_from.isoformat(), until=period_to.isoformat(),
+                    repository=target, include_actions=True,
+                )
+            except (AuditError, OSError, TypeError, ValueError):
+                _add_incomplete(incomplete, "autoscale", "query_failed")
+                return None
     except (AuditError, OSError):
         _add_incomplete(incomplete, "autoscale", "audit_history_unavailable")
         return None
@@ -106,10 +125,21 @@ def _read_history(target, period_from, store_factory, incomplete):
 
 def _read_snapshot(repository, snapshot_fn, incomplete):
     try:
-        return snapshot_fn(repository, persist_cache=False)
-    except (capacity.EvidenceError, OSError, ValueError):
+        return snapshot_fn(repository)
+    except (capacity.EvidenceError, OSError, TypeError, ValueError):
         _add_incomplete(incomplete, "capacity", "current_capacity_unavailable")
         return None
+
+
+def _collection_succeeded(incomplete):
+    return all(item["reason"] in CAPABILITY_LIMITATIONS for item in incomplete)
+
+
+def _collector_summary(snapshot):
+    metrics = snapshot.get("collector") if snapshot else None
+    if not isinstance(metrics, dict):
+        return None
+    return {key: metrics[key] for key in COLLECTOR_FIELDS if key in metrics}
 
 
 def build_report(repository, since_seconds, *, now=None, snapshot_fn=None, store_factory=None):
@@ -127,15 +157,17 @@ def build_report(repository, since_seconds, *, now=None, snapshot_fn=None, store
         _add_incomplete(incomplete, "repository", "canonical_repository_unavailable")
     target = canonical if canonical and re.fullmatch(REPO_PATTERN, canonical) else None
     store_factory = store_factory or AuditStore
-    history = _read_history(target, period_from, store_factory, incomplete)
+    history = _read_history(target, period_from, now, store_factory, incomplete)
+    if history and history.get("truncated"):
+        _add_incomplete(incomplete, "autoscale", "audit_history_truncated")
 
     jobs = snapshot.get("queue", {}).get("jobs", []) if snapshot else []
     if snapshot is None or snapshot.get("queue", {}).get("status") != "complete":
         _add_incomplete(incomplete, "ci", "ci_history_incomplete")
-    else:
-        _add_incomplete(incomplete, "ci", "ci_history_not_persisted")
+    _add_incomplete(incomplete, "ci", "ci_history_not_persisted")
     _add_incomplete(incomplete, "capacity", "historical_capacity_not_persisted")
     _add_incomplete(incomplete, "collector", "historical_collector_metrics_unavailable")
+    capacity_summary = _current_capacity(snapshot, incomplete)
     report = {
         "schema_version": 1,
         "kind": "OperationalEvidence",
@@ -144,9 +176,10 @@ def build_report(repository, since_seconds, *, now=None, snapshot_fn=None, store
         "repository": {"requested": requested, "nameWithOwner": canonical},
         "ci": {"queued_jobs_observed": len(jobs), "queue_age_seconds": _queue_age_summary(jobs),
                "observed_at": snapshot.get("observed_at") if snapshot else None},
-        "capacity": _current_capacity(snapshot, incomplete),
+        "capacity": capacity_summary,
         "autoscale": _autoscale(history or {"decisions": [], "actions": [], "queue_observations": []}),
-        "collector": snapshot.get("collector") if snapshot else None,
+        "collector": _collector_summary(snapshot),
+        "collection_status": "success" if _collection_succeeded(incomplete) else "failed",
         "incomplete_evidence": sorted(incomplete, key=lambda item: (item["source"], item["reason"])),
     }
     return report
@@ -184,7 +217,7 @@ def main():
         print(json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
     else:
         render(result)
-    return 3 if result["incomplete_evidence"] else 0
+    return 0 if result["collection_status"] == "success" else 3
 
 
 if __name__ == "__main__":

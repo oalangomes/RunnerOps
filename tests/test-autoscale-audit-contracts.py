@@ -630,6 +630,70 @@ sys.meta_path.insert(0, NoSQLite())
         env = dict(self.env, RUNNER_AUTOSCALE_RETENTION_DAYS="not-a-number")
         self.assertEqual(self.cli("history", code=3, env=env)["error"], "invalid_settings")
 
+    def test_history_window_is_inclusive_exclusive_and_actions_follow_returned_decisions(self):
+        since = self.at(-30)
+        until = self.at()
+
+        def decision_at(identity, instant):
+            value = self.decision(identity)
+            value["timestamp"] = instant
+            value["evidence"]["observed_at"] = instant
+            for item in value["evidence"]["queue"]:
+                item["first_seen_queued_at"] = self.at(-120)
+                item["last_seen_queued_at"] = instant
+            return value
+
+        lower = decision_at("lower", since)
+        middle = decision_at("middle", self.at(-10))
+        middle["repository"] = "Other/Project"
+        boundary = decision_at("at-until", until)
+        other_repository = decision_at("other-repository", self.at(-20))
+        other_repository["repository"] = "Other/Project"
+
+        with self.store() as store:
+            lower_action = self.action("lower-action", "lower")
+            lower_action["timestamp"] = self.at(-25)
+            middle_action = self.action("middle-action", "middle")
+            middle_action["timestamp"] = self.at(-5)
+            other_action = self.action("other-action", "other-repository")
+            other_action["timestamp"] = self.at(-15)
+            store.record_decision(lower, [lower_action])
+            store.record_decision(middle, [middle_action])
+            store.record_decision(other_repository, [other_action])
+            store.record_decision(boundary)
+            store.connection.execute(
+                "UPDATE actions SET updated_at=? WHERE action_id=?", (until, "lower-action")
+            )
+
+            lower_snapshot = self.snapshot()
+            lower_snapshot["observed_at"] = since
+            store.observe(lower_snapshot)
+            boundary_snapshot = self.snapshot(jobs=(456,))
+            boundary_snapshot["observed_at"] = until
+            boundary_snapshot["repository"] = {
+                "nameWithOwner": "Other/Project", "match_key": "other/project"
+            }
+            store.observe(boundary_snapshot)
+
+            limited = store.history(since, 1, None, True, until=until)
+            self.assertEqual([row["decision_id"] for row in limited["decisions"]], ["middle"])
+            self.assertTrue(limited["truncated"])
+            self.assertEqual([row["action_id"] for row in limited["actions"]], ["middle-action"])
+            self.assertEqual(
+                [row["repository"] for row in limited["queue_observations"]],
+                ["Example/MixedCase"],
+            )
+
+            filtered = store.history(
+                since, repository="Example/MixedCase", include_actions=True, until=until
+            )
+            self.assertEqual([row["decision_id"] for row in filtered["decisions"]], ["lower"])
+            self.assertEqual(filtered["actions"], [])
+            self.assertEqual(
+                [row["repository"] for row in filtered["queue_observations"]],
+                ["Example/MixedCase"],
+            )
+
     def test_unsafe_permissions_and_checkout_storage_are_rejected(self):
         with self.store():
             pass

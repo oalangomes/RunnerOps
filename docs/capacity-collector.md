@@ -12,8 +12,11 @@ RunnerOps treats capacity evidence as a safety boundary. Collector optimizations
 - `run_list_calls`: workflow-run list API calls, including pagination;
 - `job_list_calls`: per-run jobs API calls, including pagination;
 - `runner_list_calls`: repository runner inventory API calls;
+- `job_query_retry_calls`: bounded retry calls for per-run jobs requests;
+- `job_query_workers`: bounded per-run jobs query concurrency used by the snapshot;
 - `repo_cache_hits`: successful process-local canonical repository cache hits;
-- `canonical_source`: `remote`, `process_cache`, or `fallback`.
+- `scheduler_interval_seconds`, `scheduler_headroom_ms`, `scheduler_near_overrun`, `scheduler_overrun`: collection time relative to the configured scheduler cadence;
+- `canonical_source`: `git_remote`, `scheduler`, `remote`, `process_cache`, or `fallback`.
 
 The metrics are observational only. They do not participate in planner policy, queue qualification, decision IDs, or durable audit evidence.
 
@@ -30,7 +33,11 @@ The cache:
 - expires after 60 seconds;
 - does not cache queue, job, runner status, or capacity state.
 
-This intentionally keeps volatile autoscale evidence fresh. In particular, RunnerOps does not currently skip per-run jobs requests based only on a workflow run's `updated_at`; doing so would require a stronger freshness contract before it can be used safely for autoscaling.
+This intentionally keeps volatile autoscale evidence fresh. In particular, RunnerOps does not skip per-run jobs requests based only on a workflow run's `updated_at`; GitHub does not document that field as a version token for the jobs collection.
+
+## Bounded jobs-query concurrency
+
+Per-run jobs requests are executed with a small bounded worker pool and one bounded retry. This can reduce wall-clock collection time without reducing freshness: every discovered run still gets a jobs request on every snapshot. Failures remain explicit queue evidence and can still make the snapshot inconclusive.
 
 ## #105 baseline
 

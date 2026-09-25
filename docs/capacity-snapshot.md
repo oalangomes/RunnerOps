@@ -152,8 +152,11 @@ GitHub limits status-filtered run searches to 1,000 results. Reaching that bound
 is inconclusive. Jobs and runners have a defensive 100-page bound; API failures,
 malformed collections and pagination gaps are also explicit. Every subprocess
 has a 30-second timeout. Counts and oldest-job claims remain unknown when queue
-enumeration is incomplete. There is no persistence or cross-poll age tracking in
-CapacitySnapshot itself; continuity lives in the separate audit store.
+enumeration is incomplete. CapacitySnapshot does not persist queue/job evidence;
+every observation refreshes the job list for each discovered active run. Queue
+continuity lives in the separate audit store. Successful canonical repository
+identity may be reused only in the process-local cache described in
+`docs/capacity-collector.md`.
 See the [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs)
 and [workflow jobs API](https://docs.github.com/en/rest/actions/workflow-jobs).
 

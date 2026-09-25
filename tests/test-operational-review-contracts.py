@@ -138,7 +138,7 @@ class EvidenceContracts(unittest.TestCase):
                 evidence_builder=forbidden, provider_call=provider_call(), environ={},
             )
         self.assertEqual(result, 0)
-        self.assertEqual(json.loads(output.getvalue())["evidence"]["repository"], "oalangomes/RunnerOps")
+        self.assertEqual(json.loads(output.getvalue())["evidence"]["repository"], "example/runnerops")
 
     def test_live_and_replay_inputs_cannot_be_mixed(self):
         output = StringIO()
@@ -159,7 +159,7 @@ class SerializationAndPromptContracts(unittest.TestCase):
         second_bytes = review.canonical_evidence_bytes(second)
         self.assertEqual(first_bytes, second_bytes)
         self.assertEqual(review.evidence_sha256(first_bytes), review.evidence_sha256(second_bytes))
-        self.assertEqual(review.evidence_sha256(first_bytes), "89e77fc78666b3fd378d8c3cf1f13893cf4749e744c3c84b24d9b285cc47bb75")
+        self.assertEqual(review.evidence_sha256(first_bytes), "a89e3d5872b60c0db9b72b34c3df5cc8af82a489e19de6c65697530be4ab4abc")
 
     def test_prompt_is_versioned_bounded_and_treats_evidence_as_untrusted(self):
         item = evidence()
@@ -401,7 +401,7 @@ class SafetyAndCliContracts(unittest.TestCase):
         with redirect_stdout(output):
             review.render(result)
         text = output.getvalue()
-        self.assertIn("Operational review: oalangomes/RunnerOps", text)
+        self.assertIn("Operational review: example/runnerops", text)
         self.assertIn("F001 [CAPACITY] high", text)
         self.assertIn("Historical utilization", text)
         self.assertNotIn('"schema_version"', text)

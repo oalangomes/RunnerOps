@@ -9,7 +9,7 @@
   },
   "repository": {
     "requested": ".",
-    "nameWithOwner": "oalangomes/RunnerOps"
+    "nameWithOwner": "example/runnerops"
   },
   "ci": {
     "queued_jobs_observed": 0,

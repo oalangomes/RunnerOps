@@ -56,6 +56,7 @@ Repository operations:
 
 Capacity and autoscale:
   runnerctl capacity [owner/repo|.] [--json]
+  runnerctl report [owner/repo|.] --since DURATION [--json]
   runnerctl autoscale enable [owner/repo|.]
   runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl autoscale disable [owner/repo|.]
@@ -200,6 +201,15 @@ Opera no repositório informado ou no repositório Git atual quando usado com ".
 Exemplos:
   runnerctl $topic .
   runnerctl $topic owner/repo
+EOF
+      ;;
+    report)
+      cat <<'EOF'
+Uso:
+  runnerctl report [owner/repo|.] --since DURATION [--json]
+
+Gera uma projeção read-only e limitada da evidência operacional existente.
+Histórico não persistido aparece explicitamente como evidência incompleta.
 EOF
       ;;
     autoscale)
@@ -1503,6 +1513,13 @@ case "$cmd" in
     python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
       die "overview exige python3 3.8+"
     exec python3 -B "$PLATFORM_HOME/overview.py" "$@"
+    ;;
+  report)
+    [[ -f "$PLATFORM_HOME/operational_report.py" ]] || die "operational_report.py ausente em: $PLATFORM_HOME"
+    command -v python3 >/dev/null 2>&1 || die "report exige python3 3.8+"
+    python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+      die "report exige python3 3.8+"
+    exec python3 -B "$PLATFORM_HOME/operational_report.py" "$@"
     ;;
   capacity|autoscale)
     if [[ "$cmd" == "autoscale" ]]; then

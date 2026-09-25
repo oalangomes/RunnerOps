@@ -540,6 +540,9 @@ class AuditStore:
             ORDER BY last_seen_queued_at DESC,observation_id LIMIT ?""",
             (since, limit),
         ).fetchall()
+        return self._queue_rows_from_rows(rows)
+
+    def _queue_rows_from_rows(self, rows):
         result = []
         for row in rows:
             item = dict(row)
@@ -560,21 +563,41 @@ class AuditStore:
             result.append(item)
         return result
 
-    def history(self, since=None, limit=100):
+    def history(self, since=None, limit=100, repository=None, include_actions=False):
         if type(limit) is not int or not 1 <= limit <= 1000:
             raise AuditError("invalid_limit")
         since = timestamp(since) if since is not None else ""
+        repository = canonical_repo(repository) if repository is not None else None
         with self._read_transaction():
             rows = self.connection.execute(
-                "SELECT decision_id,updated_at,payload FROM decisions WHERE updated_at>=? ORDER BY updated_at DESC,decision_id LIMIT ?",
-                (since, limit + 1),
+                "SELECT decision_id,updated_at,payload FROM decisions "
+                "WHERE updated_at>=? AND (? IS NULL OR lower(repository)=lower(?)) "
+                "ORDER BY updated_at DESC,decision_id LIMIT ?",
+                (since, repository, repository, limit + 1),
             ).fetchall()
             decisions = [
                 {**decision_record(json.loads(row["payload"])), "updated_at": row["updated_at"]}
                 for row in rows
             ]
-            queue = self._queue_rows(since, limit + 1)
-        return {
+            queue_rows = self.connection.execute(
+                "SELECT q.*,r.repository FROM queue_observations q "
+                "JOIN repository_observations r USING(repo_key) "
+                "WHERE last_seen_queued_at>=? AND (? IS NULL OR lower(r.repository)=lower(?)) "
+                "ORDER BY last_seen_queued_at DESC,observation_id LIMIT ?",
+                (since, repository, repository, limit + 1),
+            ).fetchall()
+            queue = self._queue_rows_from_rows(queue_rows)
+            actions = []
+            if include_actions and decisions:
+                decision_ids = [item["decision_id"] for item in decisions]
+                placeholders = ",".join("?" for _ in decision_ids)
+                action_rows = self.connection.execute(
+                    f"SELECT action_id,payload FROM actions WHERE decision_id IN ({placeholders}) "
+                    "ORDER BY action_id",
+                    decision_ids,
+                ).fetchall()
+                actions = [action_record(json.loads(row["payload"])) for row in action_rows]
+        result = {
             "schema_version": 1,
             "kind": "AutoscaleHistory",
             "status": "ok",
@@ -584,6 +607,9 @@ class AuditStore:
             "limit": limit,
             "truncated": len(decisions) > limit or len(queue) > limit,
         }
+        if include_actions:
+            result["actions"] = actions
+        return result
 
     def explain(self, decision_id):
         decision_id = text(decision_id)

@@ -16,15 +16,6 @@ registry, and query access to systemd. The collector only invokes `gh repo view`
 snapshots, read credentials, request registration tokens, or invoke lifecycle
 commands. No controller, cloud integration, or apply command is included.
 
-Direct `runnerctl capacity`, `autoscale status`, `autoscale plan`, and
-`overview` observations remain filesystem read-only. The managed autoscale
-controller may opt only its **initial scheduled observation** into a bounded
-queued-job cache under `RUNNER_CACHE_ROOT`. Cache reuse is limited to workflow
-runs that GitHub still reports as `queued`, never extends the original hard TTL
-on a hit, and is bypassed for the fresh under-lock replan and all post-mutation
-verification. A cached observation can therefore reduce discovery work, but it
-cannot by itself prove an actionable mutation.
-
 Exit codes: `0` for a complete observation, `3` for an inconclusive observation
 (still emitting the snapshot), and `2` for invalid capacity arguments. Unsupported
 `autoscale` subcommands are rejected by `runnerctl` with exit code `1`.
@@ -161,11 +152,11 @@ GitHub limits status-filtered run searches to 1,000 results. Reaching that bound
 is inconclusive. Jobs and runners have a defensive 100-page bound; API failures,
 malformed collections and pagination gaps are also explicit. Every subprocess
 has a 30-second timeout. Counts and oldest-job claims remain unknown when queue
-enumeration is incomplete. Direct observations do not persist queue data.
-Managed-scheduler cache files, when enabled for the initial controller
-observation, contain only the bounded job fields required by queue classification
-and are not cross-poll pressure continuity; continuity lives in the separate
-audit store. Fresh run discovery still occurs on every snapshot.
+enumeration is incomplete. CapacitySnapshot does not persist queue/job evidence;
+every observation refreshes the job list for each discovered active run. Queue
+continuity lives in the separate audit store. Successful canonical repository
+identity may be reused only in the process-local cache described in
+`docs/capacity-collector.md`.
 See the [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs)
 and [workflow jobs API](https://docs.github.com/en/rest/actions/workflow-jobs).
 

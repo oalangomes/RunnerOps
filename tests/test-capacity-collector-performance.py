@@ -165,242 +165,83 @@ class CapacityCollectorPerformanceContracts(unittest.TestCase):
             metrics["github_calls"], len(self.capacity.RUN_STATUSES) + 1
         )
 
-    def test_repeated_queue_observation_reuses_unchanged_jobs(self):
-        with tempfile.TemporaryDirectory() as cache_root:
-            runs = [{
-                "id": number,
-                "workflow_id": 7,
-                "name": "Build",
+    def test_repeated_queue_observation_refreshes_jobs_when_run_metadata_is_unchanged(self):
+        run = {
+            "id": 10,
+            "workflow_id": 7,
+            "name": "Build",
+            "status": "queued",
+            "run_attempt": 1,
+            "head_sha": "abc123",
+            "updated_at": "2026-09-24T12:00:00Z",
+        }
+        jobs = {"rows": []}
+
+        def fake_api_pages(endpoint, field, errors, source, max_pages=100, *,
+                           metrics=None, metric_kind=None, retries=0):
+            self.capacity.record_github_call(metrics, metric_kind)
+            if field == "workflow_runs":
+                return [run] if endpoint.endswith("status=queued") else []
+            return list(jobs["rows"])
+
+        with patch.object(self.capacity, "api_pages", side_effect=fake_api_pages):
+            first_metrics = self.capacity.collector_metrics()
+            first = self.capacity.collect_queue(
+                "Example/MixedCase", datetime.now(timezone.utc), [], first_metrics
+            )
+            jobs["rows"] = [{
+                "id": 101,
+                "name": "appeared-later",
                 "status": "queued",
-                "run_attempt": 1,
-                "head_sha": "abc123",
-                "updated_at": "2026-09-24T12:00:00Z",
-            } for number in range(1, 41)]
-            calls = []
-
-            def fake_api_pages(endpoint, field, errors, source, max_pages=100, *,
-                               metrics=None, metric_kind=None, retries=0):
-                calls.append(endpoint)
-                self.assertIsNotNone(metrics)
-                self.capacity.record_github_call(metrics, metric_kind)
-                if field == "workflow_runs":
-                    return list(runs) if endpoint.endswith("status=queued") else []
-                run_id = int(endpoint.split("/runs/")[1].split("/")[0])
-                return [{
-                    "id": 1000 + run_id,
-                    "name": "test",
-                    "status": "queued",
-                    "created_at": "2026-09-24T11:59:00Z",
-                    "labels": ["self-hosted", "linux"],
-                }]
-
-            with patch.dict(os.environ, {"RUNNER_CACHE_ROOT": cache_root}):
-                with patch.object(self.capacity, "api_pages", side_effect=fake_api_pages):
-                    first_metrics = self.capacity.collector_metrics()
-                    first_errors = []
-                    first = self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), first_errors,
-                        first_metrics, allow_persistent_cache=True,
-                    )
-                    second_metrics = self.capacity.collector_metrics()
-                    second_errors = []
-                    second = self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), second_errors,
-                        second_metrics, allow_persistent_cache=True,
-                    )
-
-            self.assertEqual(len(first), 40)
-            self.assertEqual(len(second), 40)
-            self.assertEqual(first_errors, [])
-            self.assertEqual(second_errors, [])
-            self.assertEqual(first_metrics["job_list_calls"], 40)
-            self.assertEqual(second_metrics["job_list_calls"], 0)
-            self.assertEqual(second_metrics["job_cache_hits"], 40)
-            self.assertEqual(len(calls), len(self.capacity.RUN_STATUSES) * 2 + 40)
-
-    def test_changed_or_new_runs_are_refreshed_and_removed_runs_reconciled(self):
-        with tempfile.TemporaryDirectory() as cache_root:
-            runs = [{
-                "id": 10, "workflow_id": 7, "name": "Build", "status": "queued",
-                "run_attempt": 1, "head_sha": "abc123",
-                "updated_at": "2026-09-24T12:00:00Z",
+                "created_at": "2026-09-24T11:59:00Z",
+                "labels": ["self-hosted"],
             }]
-            jobs = {10: [{
-                "id": 101, "name": "old", "status": "queued",
-                "created_at": "2026-09-24T11:59:00Z", "labels": ["self-hosted"],
-            }]}
-            def fake_api_pages(endpoint, field, errors, source, max_pages=100, *,
-                               metrics=None, metric_kind=None, retries=0):
-                self.capacity.record_github_call(metrics, metric_kind)
-                if field == "workflow_runs":
-                    return list(runs) if endpoint.endswith("status=queued") else []
-                run_id = int(endpoint.split("/runs/")[1].split("/")[0])
-                return list(jobs[run_id])
+            second_metrics = self.capacity.collector_metrics()
+            second = self.capacity.collect_queue(
+                "Example/MixedCase", datetime.now(timezone.utc), [], second_metrics
+            )
 
-            with patch.dict(os.environ, {"RUNNER_CACHE_ROOT": cache_root}):
-                with patch.object(self.capacity, "api_pages", side_effect=fake_api_pages):
-                    first_errors = []
-                    self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), first_errors,
-                        self.capacity.collector_metrics(), allow_persistent_cache=True,
-                    )
-                    runs[:] = [{
-                        "id": 11, "workflow_id": 7, "name": "Build", "status": "queued",
-                        "run_attempt": 1, "head_sha": "def456",
-                        "updated_at": "2026-09-24T12:01:00Z",
-                    }]
-                    jobs[11] = [{
-                        "id": 102, "name": "new", "status": "queued",
-                        "created_at": "2026-09-24T12:01:00Z", "labels": ["self-hosted"],
-                    }]
-                    metrics = self.capacity.collector_metrics()
-                    errors = []
-                    result = self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), errors, metrics,
-                        allow_persistent_cache=True,
-                    )
+        self.assertEqual(first, [])
+        self.assertEqual([job["job_id"] for job in second], [101])
+        self.assertEqual(first_metrics["job_list_calls"], 1)
+        self.assertEqual(second_metrics["job_list_calls"], 1)
 
-            self.assertEqual(errors, [])
-            self.assertEqual([job["job_id"] for job in result], [102])
-            self.assertEqual(metrics["job_cache_hits"], 0)
-            self.assertEqual(metrics["job_list_calls"], 1)
+    def test_repeated_queue_observation_does_not_persist_job_cache(self):
+        run = {
+            "id": 10,
+            "workflow_id": 7,
+            "name": "Build",
+            "status": "queued",
+            "run_attempt": 1,
+            "head_sha": "abc123",
+            "updated_at": "2026-09-24T12:00:00Z",
+        }
 
-    def test_queue_failure_never_uses_cached_jobs(self):
-        with tempfile.TemporaryDirectory() as cache_root:
-            run = {
-                "id": 10, "workflow_id": 7, "name": "Build", "status": "queued",
-                "run_attempt": 1, "head_sha": "abc123",
-                "updated_at": "2026-09-24T12:00:00Z",
-            }
-
-            def successful(endpoint, field, errors, source, max_pages=100, *,
+        def fake_api_pages(endpoint, field, errors, source, max_pages=100, *,
                            metrics=None, metric_kind=None, retries=0):
-                self.capacity.record_github_call(metrics, metric_kind)
-                if field == "workflow_runs":
-                    return [run] if endpoint.endswith("status=queued") else []
-                return [{"id": 101, "name": "test", "status": "queued",
-                         "created_at": "2026-09-24T11:59:00Z", "labels": ["self-hosted"]}]
-
-            with patch.dict(os.environ, {"RUNNER_CACHE_ROOT": cache_root}):
-                with patch.object(self.capacity, "api_pages", side_effect=successful):
-                    self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), [],
-                        self.capacity.collector_metrics(), allow_persistent_cache=True,
-                    )
-
-                def failed(endpoint, field, errors, source, max_pages=100, *,
-                           metrics=None, metric_kind=None, retries=0):
-                    self.capacity.record_github_call(metrics, metric_kind)
-                    errors.append({"source": "queue", "reason": "query_failed"})
-                    return []
-
-                metrics = self.capacity.collector_metrics()
-                errors = []
-                with patch.object(self.capacity, "api_pages", side_effect=failed):
-                    result = self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), errors, metrics,
-                        allow_persistent_cache=True,
-                    )
-
-            self.assertEqual(result, [])
-            self.assertTrue(errors)
-            self.assertEqual(metrics["job_cache_hits"], 0)
-
-    def test_in_progress_run_never_reuses_cached_job_state(self):
-        with tempfile.TemporaryDirectory() as cache_root:
-            run = {
-                "id": 10,
-                "workflow_id": 7,
-                "name": "Build",
-                "status": "in_progress",
-                "run_attempt": 1,
-                "head_sha": "abc123",
-                "updated_at": "2026-09-24T12:00:00Z",
-            }
-            job_status = {"value": "queued"}
-
-            def fake_api_pages(endpoint, field, errors, source, max_pages=100, *,
-                               metrics=None, metric_kind=None, retries=0):
-                self.capacity.record_github_call(metrics, metric_kind)
-                if field == "workflow_runs":
-                    return [run] if endpoint.endswith("status=in_progress") else []
-                return [{
-                    "id": 101,
-                    "name": "test",
-                    "status": job_status["value"],
-                    "created_at": "2026-09-24T11:59:00Z",
-                    "labels": ["self-hosted"],
-                }]
-
-            with patch.dict(os.environ, {"RUNNER_CACHE_ROOT": cache_root}):
-                with patch.object(self.capacity, "api_pages", side_effect=fake_api_pages):
-                    first_metrics = self.capacity.collector_metrics()
-                    first = self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), [],
-                        first_metrics, allow_persistent_cache=True,
-                    )
-                    job_status["value"] = "in_progress"
-                    second_metrics = self.capacity.collector_metrics()
-                    second = self.capacity.collect_queue(
-                        "Example/MixedCase", datetime.now(timezone.utc), [],
-                        second_metrics, allow_persistent_cache=True,
-                    )
-
-            self.assertEqual([job["job_id"] for job in first], [101])
-            self.assertEqual(second, [])
-            self.assertEqual(first_metrics["job_list_calls"], 1)
-            self.assertEqual(second_metrics["job_list_calls"], 1)
-            self.assertEqual(second_metrics["job_cache_hits"], 0)
-
-    def test_queue_cache_ttl_is_hard_and_does_not_slide_on_hits(self):
-        with tempfile.TemporaryDirectory() as cache_root:
-            run = {
-                "id": 10,
-                "workflow_id": 7,
-                "name": "Build",
+            self.capacity.record_github_call(metrics, metric_kind)
+            if field == "workflow_runs":
+                return [run] if endpoint.endswith("status=queued") else []
+            return [{
+                "id": 101,
+                "name": "test",
                 "status": "queued",
-                "run_attempt": 1,
-                "head_sha": "abc123",
-                "updated_at": "2026-09-24T12:00:00Z",
-            }
+                "created_at": "2026-09-24T11:59:00Z",
+                "labels": ["self-hosted"],
+            }]
 
-            def fake_api_pages(endpoint, field, errors, source, max_pages=100, *,
-                               metrics=None, metric_kind=None, retries=0):
-                self.capacity.record_github_call(metrics, metric_kind)
-                if field == "workflow_runs":
-                    return [run] if endpoint.endswith("status=queued") else []
-                return [{
-                    "id": 101,
-                    "name": "test",
-                    "status": "queued",
-                    "created_at": "2026-09-24T11:59:00Z",
-                    "labels": ["self-hosted"],
-                }]
-
+        with tempfile.TemporaryDirectory() as cache_root:
             with patch.dict(os.environ, {"RUNNER_CACHE_ROOT": cache_root}):
                 with patch.object(self.capacity, "api_pages", side_effect=fake_api_pages):
-                    with patch.object(self.capacity.time, "time", side_effect=[1000, 1030, 1061]):
-                        first_metrics = self.capacity.collector_metrics()
-                        self.capacity.collect_queue(
-                            "Example/MixedCase", datetime.now(timezone.utc), [],
-                            first_metrics, allow_persistent_cache=True,
-                        )
-                        second_metrics = self.capacity.collector_metrics()
-                        self.capacity.collect_queue(
-                            "Example/MixedCase", datetime.now(timezone.utc), [],
-                            second_metrics, allow_persistent_cache=True,
-                        )
-                        third_metrics = self.capacity.collector_metrics()
-                        self.capacity.collect_queue(
-                            "Example/MixedCase", datetime.now(timezone.utc), [],
-                            third_metrics, allow_persistent_cache=True,
-                        )
-
-            self.assertEqual(first_metrics["job_list_calls"], 1)
-            self.assertEqual(second_metrics["job_list_calls"], 0)
-            self.assertEqual(second_metrics["job_cache_hits"], 1)
-            self.assertEqual(third_metrics["job_list_calls"], 1)
-            self.assertEqual(third_metrics["job_cache_hits"], 0)
+                    self.capacity.collect_queue(
+                        "Example/MixedCase", datetime.now(timezone.utc), [],
+                        self.capacity.collector_metrics(),
+                    )
+                    self.capacity.collect_queue(
+                        "Example/MixedCase", datetime.now(timezone.utc), [],
+                        self.capacity.collector_metrics(),
+                    )
+            self.assertEqual(list(Path(cache_root).rglob("*")), [])
 
     def test_scheduler_timing_metadata_is_deterministic(self):
         metrics = self.capacity.collector_metrics()

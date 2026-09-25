@@ -64,6 +64,8 @@ jobs:
         run: |
           python3 -B -m py_compile \
             capacity.py \
+            operational_report.py \
+            operational_review.py \
             autoscale_contracts.py \
             autoscale_pressure.py \
             autoscale_store.py \
@@ -78,6 +80,8 @@ jobs:
             tests/test-capacity-contracts.py \
             tests/test-capacity-collector-performance.py \
             tests/test-capacity-bom-contract.py \
+            tests/test-operational-report-contracts.py \
+            tests/test-operational-review-contracts.py \
             tests/test-autoscale-audit-contracts.py \
             tests/test-autoscale-pressure-contracts.py \
             tests/test-autoscale-pressure-planner-contracts.py \
@@ -148,6 +152,8 @@ jobs:
           python3 -B tests/test-capacity-contracts.py
           python3 -B tests/test-capacity-collector-performance.py
           python3 -B tests/test-capacity-bom-contract.py
+          python3 -B tests/test-operational-report-contracts.py
+          python3 -B tests/test-operational-review-contracts.py
           python3 -B tests/test-autoscale-audit-contracts.py
           python3 -B tests/test-autoscale-pressure-contracts.py
           python3 -B tests/test-autoscale-pressure-planner-contracts.py

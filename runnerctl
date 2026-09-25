@@ -57,6 +57,8 @@ Repository operations:
 Capacity and autoscale:
   runnerctl capacity [owner/repo|.] [--json]
   runnerctl report [owner/repo|.] --since DURATION [--json]
+  runnerctl review [owner/repo|.] --since DURATION --provider PROVIDER --model MODEL [--json]
+  runnerctl review --evidence FILE --provider PROVIDER --model MODEL [--json]
   runnerctl autoscale enable [owner/repo|.]
   runnerctl autoscale status [owner/repo|.] [--json]
   runnerctl autoscale disable [owner/repo|.]
@@ -210,6 +212,24 @@ Uso:
 
 Gera uma projeção read-only e limitada da evidência operacional existente.
 Histórico não persistido aparece explicitamente como evidência incompleta.
+EOF
+      ;;
+    review)
+      cat <<'EOF'
+Uso:
+  runnerctl review [owner/repo|.] --since DURATION --provider ollama --model MODEL [--json]
+  runnerctl review --evidence FILE --provider ollama --model MODEL [--json]
+  runnerctl review [owner/repo|.] --since DURATION --provider litellm --model MODEL --allow-remote [--json]
+  runnerctl review --evidence FILE --provider litellm --model MODEL --allow-remote [--json]
+
+Produz uma análise AI read-only baseada somente em OperationalEvidence v1.
+LiteLLM exige --allow-remote. Modelo é sempre explícito; replay não recolhe
+evidência operacional nova.
+
+Configuração:
+  RUNNEROPS_OLLAMA_BASE_URL    default http://127.0.0.1:11434
+  RUNNEROPS_LITELLM_BASE_URL   default http://127.0.0.1:4000
+  RUNNEROPS_LITELLM_API_KEY    chave do gateway; nunca exibida
 EOF
       ;;
     autoscale)
@@ -477,7 +497,7 @@ completion_words() {
   printf '%s\n' \
     help init list groups status health doctor logs \
     start stop restart plan migrate on-demand autostart \
-    repo overview ensure add remove capacity autoscale \
+    repo overview ensure add remove capacity report review autoscale \
     package ci skills platform-home platform-authorize platform-doctor \
     completion --version
 }
@@ -1520,6 +1540,13 @@ case "$cmd" in
     python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
       die "report exige python3 3.8+"
     exec python3 -B "$PLATFORM_HOME/operational_report.py" "$@"
+    ;;
+  review)
+    [[ -f "$PLATFORM_HOME/operational_review.py" ]] || die "operational_review.py ausente em: $PLATFORM_HOME"
+    command -v python3 >/dev/null 2>&1 || die "review exige python3 3.8+"
+    python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+      die "review exige python3 3.8+"
+    exec python3 -B "$PLATFORM_HOME/operational_review.py" "$@"
     ;;
   capacity|autoscale)
     if [[ "$cmd" == "autoscale" ]]; then

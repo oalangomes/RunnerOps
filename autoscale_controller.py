@@ -42,16 +42,6 @@ class ControllerError(Exception):
         super().__init__(code)
 
 
-def _snapshot(snapshot_fn, repository, *, allow_persistent_queue_cache=False):
-    """Keep injected test collectors compatible while controlling cache freshness."""
-    if snapshot_fn is capacity.snapshot:
-        return snapshot_fn(
-            repository,
-            allow_persistent_queue_cache=allow_persistent_queue_cache,
-        )
-    return snapshot_fn(repository)
-
-
 def _bool_env(name, default=False):
     raw = os.environ.get(name)
     if raw is None or not raw.strip():
@@ -276,9 +266,7 @@ def verify_exact_runner(
     deadline = time.monotonic() + timeout_seconds
     saw_inconclusive = False
     while True:
-        observed = _snapshot(
-            snapshot_fn, repository, allow_persistent_queue_cache=False
-        )
+        observed = snapshot_fn(repository)
         if observe_fn is not None:
             observe_fn(observed)
         state = _target_state(observed, target, expected_registration_id)
@@ -515,9 +503,7 @@ def _pending_error(starts, provisions):
 
 
 def _observe_snapshot(snapshot_fn, store, repository):
-    observed = _snapshot(
-        snapshot_fn, repository, allow_persistent_queue_cache=False
-    )
+    observed = snapshot_fn(repository)
     store.observe(observed)
     return observed
 
@@ -546,11 +532,7 @@ def run_once(
 
     initial_policy = policy_loader()
     store_factory = store_factory or (lambda: AuditStore(writable=True))
-    # Only the first managed scheduler observation may reuse queued-job cache.
-    # Any actionable plan is revalidated from fresh job evidence under the lock.
-    initial_snapshot = _snapshot(
-        snapshot_fn, repository, allow_persistent_queue_cache=True
-    )
+    initial_snapshot = snapshot_fn(repository)
     canonical = initial_snapshot.get("repository", {}).get("nameWithOwner")
     if not canonical:
         result = plan(
@@ -637,11 +619,7 @@ def run_once(
         with lock_factory():
             with store_factory() as store:
                 fresh_policy = policy_loader()
-                fresh_snapshot = _snapshot(
-                    snapshot_fn,
-                    repository,
-                    allow_persistent_queue_cache=False,
-                )
+                fresh_snapshot = snapshot_fn(repository)
                 fresh_canonical = fresh_snapshot.get("repository", {}).get(
                     "nameWithOwner"
                 )

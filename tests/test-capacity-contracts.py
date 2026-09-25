@@ -123,8 +123,7 @@ class CapacityContracts(unittest.TestCase):
         if not any(r['id'] == run for r in self.data['runs'][run_status]):
             self.data['runs'][run_status].append({
                 'id': run, 'workflow_id': 7, 'name': 'Build', 'status': run_status,
-                'run_attempt': self.data.get('attempt', 1), 'head_sha': 'abc123', 'head_branch': 'feature',
-                'updated_at': '2026-09-24T12:00:00Z'})
+                'run_attempt': self.data.get('attempt', 1), 'head_sha': 'abc123', 'head_branch': 'feature'})
         self.data['jobs'].setdefault(str(run), []).append({
             'id': number, 'name': 'test "quoted"\njob', 'status': 'queued',
             'created_at': '2020-01-01T00:00:00Z', 'labels': required or ['SELF-HOSTED', 'linux']})

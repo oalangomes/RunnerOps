@@ -440,7 +440,9 @@ planejamento read-only e leitura do histórico. As mutações locais governadas 
 `OperationalEvidence v1`, cita caminhos JSON Pointer existentes e nunca executa
 ações. O modo live reutiliza exatamente o builder de `report`; `--evidence`
 reproduz um artefato congelado sem nova coleta. Ollama usa inferência local por
-padrão. LiteLLM é um gateway externo opcional e exige `--allow-remote` e
+padrão; endpoints fora do localhost podem ser definidos por
+`RUNNEROPS_OLLAMA_BASE_URL` no `~/.config/actions-runners/config.env`. LiteLLM é
+um gateway externo opcional e exige `--allow-remote` e
 `RUNNEROPS_LITELLM_API_KEY`. O modelo é sempre explícito. Veja o
 [contrato de AI Operational Review](docs/operational-review.md) para segurança,
 configuração, schema e limitações.

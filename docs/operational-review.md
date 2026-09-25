@@ -63,10 +63,24 @@ obrigatório. `--provider` e `--model` são sempre explícitos. Controles comuns
 
 ## Providers e rede
 
-Ollama usa `POST /api/chat`, sem streaming, com JSON Schema em `format` e
-`num_predict` limitado. O default é `http://127.0.0.1:11434`; pode ser alterado
+Ollama usa `POST /api/chat`, sem streaming ou thinking, com JSON Schema em
+`format` e `num_predict` limitado. Desabilitar `think` evita que modelos de
+raciocínio consumam o limite de saída antes do documento JSON. O default é
+`http://127.0.0.1:11434`; pode ser alterado
 por `--base-url` ou `RUNNEROPS_OLLAMA_BASE_URL`. RunnerOps nunca instala Ollama,
 inicia o serviço ou baixa modelos.
+
+Para um endpoint estável fora do localhost, mantenha a configuração específica
+da máquina fora do checkout Git:
+
+```bash
+# ~/.config/actions-runners/config.env
+RUNNEROPS_OLLAMA_BASE_URL="http://wsl-host.example:11434"
+```
+
+`runnerctl` carrega esse `config.env`. Sem uma entrada persistida, a variável
+exportada no ambiente fornece o endpoint; `--base-url` sobrescreve ambos para
+uma execução específica.
 
 ```text
 RunnerOps → configured Ollama endpoint
@@ -151,13 +165,31 @@ montados pelo RunnerOps; o modelo não pode fornecê-los ou substituí-los.
 ```
 
 Categorias aceitas: `CI`, `CAPACITY`, `AUTOSCALE`, `COLLECTOR` e `EVIDENCE`.
-Confiança aceita: `low`, `medium` e `high`. Há no máximo 20 findings, 20
+Confiança aceita: `low`, `medium` e `high`. Há no máximo 2 findings, 6
 unknowns e 20 referências por item; textos têm no máximo 2000 caracteres. Todo
 finding e unknown exige pelo menos uma referência.
 
 Referências são JSON Pointer RFC 6901 e precisam resolver no documento exato
 serializado. Sintaxe inválida, índice de array inválido ou caminho inexistente
 rejeita a resposta completa. Saídas malformadas nunca viram review parcial.
+O prompt inclui um índice determinístico de no máximo 512 JSON Pointers folha e
+seus valores exatos, exigindo que o modelo copie referências desse índice. O
+índice também é marcado como evidência não confiável. O validator ainda
+resolve cada referência contra a evidência original; o catálogo não concede
+confiança ao output do modelo.
+
+Cada entrada de `incomplete_evidence` precisa ser citada em `unknowns`. Quando a
+fila atual é zero e `historical_utilization` é `null`, recomendações de
+`CAPACITY` ou `AUTOSCALE` são rejeitadas: essa combinação não prova sizing,
+subutilização ou overprovisioning. Nesse cenário o schema enviado ao provider
+também restringe `recommendation` a `null`, evitando gerar uma saída sabidamente
+inválida; o validator continua sendo a barreira autoritativa.
+Findings sustentados somente por `incomplete_evidence` precisam ser da categoria
+`EVIDENCE`, sem recomendação, e os gaps continuam obrigatórios em `unknowns`.
+Assim, falta de evidência pode ser diagnosticada, mas não convertida em ação de
+capacidade/autoscale. Quando o texto usa um nome de campo identificável, como
+`runner_list_calls` ou sua forma legível `runner list calls`, o finding precisa
+citar esse campo explicitamente.
 
 ## Source map e validação
 

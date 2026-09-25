@@ -311,7 +311,7 @@ def _collect_run_jobs(repo, run):
     return run, rows, local_errors, local_metrics
 
 
-def collect_queue(repo, now, errors, metrics=None):
+def collect_queue(repo, now, errors, metrics=None, persist_cache=True):
     queue_error_start = len(errors)
     runs = {}
     for status in RUN_STATUSES:
@@ -397,9 +397,9 @@ def collect_queue(repo, now, errors, metrics=None):
                 "queue_age_source": "job.created_at" if age is not None else None,
                 "required_labels": labels(job.get("labels")),
             }
-    if len(errors) == queue_error_start and cache_records:
+    if persist_cache and len(errors) == queue_error_start and cache_records:
         _save_queue_cache(repo, cache_records)
-    elif metrics is not None:
+    elif metrics is not None and persist_cache and cache_records:
         metrics["job_cache_invalidations"] += 1
     return sorted(jobs.values(), key=lambda j: (-(j["queue_age_seconds"] or 0), j["job_id"]))
 
@@ -574,7 +574,7 @@ def match_jobs(jobs, runners, complete):
                    matching_local_runner_names=[r["name"] for r in matched if r["scope"] == "local"])
 
 
-def snapshot(requested):
+def snapshot(requested, persist_cache=True):
     started = time.monotonic()
     metrics = collector_metrics()
     now = datetime.now(timezone.utc)
@@ -587,7 +587,9 @@ def snapshot(requested):
     selected = [record for record in records if key and record["repo"] == key]
     jobs, remote = [], []
     if canonical:
-        jobs = collect_queue(canonical, now, errors, metrics=metrics)
+        jobs = collect_queue(
+            canonical, now, errors, metrics=metrics, persist_cache=persist_cache
+        )
         remote = api_pages(f"repos/{canonical}/actions/runners", "runners", errors, "github_runners",
                            metrics=metrics, metric_kind="runner_list_calls")
         valid_remote = [r for r in remote if positive_id(r.get("id")) and isinstance(r.get("name"), str)]

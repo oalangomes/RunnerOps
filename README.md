@@ -80,6 +80,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Pacote oficial do runner | `runnerctl package detect/ensure` |
 | Aguardar resultado do CI | `runnerctl ci watch .` |
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
+| Relatório operacional bounded | `runnerctl report . --since 24h`, `runnerctl report . --since 24h --json` |
 | Planejar autoscale (read-only) | `runnerctl autoscale plan .` |
 | Aplicar `START_LOCAL` / `PROVISION_LOCAL` governados | `runnerctl autoscale run-once .` |
 | Agendar autoscale contínuo | `runnerctl autoscale enable .` |
@@ -404,6 +405,8 @@ runnerctl capacity .
 runnerctl capacity example/my-api --json
 runnerctl autoscale status . --json
 runnerctl overview .
+runnerctl report . --since 24h
+runnerctl report . --since 24h --json
 ```
 
 `overview` compõe a evidência pública de capacidade com a decisão/reason do planner
@@ -418,6 +421,11 @@ são capacidade provisionada; runners ocupados não são falha de infraestrutura
 
 O JSON preserva o `nameWithOwner` canônico e usa `schema_version: 1`. Evidência
 ausente ou incompleta permanece explícita; o exit code é `3` nesses casos.
+
+`report` compõe uma visão limitada por período de evidência já existente. O
+histórico de auditoria é lido sem mutação; capacidade e métricas do collector
+atuais são marcadas separadamente de histórico não persistido. Consulte o
+[contrato de OperationalEvidence](docs/operational-evidence.md) para o schema.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
 planejamento read-only e leitura do histórico. As mutações locais governadas são executadas por `autoscale run-once`: `START_LOCAL` para capacidade já provisionada e, desde a v0.4.0, `PROVISION_LOCAL` para crescimento limitado do pool quando o provisioning local estiver explicitamente habilitado. `BURST_CLOUD` continua somente planejável e sem execução.

@@ -5,6 +5,7 @@ import argparse
 import copy
 from dataclasses import dataclass
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -417,6 +418,18 @@ def _endpoint(base_url, path):
     return _validate_base_url(base_url) + path
 
 
+def _is_loopback_base_url(base_url):
+    hostname = urlsplit(_validate_base_url(base_url)).hostname
+    if not hostname:
+        return False
+    if hostname.lower().rstrip(".") == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def _coerce_usage(value):
     return value if _is_int(value) and value >= 0 else None
 
@@ -463,6 +476,58 @@ def _post_json(url, payload, *, timeout, headers=None):
     if not isinstance(decoded, dict):
         _fail("PROVIDER_RESPONSE_INVALID", "provider response must be a JSON object")
     return decoded, response_headers
+
+
+def _classify_ollama_model(metadata):
+    if not isinstance(metadata, dict):
+        _fail("OLLAMA_MODEL_LOCATION_UNKNOWN", "Ollama model location metadata is invalid")
+    remote = False
+    for field in ("remote_model", "remote_host"):
+        if field not in metadata:
+            continue
+        value = metadata[field]
+        if not isinstance(value, str) or not value:
+            _fail("OLLAMA_MODEL_LOCATION_UNKNOWN", "Ollama model location metadata is invalid")
+        remote = True
+    if remote:
+        return "cloud"
+    model_info = metadata.get("model_info")
+    if isinstance(model_info, dict) and model_info:
+        return "local"
+    _fail(
+        "OLLAMA_MODEL_LOCATION_UNKNOWN",
+        "Ollama did not provide enough metadata to prove that the selected model is local",
+    )
+
+
+def inspect_ollama_model(*, model, base_url, timeout):
+    metadata, _ = _post_json(
+        _endpoint(base_url, "/api/show"), {"model": model}, timeout=timeout,
+    )
+    return _classify_ollama_model(metadata)
+
+
+def _validate_ollama_privacy_boundary(*, model, base_url, timeout, allow_remote,
+                                      inspect_call=None):
+    if not _is_loopback_base_url(base_url):
+        if not allow_remote:
+            _fail(
+                "REMOTE_INFERENCE_NOT_ALLOWED",
+                "non-loopback Ollama endpoints require explicit --allow-remote",
+                exit_code=2,
+            )
+        return "remote_endpoint"
+    inspect = inspect_call or inspect_ollama_model
+    location = inspect(model=model, base_url=base_url, timeout=timeout)
+    if location not in {"local", "cloud"}:
+        _fail("OLLAMA_MODEL_LOCATION_UNKNOWN", "Ollama model location could not be verified")
+    if location == "cloud" and not allow_remote:
+        _fail(
+            "REMOTE_INFERENCE_NOT_ALLOWED",
+            "Ollama Cloud inference requires explicit --allow-remote",
+            exit_code=2,
+        )
+    return location
 
 
 def invoke_ollama(*, prompt, model, base_url, timeout, max_output_tokens, api_key=None,
@@ -704,7 +769,7 @@ def _review_metadata(evidence, provider, model, digest):
 
 def build_review(evidence, *, provider, model, base_url=None, timeout=DEFAULT_TIMEOUT_SECONDS,
                  max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS, allow_remote=False,
-                 api_key=None, provider_call=None):
+                 api_key=None, provider_call=None, ollama_inspect_call=None):
     if provider not in {"ollama", "litellm"}:
         _fail("INVALID_PROVIDER_CONFIGURATION", "provider must be ollama or litellm", exit_code=2)
     _expect_string(model, "model", maximum=256, code="INVALID_PROVIDER_CONFIGURATION")
@@ -714,19 +779,22 @@ def build_review(evidence, *, provider, model, base_url=None, timeout=DEFAULT_TI
         _fail("INVALID_PROVIDER_CONFIGURATION", "max output tokens must be between 64 and 8192", exit_code=2)
     if provider == "litellm" and not allow_remote:
         _fail("REMOTE_INFERENCE_NOT_ALLOWED", "LiteLLM requires explicit --allow-remote", exit_code=2)
-    if provider == "ollama" and allow_remote:
-        _fail("INVALID_PROVIDER_CONFIGURATION", "--allow-remote is only valid with LiteLLM", exit_code=2)
 
     validate_operational_evidence(evidence)
+    if base_url is None:
+        base_url = DEFAULT_OLLAMA_BASE_URL if provider == "ollama" else DEFAULT_LITELLM_BASE_URL
+    base_url = _validate_base_url(base_url)
+    if provider == "ollama":
+        _validate_ollama_privacy_boundary(
+            model=model, base_url=base_url, timeout=timeout, allow_remote=allow_remote,
+            inspect_call=ollama_inspect_call,
+        )
+    if provider == "litellm" and not api_key:
+        _fail("PROVIDER_AUTHENTICATION_MISSING", "RUNNEROPS_LITELLM_API_KEY is required", exit_code=2)
     evidence_bytes = canonical_evidence_bytes(evidence)
     digest = evidence_sha256(evidence_bytes)
     response_schema = model_response_schema(evidence)
     prompt = build_prompt(evidence_bytes, response_schema)
-    if base_url is None:
-        base_url = DEFAULT_OLLAMA_BASE_URL if provider == "ollama" else DEFAULT_LITELLM_BASE_URL
-    base_url = _validate_base_url(base_url)
-    if provider == "litellm" and not api_key:
-        _fail("PROVIDER_AUTHENTICATION_MISSING", "RUNNEROPS_LITELLM_API_KEY is required", exit_code=2)
     invoke = provider_call or (invoke_ollama if provider == "ollama" else invoke_litellm)
     started = time.monotonic()
     provider_response = invoke(
@@ -891,7 +959,8 @@ def _argument_error(message):
     return ReviewError("INVALID_ARGUMENT", message, exit_code=2)
 
 
-def main(argv=None, *, evidence_builder=build_report, provider_call=None, environ=None):
+def main(argv=None, *, evidence_builder=build_report, provider_call=None,
+         ollama_inspect_call=None, environ=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     json_output = "--json" in argv
     environ = os.environ if environ is None else environ
@@ -923,6 +992,7 @@ def main(argv=None, *, evidence_builder=build_report, provider_call=None, enviro
             evidence, provider=args.provider, model=args.model, base_url=base_url,
             timeout=args.timeout, max_output_tokens=args.max_output_tokens,
             allow_remote=args.allow_remote, api_key=api_key, provider_call=provider_call,
+            ollama_inspect_call=ollama_inspect_call,
         )
     except ReviewError as error:
         if json_output:

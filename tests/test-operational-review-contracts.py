@@ -68,6 +68,14 @@ def provider_call(value=None, calls=None):
     return invoke
 
 
+def ollama_inspect(location="local", calls=None):
+    def inspect(**kwargs):
+        if calls is not None:
+            calls.append(kwargs)
+        return location
+    return inspect
+
+
 class FakeHTTPResponse:
     def __init__(self, payload, headers=None):
         self.payload = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
@@ -123,7 +131,8 @@ class EvidenceContracts(unittest.TestCase):
         with redirect_stdout(output):
             result = review.main(
                 [".", "--since", "24h", "--provider", "ollama", "--model", "fixture", "--json"],
-                evidence_builder=builder, provider_call=provider_call(), environ={},
+                evidence_builder=builder, provider_call=provider_call(),
+                ollama_inspect_call=ollama_inspect(), environ={},
             )
         self.assertEqual(result, 0)
         self.assertEqual(calls, [(".", 86400)])
@@ -137,7 +146,8 @@ class EvidenceContracts(unittest.TestCase):
         with redirect_stdout(output):
             result = review.main(
                 ["--evidence", str(FIXTURE), "--provider", "ollama", "--model", "fixture", "--json"],
-                evidence_builder=forbidden, provider_call=provider_call(), environ={},
+                evidence_builder=forbidden, provider_call=provider_call(),
+                ollama_inspect_call=ollama_inspect(), environ={},
             )
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue())["evidence"]["repository"], "example/runnerops")
@@ -197,6 +207,7 @@ class ReviewSchemaContracts(unittest.TestCase):
     def build(self, value=None):
         return review.build_review(
             evidence(), provider="ollama", model="fixture", provider_call=provider_call(value),
+            ollama_inspect_call=ollama_inspect(),
         )
 
     def test_grounding_fixture_represents_current_fact_bounded_inference_and_unknown(self):
@@ -294,6 +305,124 @@ class ReviewSchemaContracts(unittest.TestCase):
 
 
 class ProviderContracts(unittest.TestCase):
+    def test_ollama_model_location_uses_show_remote_metadata_not_model_name(self):
+        cases = (
+            ({"model_info": {"general.architecture": "llama"}}, "local"),
+            ({
+                "remote_model": "qwen3.5:397b",
+                "remote_host": "https://ollama.com:443",
+            }, "cloud"),
+            ({
+                "remote_model": "upstream-model",
+                "model_info": {"general.architecture": "llama"},
+            }, "cloud"),
+        )
+        for metadata, expected in cases:
+            with self.subTest(expected=expected), patch(
+                    "operational_review.urlopen", return_value=FakeHTTPResponse(metadata)) as opened:
+                actual = review.inspect_ollama_model(
+                    model="custom-cloud", base_url="http://127.0.0.1:11434", timeout=5,
+                )
+            self.assertEqual(actual, expected)
+            request = opened.call_args.args[0]
+            self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/show")
+            self.assertEqual(json.loads(request.data), {"model": "custom-cloud"})
+
+    def test_ollama_model_location_fails_closed_when_show_is_ambiguous(self):
+        for metadata in ({}, {"model_info": {}}, {"remote_model": 123}, {
+                "remote_model": "", "model_info": {"general.architecture": "llama"}}):
+            with self.subTest(metadata=metadata), patch(
+                    "operational_review.urlopen", return_value=FakeHTTPResponse(metadata)):
+                with self.assertRaises(review.ReviewError) as raised:
+                    review.inspect_ollama_model(
+                        model="model", base_url="http://127.0.0.1:11434", timeout=5,
+                    )
+                self.assertEqual(raised.exception.code, "OLLAMA_MODEL_LOCATION_UNKNOWN")
+
+    def test_local_ollama_model_sends_evidence_after_successful_preflight(self):
+        calls = []
+        outer = {"message": {"content": json.dumps(model_value())}}
+
+        def fake_urlopen(request, timeout):
+            calls.append((request, timeout))
+            if request.full_url.endswith("/api/show"):
+                return FakeHTTPResponse({"model_info": {"general.architecture": "llama"}})
+            if request.full_url.endswith("/api/chat"):
+                return FakeHTTPResponse(outer)
+            raise AssertionError(request.full_url)
+
+        with patch("operational_review.urlopen", side_effect=fake_urlopen):
+            result = review.build_review(evidence(), provider="ollama", model="local-model")
+        self.assertEqual(result["provider"]["model"], "local-model")
+        self.assertEqual([item[0].full_url for item in calls], [
+            "http://127.0.0.1:11434/api/show",
+            "http://127.0.0.1:11434/api/chat",
+        ])
+        self.assertNotIn(b"OperationalEvidence", calls[0][0].data)
+        self.assertIn(b"OperationalEvidence", calls[1][0].data)
+
+    def test_ollama_cloud_without_opt_in_sends_no_evidence(self):
+        requests = []
+        provider_calls = []
+
+        def fake_urlopen(request, timeout):
+            requests.append((request, timeout))
+            return FakeHTTPResponse({
+                "remote_model": "qwen3.5:397b",
+                "remote_host": "https://ollama.com:443",
+            })
+
+        with patch("operational_review.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(review.ReviewError) as raised:
+                review.build_review(
+                    evidence(), provider="ollama", model="neutral-name",
+                    provider_call=provider_call(calls=provider_calls),
+                )
+        self.assertEqual(raised.exception.code, "REMOTE_INFERENCE_NOT_ALLOWED")
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(requests[0][0].full_url.endswith("/api/show"))
+        self.assertEqual(json.loads(requests[0][0].data), {"model": "neutral-name"})
+        self.assertNotIn(b"OperationalEvidence", requests[0][0].data)
+        self.assertNotIn(b"example/runnerops", requests[0][0].data)
+
+    def test_ollama_cloud_with_opt_in_sends_evidence(self):
+        provider_calls = []
+        result = review.build_review(
+            evidence(), provider="ollama", model="neutral-name", allow_remote=True,
+            ollama_inspect_call=ollama_inspect("cloud"),
+            provider_call=provider_call(calls=provider_calls),
+        )
+        self.assertEqual(result["kind"], "OperationalReview")
+        self.assertEqual(len(provider_calls), 1)
+        self.assertIn("OperationalEvidence", provider_calls[0]["prompt"])
+
+    def test_non_loopback_ollama_endpoint_requires_opt_in_before_network_or_evidence(self):
+        provider_calls = []
+        inspect_calls = []
+        with patch("operational_review.urlopen") as opened:
+            with self.assertRaises(review.ReviewError) as raised:
+                review.build_review(
+                    evidence(), provider="ollama", model="model",
+                    base_url="https://ollama.internal.example",
+                    provider_call=provider_call(calls=provider_calls),
+                    ollama_inspect_call=ollama_inspect(calls=inspect_calls),
+                )
+        self.assertEqual(raised.exception.code, "REMOTE_INFERENCE_NOT_ALLOWED")
+        self.assertEqual(provider_calls, [])
+        self.assertEqual(inspect_calls, [])
+        opened.assert_not_called()
+
+        result = review.build_review(
+            evidence(), provider="ollama", model="model",
+            base_url="https://ollama.internal.example", allow_remote=True,
+            provider_call=provider_call(calls=provider_calls),
+            ollama_inspect_call=ollama_inspect(calls=inspect_calls),
+        )
+        self.assertEqual(result["kind"], "OperationalReview")
+        self.assertEqual(len(provider_calls), 1)
+        self.assertEqual(inspect_calls, [])
+
     def test_ollama_endpoint_request_schema_timeout_and_usage(self):
         outer = {
             "message": {"role": "assistant", "content": json.dumps(model_value())},
@@ -451,6 +580,7 @@ class SafetyAndCliContracts(unittest.TestCase):
     def test_human_output_is_concise_and_omits_raw_evidence(self):
         result = review.build_review(
             evidence(), provider="ollama", model="fixture", provider_call=provider_call(),
+            ollama_inspect_call=ollama_inspect(),
         )
         output = StringIO()
         with redirect_stdout(output):
@@ -467,7 +597,7 @@ class SafetyAndCliContracts(unittest.TestCase):
         with redirect_stdout(success):
             code = review.main(
                 ["--evidence", str(FIXTURE), "--provider", "ollama", "--model", "fixture", "--json"],
-                provider_call=provider_call(), environ={},
+                provider_call=provider_call(), ollama_inspect_call=ollama_inspect(), environ={},
             )
         self.assertEqual(code, 0)
         self.assertEqual(success.getvalue().count("\n"), 1)
@@ -501,6 +631,7 @@ class SafetyAndCliContracts(unittest.TestCase):
                 ["--evidence", str(FIXTURE), "--provider", "ollama", "--model", "fixture"],
                 provider_call=lambda **_: (_ for _ in ()).throw(
                     review.ReviewError("PROVIDER_TIMEOUT", "provider request timed out")),
+                ollama_inspect_call=ollama_inspect(),
                 environ={},
             )
         self.assertEqual(code, 3)

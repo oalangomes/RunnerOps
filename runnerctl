@@ -219,11 +219,14 @@ EOF
 Uso:
   runnerctl review [owner/repo|.] --since DURATION --provider ollama --model MODEL [--json]
   runnerctl review --evidence FILE --provider ollama --model MODEL [--json]
+  runnerctl review [owner/repo|.] --since DURATION --provider ollama --model MODEL --allow-remote [--json]
+  runnerctl review --evidence FILE --provider ollama --model MODEL --allow-remote [--json]
   runnerctl review [owner/repo|.] --since DURATION --provider litellm --model MODEL --allow-remote [--json]
   runnerctl review --evidence FILE --provider litellm --model MODEL --allow-remote [--json]
 
 Produz uma análise AI read-only baseada somente em OperationalEvidence v1.
-LiteLLM exige --allow-remote. Modelo é sempre explícito; replay não recolhe
+Ollama Cloud, endpoints Ollama não-loopback e LiteLLM exigem --allow-remote
+antes do envio da evidência. Modelo é sempre explícito; replay não recolhe
 evidência operacional nova.
 
 Configuração:

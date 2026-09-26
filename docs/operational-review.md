@@ -58,6 +58,8 @@ obrigatório. `--provider` e `--model` são sempre explícitos. Controles comuns
 - `--timeout SECONDS` limita uma chamada, default 120;
 - `--max-output-tokens N` limita a saída solicitada, default 2048 e faixa
   64..8192;
+- `--allow-remote` confirma explicitamente que `OperationalEvidence` pode
+  atravessar uma fronteira de rede ou ser processado pelo Ollama Cloud;
 - `--json` emite exatamente um `OperationalReview` ou
   `OperationalReviewError`.
 
@@ -70,12 +72,35 @@ raciocínio consumam o limite de saída antes do documento JSON. O default é
 por `--base-url` ou `RUNNEROPS_OLLAMA_BASE_URL`. RunnerOps nunca instala Ollama,
 inicia o serviço ou baixa modelos.
 
+`provider=ollama` não significa necessariamente inferência local. Antes de
+construir ou enviar o prompt, RunnerOps aplica estas regras:
+
+1. somente `localhost` (com ponto final opcional) e endereços IP que
+   `ipaddress.is_loopback` reconhece são endpoints loopback;
+2. qualquer outro host no base URL é uma fronteira remota e exige
+   `--allow-remote`, sem tentativa de conexão quando a flag está ausente;
+3. para endpoint loopback, RunnerOps envia `POST /api/show` contendo somente
+   `{"model":"<nome>"}`. `remote_model` ou `remote_host` não vazio classifica o
+   modelo como Ollama Cloud e exige `--allow-remote`;
+4. sem esses campos remotos, o modelo só é aceito como local quando
+   `model_info` é um objeto não vazio. Metadata ausente, vazia ou malformada
+   falha com `OLLAMA_MODEL_LOCATION_UNKNOWN`.
+
+Essa regra usa os campos machine-readable do Ollama para modelos remotos, não
+um sufixo ou substring do nome. Os campos seguem o
+[contrato oficial da API do Ollama](https://github.com/ollama/ollama/blob/main/api/types.go).
+O preflight `/api/show` nunca recebe bytes de
+`OperationalEvidence`. Apenas depois da classificação e, quando necessária, da
+confirmação `--allow-remote`, RunnerOps serializa a evidência no prompt e chama
+`POST /api/chat`.
+
 Para um endpoint estável fora do localhost, mantenha a configuração específica
-da máquina fora do checkout Git:
+da máquina fora do checkout Git e confirme a fronteira em cada execução:
 
 ```bash
 # ~/.config/actions-runners/config.env
 RUNNEROPS_OLLAMA_BASE_URL="http://wsl-host.example:11434"
+runnerctl review . --since 24h --provider ollama --model qwen3.5:9b --allow-remote
 ```
 
 `runnerctl` carrega esse `config.env`. Sem uma entrada persistida, a variável

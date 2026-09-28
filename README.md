@@ -52,6 +52,42 @@ O control plane também preserva uma fronteira importante: decisões de autoscal
 - Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
 
+## Estrutura do repositório
+
+A organização atual separa implementação interna, scripts operacionais e interfaces públicas:
+
+```text
+runnerops/
+├── src/runnerops/              # implementação principal em Python
+│   ├── autoscale/              # planner, controller, scheduler, runtime, audit e store
+│   ├── operational/            # evidencia operacional e review grounded
+│   ├── capacity.py             # coletores de capacidade e snapshot
+│   ├── overview.py             # visão de estado e repositório
+│   └── __init__.py
+├── scripts/                    # scripts de runtime, cache, setup e systemd
+│   ├── cache/                  # cache, prewarm e ambiente de cache
+│   ├── ci/                     # watch do CI
+│   ├── runner/                 # lifecycle, runtime-env, services e configure
+│   ├── setup/                  # init, sync, authorize e cockpit
+│   └── systemd/                # helpers de systemd e units
+├── docs/                       # documentação, arquitetura, evidência e releasenotes
+├── skills/                     # Agent Skills do RunnerOps
+├── templates/                  # modelos de workflow GitHub Actions
+├── tests/                      # contratos e validações automáticas
+├── site/                       # site estático do projeto
+├── install.sh                  # bootstrap da CLI pública
+├── runnerctl                   # entrypoint público estável
+├── runners.conf.example        # exemplo de configuração local
+├── README.md                   # documentação pública
+├── CHANGELOG.md                # histórico de mudanças
+├── LICENSE                     # licença
+└── ...
+```
+
+A fronteira pública do produto continua estável: `runnerctl` e `install.sh` permanecem como pontos de entrada oficiais, enquanto a implementação real foi movida para `src/` e `scripts/` para reduzir acoplamento, melhorar organização e facilitar manutenção.
+
+Também há compatibilidade de legado em alguns arquivos raiz para preservar interfaces históricas usadas por scripts, automação e toolchains existentes durante a migração estrutural.
+
 ## Plataformas suportadas
 
 | Ambiente | Estado |

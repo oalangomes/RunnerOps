@@ -27,38 +27,35 @@ RunnerOps é o produto deste repositório. `runnerctl` é sua interface pública
 Para mudanças em shell:
 
 ```bash
-bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh \
-  init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh runnerctl install.sh runner-package.sh \
-  ci-watch.sh tests/test-runnerctl-contracts.sh tests/test-runnerctl-routing-contracts.sh \
-  tests/test-runner-package-contracts.sh tests/test-ci-watch-contracts.sh tests/test-agent-skills-contracts.sh \
-  tests/test-performance-skill-contracts.sh
+mapfile -d '' shell_files < <(find scripts tests -type f -name '*.sh' -print0)
+bash -n runnerctl install.sh scripts/systemd/runnerops-systemctl "${shell_files[@]}"
 ```
 
 Para mudanças em capacity/autoscale:
 
 ```bash
-python3 -B -m py_compile capacity.py autoscale_contracts.py autoscale_store.py autoscale_audit.py autoscale_planner.py
-python3 -B tests/test-capacity-contracts.py
-python3 -B tests/test-capacity-bom-contract.py
-python3 -B tests/test-autoscale-audit-contracts.py
-python3 -B tests/test-autoscale-planner-contracts.py
+python3 -B -m py_compile $(find src/runnerops -type f -name '*.py' -print)
+python3 -B tests/capacity/test-capacity-contracts.py
+python3 -B tests/capacity/test-capacity-bom-contract.py
+python3 -B tests/autoscale/test-autoscale-audit-contracts.py
+python3 -B tests/autoscale/test-autoscale-planner-contracts.py
 ```
 
 Para mudanças de autoscale:
 
 ```bash
-python3 -B tests/test-capacity-contracts.py
-python3 -B tests/test-autoscale-audit-contracts.py
-python3 -B tests/test-autoscale-planner-contracts.py
-python3 -B tests/test-autoscale-controller-contracts.py
-python3 -B tests/test-autoscale-scheduler-contracts.py
+python3 -B tests/capacity/test-capacity-contracts.py
+python3 -B tests/autoscale/test-autoscale-audit-contracts.py
+python3 -B tests/autoscale/test-autoscale-planner-contracts.py
+python3 -B tests/autoscale/test-autoscale-controller-contracts.py
+python3 -B tests/autoscale/test-autoscale-scheduler-contracts.py
 ```
 
 Para Agent Skills:
 
 ```bash
-./install-agent-skills.sh --list
-./install-agent-skills.sh --tool all --dry-run
+./scripts/setup/install-agent-skills.sh --list
+./scripts/setup/install-agent-skills.sh --tool all --dry-run
 ```
 
 Ferramentas locais opcionais de navegação de código podem ser usadas quando instaladas, mas não são pré-requisitos para contribuir com este repositório.

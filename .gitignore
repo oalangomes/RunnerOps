@@ -13,6 +13,7 @@ actions-runner-*.tar.gz
 *.conf
 .env.local
 .local-runners/
+__pycache__/
 
 # Local Agent Skills installation
 .codex/skills/

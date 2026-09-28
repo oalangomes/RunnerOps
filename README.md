@@ -52,6 +52,34 @@ O control plane também preserva uma fronteira importante: decisões de autoscal
 - Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
 
+## Estrutura do repositório
+
+RunnerOps mantém somente as interfaces públicas e os arquivos de projeto na raiz:
+
+```text
+runnerops/
+├── runnerctl                    # CLI pública estável
+├── install.sh                   # bootstrap do checkout
+├── src/runnerops/               # runtime Python
+│   ├── autoscale/
+│   └── operational/
+├── scripts/                     # implementação shell por domínio
+│   ├── runner/
+│   ├── cache/
+│   ├── ci/
+│   ├── setup/
+│   └── systemd/
+├── tests/                       # contratos por domínio
+├── docs/
+├── skills/
+├── templates/
+└── site/
+```
+
+RunnerOps é o produto. `runnerctl` e `install.sh` são as fronteiras públicas;
+arquivos sob `src/` e `scripts/` são detalhes de implementação e podem mudar de
+local sem alterar os comandos públicos nem o estado da máquina.
+
 ## Plataformas suportadas
 
 | Ambiente | Estado |
@@ -109,7 +137,7 @@ unidade systemd por runner
       └── ativo                        ← quando um job/projeto precisa
 ```
 
-RunnerOps é o produto; `runnerctl` é sua interface pública estável. `runners.sh`, `runner-services.sh` e os demais scripts do checkout são detalhes de implementação e migração.
+RunnerOps é o produto; `runnerctl` é sua interface pública estável. Os arquivos sob `src/` e `scripts/` são detalhes de implementação.
 
 ## Pré-requisitos
 
@@ -258,7 +286,7 @@ runnerctl add . \
   --runner-arch auto
 ```
 
-Para controle manual/offline do pacote, `configure-runner.sh --runner-tar ... --expected-sha256 ...` permanece disponível como escape hatch interno/avançado.
+Para controle manual/offline do pacote, `scripts/runner/configure.sh --runner-tar ... --expected-sha256 ...` permanece disponível como escape hatch interno/avançado.
 
 ### 5. Resultado on-demand
 
@@ -712,24 +740,24 @@ O cache durável da plataforma fica fora do checkout, sob `${XDG_CACHE_HOME:-~/.
 └── stacks/         # npm/pnpm/yarn, pip, Gradle/Maven, Pub, Go, NuGet etc.
 ```
 
-O prewarm de **GitHub Actions** é a exceção: `prewarm-actions.sh` aquece `<runner>/_work/_actions`, porque essa é a estrutura consumida pelo runner e é específica de cada instância.
+O prewarm de **GitHub Actions** é a exceção: `scripts/cache/prewarm-actions.sh` aquece `<runner>/_work/_actions`, porque essa é a estrutura consumida pelo runner e é específica de cada instância.
 
 O estado de runtime (service env, logs/PIDs legados durante migração) fica sob `${XDG_STATE_HOME:-~/.local/state}/actions-runners`.
 
 Caches podem ser inspecionados com:
 
 ```bash
-./cache.sh profiles
-./cache.sh status --profile python
-./cache.sh status --profile node
-./cache.sh status --profile flutter
+./scripts/cache/cache.sh profiles
+./scripts/cache/cache.sh status --profile python
+./scripts/cache/cache.sh status --profile node
+./scripts/cache/cache.sh status --profile flutter
 ```
 
 Prewarm:
 
 ```bash
-./prewarm-cache.sh python
-./prewarm-actions.sh my-api
+./scripts/cache/prewarm-cache.sh python
+./scripts/cache/prewarm-actions.sh my-api
 ```
 
 ## Cockpit
@@ -737,7 +765,7 @@ Prewarm:
 Cockpit é opcional e recomendado quando você quer uma interface para serviços, journal, CPU, RAM, disco e processos:
 
 ```bash
-./setup-cockpit.sh install
+./scripts/setup/setup-cockpit.sh install
 ```
 
 Não exponha a porta administrativa diretamente à internet. Para acesso remoto, prefira VPN ou rede privada.

@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TMP_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+
+fail() {
+  printf '[FAIL] %s\n' "$1" >&2
+  exit 1
+}
+
+pass() {
+  printf '[PASS] %s\n' "$1"
+}
+
+assert_eq() {
+  local expected="$1" actual="$2" message="$3"
+  [[ "$actual" == "$expected" ]] || {
+    printf 'expected: %s\nactual:   %s\n' "$expected" "$actual" >&2
+    fail "$message"
+  }
+}
+
+assert_contains() {
+  local haystack="$1" needle="$2" message="$3"
+  [[ "$haystack" == *"$needle"* ]] || {
+    printf 'missing: %s\noutput:\n%s\n' "$needle" "$haystack" >&2
+    fail "$message"
+  }
+}
+
+assert_not_contains() {
+  local haystack="$1" needle="$2" message="$3"
+  [[ "$haystack" != *"$needle"* ]] || {
+    printf 'unexpected: %s\noutput:\n%s\n' "$needle" "$haystack" >&2
+    fail "$message"
+  }
+}
+
+make_fake_platform() {
+  local platform="$1"
+  mkdir -p "$platform/scripts/runner"
+  cp "$ROOT/runnerctl" "$platform/runnerctl"
+  cp "$ROOT/scripts/runner/runtime-env.sh" "$platform/scripts/runner/runtime-env.sh"
+
+  cat > "$platform/scripts/runner/lifecycle.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'runners:%s\n' "$*" >> "${TEST_PLATFORM_LOG:?}"
+case "${1:-}" in
+  doctor)
+    if [[ "${TEST_DOCTOR_FAIL:-0}" == "1" ]]; then
+      exit 1
+    fi
+    ;;
+esac
+EOF
+
+  cat > "$platform/scripts/runner/services.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'services:%s\n' "$*" >> "${TEST_PLATFORM_LOG:?}"
+if [[ "${1:-}" == "migrate" && "${TEST_MIGRATE_FAIL:-0}" == "1" ]]; then
+  exit 1
+fi
+EOF
+
+  cat > "$platform/scripts/runner/configure.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+token=""
+IFS= read -r token || true
+runner_name="projectcase"
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "--name" && $((i + 1)) -lt ${#args[@]} ]]; then
+    runner_name="${args[$((i + 1))]}"
+  fi
+done
+printf 'configure:%s\n' "$*" >> "${TEST_PLATFORM_LOG:?}"
+printf 'token:%s\n' "$token" >> "${TEST_PLATFORM_LOG:?}"
+printf 'Runner local: %s\n' "$runner_name"
+if [[ "${TEST_CONFIGURE_FAIL:-0}" == "1" ]]; then
+  printf '%s\n' 'simulated configure failure' >&2
+  exit 1
+fi
+printf '%s\n' 'Runner configurado com sucesso.'
+printf 'Nome local: %s\n' "$runner_name"
+EOF
+
+  cat > "$platform/scripts/runner/package.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  detect)
+    printf '%s\n' 'linux|x64'
+    ;;
+  *)
+    printf 'unexpected runner-package call: %s\n' "$*" >&2
+    exit 1
+    ;;
+esac
+EOF
+
+  chmod +x "$platform/runnerctl" "$platform/scripts/runner/"{lifecycle,services,configure,package}.sh
+}
+
+make_fake_commands() {
+  local bin="$1"
+  mkdir -p "$bin"
+
+  cat > "$bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+
+  cat > "$bin/sudo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo:%s\n' "$*" >> "${TEST_SUDO_LOG:?}"
+if [[ "${TEST_SUDO_OK:-0}" == "1" ]]; then
+  exit 0
+fi
+exit 1
+EOF
+
+  cat > "$bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'gh:%s\n' "$*" >> "${TEST_GH_LOG:?}"
+
+if [[ "${1:-}" == "auth" && "${2:-}" == "status" ]]; then
+  exit 0
+fi
+
+if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
+  printf '%s\n' 'Example/ProjectCase'
+  exit 0
+fi
+
+if [[ "${1:-}" == "api" ]]; then
+  if [[ "$*" == *"repos/actions/runner/releases/latest"* ]]; then
+    printf '%s\n' 'v2.999.0'
+    exit 0
+  fi
+  if [[ "$*" == *"registration-token"* ]]; then
+    printf '%s\n' 'test-registration-token'
+    exit 0
+  fi
+fi
+
+exit 1
+EOF
+
+  chmod +x "$bin/systemctl" "$bin/sudo" "$bin/gh"
+}
+
+run_add() {
+  local platform="$1"
+  shift
+  PATH="$TMP_ROOT/bin:$PATH" \
+    ACTIONS_RUNNERS_HOME="$platform" \
+    ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+    RUNNER_SYSTEMD_RUNTIME_DIR="$TMP_ROOT/systemd-runtime" \
+    TEST_GH_LOG="$TMP_ROOT/gh.log" \
+    TEST_SUDO_LOG="$TMP_ROOT/sudo.log" \
+    TEST_PLATFORM_LOG="$TMP_ROOT/platform.log" \
+    "$ROOT/runnerctl" add example/projectcase --profile generic "$@"
+}
+
+reset_logs() {
+  : > "$TMP_ROOT/gh.log"
+  : > "$TMP_ROOT/sudo.log"
+  : > "$TMP_ROOT/platform.log"
+}
+
+test_admin_preflight_blocks_before_registration_token() {
+  local platform="$TMP_ROOT/preflight-platform"
+  local output rc=0
+
+  make_fake_platform "$platform"
+  reset_logs
+
+  set +e
+  output="$(TEST_SUDO_OK=0 run_add "$platform" 2>&1)"
+  rc=$?
+  set -e
+
+  [[ "$rc" -ne 0 ]] || fail "add deve falhar quando sudo não está disponível de forma não interativa"
+  assert_contains "$output" "runnerctl add precisa de sudo interativo" "erro deve explicar preflight administrativo"
+  assert_contains "$output" "terminal humano" "erro deve orientar executar add em uma sessao interativa"
+  assert_contains "$output" "mesma sessão" "erro deve explicar que cache sudo nao atravessa sessoes"
+
+  if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
+    fail "preflight deve falhar antes de solicitar registration token"
+  fi
+  [[ ! -s "$TMP_ROOT/platform.log" ]] || fail "configure/migrate não podem rodar após preflight falhar"
+
+  pass "preflight administrativo falha antes de qualquer registration token"
+}
+
+test_add_uses_canonical_repository_identity() {
+  local platform="$TMP_ROOT/canonical-platform"
+  local output
+
+  make_fake_platform "$platform"
+  reset_logs
+
+  output="$(TEST_SUDO_OK=1 run_add "$platform")"
+
+  assert_contains "$output" "Registrando runner para Example/ProjectCase" "add deve expor nome canônico"
+  assert_contains "$output" "[OK] runner=projectcase repo=Example/ProjectCase" "conclusão deve preservar nome canônico"
+  assert_contains "$output" "[NEXT] optional now: runnerctl start projectcase" "on-demand deve deixar claro que start é opcional para disponibilidade imediata"
+  assert_contains "$(cat "$TMP_ROOT/platform.log")" "--repo-url https://github.com/Example/ProjectCase" "configure deve receber URL canônica"
+  assert_contains "$(cat "$TMP_ROOT/gh.log")" "repos/Example/ProjectCase/actions/runners/registration-token" "API deve usar identidade canônica"
+
+  pass "runnerctl add preserva nameWithOwner canônico até o configure"
+}
+
+test_add_progress_is_tty_only() {
+  local platform="$TMP_ROOT/progress-platform"
+  local output tty_log command
+
+  make_fake_platform "$platform"
+  reset_logs
+
+  output="$(TEST_SUDO_OK=1 run_add "$platform")"
+  assert_not_contains "$output" "[1/6]" "progress não deve poluir saída capturada/non-TTY"
+
+  if ! command -v script >/dev/null 2>&1; then
+    pass "progress TTY ignorado porque script(1) não está disponível"
+    return 0
+  fi
+
+  reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+  tty_log="$TMP_ROOT/add-plan-tty.log"
+  command="PATH=$TMP_ROOT/bin:\$PATH ACTIONS_RUNNERS_HOME=$platform ACTIONS_RUNNERS_ENV=$TMP_ROOT/missing.env RUNNER_SYSTEMD_RUNTIME_DIR=$TMP_ROOT/systemd-runtime RUNNERS_CONFIG=$TMP_ROOT/runners.conf TEST_GH_LOG=$TMP_ROOT/gh.log TEST_SUDO_LOG=$TMP_ROOT/sudo.log TEST_PLATFORM_LOG=$TMP_ROOT/platform.log TEST_SUDO_OK=0 $ROOT/runnerctl add example/projectcase --profile generic --plan --runner-version latest --runner-arch auto"
+  script -q -e -c "$command" "$tty_log" >/dev/null
+  output="$(cat "$tty_log")"
+
+  assert_contains "$output" "Add plan:" "TTY plan deve renderizar preview"
+  assert_not_contains "$output" "[1/6]" "TTY add --plan não deve mostrar fase de apply"
+  assert_not_contains "$output" "[2/6]" "TTY add --plan não deve mostrar progresso de apply"
+  if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
+    fail "TTY add --plan não pode solicitar registration token"
+  fi
+  [[ ! -s "$TMP_ROOT/sudo.log" ]] || fail "TTY add --plan não pode validar sudo"
+  [[ ! -s "$TMP_ROOT/platform.log" ]] || fail "TTY add --plan não pode chamar configure/migrate/doctor"
+
+  reset_logs
+  rm -f "$TMP_ROOT/runners.conf"
+  tty_log="$TMP_ROOT/add-tty.log"
+  command="PATH=$TMP_ROOT/bin:\$PATH ACTIONS_RUNNERS_HOME=$platform ACTIONS_RUNNERS_ENV=$TMP_ROOT/missing.env RUNNER_SYSTEMD_RUNTIME_DIR=$TMP_ROOT/systemd-runtime TEST_GH_LOG=$TMP_ROOT/gh.log TEST_SUDO_LOG=$TMP_ROOT/sudo.log TEST_PLATFORM_LOG=$TMP_ROOT/platform.log TEST_SUDO_OK=1 $ROOT/runnerctl add example/projectcase --profile generic"
+  script -q -e -c "$command" "$tty_log" >/dev/null
+  output="$(cat "$tty_log")"
+
+  assert_contains "$output" "[1/6] resolving repository and runner spec" "TTY deve mostrar primeira fase de add"
+  assert_contains "$output" "[6/6] migrating and validating lifecycle" "TTY deve mostrar fase final de add"
+
+  pass "runnerctl add emite progress humano apenas quando há TTY"
+}
+
+test_add_plan_is_read_only_and_skips_registration_token() {
+  local platform="$TMP_ROOT/plan-platform"
+  local output before after
+
+  make_fake_platform "$platform"
+  reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+
+  before="$(sha256sum "$TMP_ROOT/runners.conf" | awk '{print $1}')"
+  output="$(
+    TEST_SUDO_OK=0 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --plan --runner-version latest --runner-arch auto
+  )"
+  after="$(sha256sum "$TMP_ROOT/runners.conf" | awk '{print $1}')"
+
+  assert_contains "$output" "Add plan:" "add --plan deve renderizar preview"
+  assert_contains "$output" "- repository: Example/ProjectCase" "preview deve usar identidade canônica"
+  assert_contains "$output" "- runner name: projectcase-2" "preview deve resolver nome local sem mutar"
+  assert_contains "$output" "- runner version: 2.999.0 (requested: latest)" "preview deve resolver latest sem download"
+  assert_contains "$output" "- runner platform: linux/x64 (requested arch: auto)" "preview deve resolver arquitetura"
+  assert_contains "$output" "remote registration: NOT REQUESTED" "preview deve declarar ausência de registro remoto"
+  assert_contains "$output" "[SUMMARY] status=success operation=add-plan" "preview deve fechar com resumo humano"
+  assert_not_contains "$output" "[1/6]" "add --plan não deve emitir progress de apply"
+
+  if grep -Fq 'registration-token' "$TMP_ROOT/gh.log"; then
+    fail "add --plan não pode solicitar registration token"
+  fi
+  [[ ! -s "$TMP_ROOT/sudo.log" ]] || fail "add --plan não pode validar sudo"
+  [[ ! -s "$TMP_ROOT/platform.log" ]] || fail "add --plan não pode chamar configure/migrate/doctor"
+  assert_eq "$before" "$after" "add --plan não pode modificar registry"
+
+  pass "runnerctl add --plan resolve preview sem token, sudo ou mutação"
+}
+
+test_add_plan_and_apply_share_effective_runner_spec() {
+  local platform="$TMP_ROOT/spec-platform"
+  local plan_output apply_output platform_log
+
+  make_fake_platform "$platform"
+  reset_logs
+  printf '%s\n' 'projectcase|/tmp/projectcase|generic|Example/ProjectCase|true|projectcase' > "$TMP_ROOT/runners.conf"
+
+  plan_output="$(
+    TEST_SUDO_OK=0 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --plan --labels custom,local-runner --runner-version latest --runner-arch auto
+  )"
+  reset_logs
+  apply_output="$(
+    TEST_SUDO_OK=1 \
+    RUNNERS_CONFIG="$TMP_ROOT/runners.conf" \
+    run_add "$platform" --labels custom,local-runner --runner-version latest --runner-arch auto
+  )"
+  platform_log="$(cat "$TMP_ROOT/platform.log")"
+
+  assert_contains "$plan_output" "- profile: generic" "preview deve resolver profile efetivo"
+  assert_contains "$platform_log" "--profile generic" "apply deve usar o mesmo profile efetivo"
+  assert_contains "$plan_output" "- group: projectcase" "preview deve resolver group efetivo"
+  assert_contains "$platform_log" "--group projectcase" "apply deve usar o mesmo group efetivo"
+  assert_contains "$plan_output" "- runner name: projectcase-2" "preview deve resolver nome efetivo"
+  assert_contains "$platform_log" "--name projectcase-2" "apply deve usar o mesmo nome efetivo"
+  assert_contains "$plan_output" "- labels: custom,local-runner,projectcase-2" "preview deve resolver labels efetivas"
+  assert_contains "$platform_log" "--labels custom,local-runner,projectcase-2" "apply deve usar as mesmas labels efetivas"
+  assert_contains "$plan_output" "- runner version: 2.999.0 (requested: latest)" "preview deve resolver versão efetiva"
+  assert_contains "$platform_log" "--runner-version 2.999.0" "apply deve usar a mesma versão efetiva"
+  assert_contains "$plan_output" "- runner platform: linux/x64 (requested arch: auto)" "preview deve resolver arquitetura efetiva"
+  assert_contains "$platform_log" "--runner-arch x64" "apply deve usar a mesma arquitetura efetiva"
+  assert_contains "$apply_output" "[OK] runner=projectcase-2 repo=Example/ProjectCase" "apply deve concluir com o nome efetivo"
+
+  pass "add --plan e add compartilham a mesma spec efetiva"
+}
+
+test_migrate_failure_reports_partial_recovery() {
+  local platform="$TMP_ROOT/partial-platform"
+  local output rc=0
+
+  make_fake_platform "$platform"
+  reset_logs
+
+  set +e
+  output="$(TEST_SUDO_OK=1 TEST_MIGRATE_FAIL=1 run_add "$platform" 2>&1)"
+  rc=$?
+  set -e
+
+  [[ "$rc" -ne 0 ]] || fail "add deve falhar quando migrate falha após registro"
+  assert_contains "$output" "[PARTIAL] runner=projectcase repo=Example/ProjectCase phase=systemd-migrate" "estado parcial deve ser explícito"
+  assert_contains "$output" "[RECOVERY] runnerctl doctor projectcase" "estado parcial deve orientar doctor"
+  assert_contains "$output" "[RECOVERY] runnerctl migrate projectcase" "estado parcial deve orientar migrate"
+
+  pass "falha pós-registro em migrate gera recuperação explícita sem repetir add"
+}
+
+test_configure_failure_is_marked_inconclusive() {
+  local platform="$TMP_ROOT/inconclusive-platform"
+  local output rc=0
+
+  make_fake_platform "$platform"
+  reset_logs
+
+  set +e
+  output="$(TEST_SUDO_OK=1 TEST_CONFIGURE_FAIL=1 run_add "$platform" 2>&1)"
+  rc=$?
+  set -e
+
+  [[ "$rc" -ne 0 ]] || fail "add deve falhar quando configure falha"
+  assert_contains "$output" "[INCONCLUSIVE] runner=projectcase repo=Example/ProjectCase phase=configure remote-registration=unknown" "configure failure deve preservar incerteza"
+  assert_contains "$output" "[RECOVERY] runnerctl doctor projectcase" "configure failure conhecido deve orientar doctor"
+  assert_contains "$output" "verifique o registro remoto antes de repetir runnerctl add" "não deve orientar retry cego"
+
+  pass "falha de configure não assume sucesso nem incentiva add duplicado"
+}
+
+test_configure_persists_canonical_repo_case() {
+  local fixture="$TMP_ROOT/tar-fixture"
+  local tarball="$TMP_ROOT/fake-runner.tar.gz"
+  local runner_root="$TMP_ROOT/runner-data"
+  local registry="$TMP_ROOT/canonical-runners.conf"
+  local sha output row repo_field
+
+  mkdir -p "$fixture"
+  cat > "$fixture/config.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '{"agentId":42,"agentName":"fake"}' > .runner
+exit 0
+EOF
+  chmod +x "$fixture/config.sh"
+  tar -czf "$tarball" -C "$fixture" .
+  sha="$(sha256sum "$tarball" | awk '{print $1}')"
+
+  output="$(
+    printf '%s\n' token |
+      ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+      RUNNERS_CONFIG="$registry" \
+      RUNNER_DATA_ROOT="$runner_root" \
+      RUNNER_CACHE_ROOT="$TMP_ROOT/configure-cache" \
+      "$ROOT/scripts/runner/configure.sh" \
+        --repo-url https://github.com/Example/ProjectCase \
+        --token-stdin \
+        --name projectcase \
+        --profile generic \
+        --group projectcase \
+        --runner-tar "$tarball" \
+        --expected-sha256 "$sha"
+  )"
+
+  row="$(grep '^projectcase|' "$registry")"
+  repo_field="$(printf '%s\n' "$row" | awk -F'|' '{print $4}')"
+  assert_eq "Example/ProjectCase" "$repo_field" "registry deve persistir nameWithOwner com capitalização canônica"
+  assert_contains "$output" "Repo full name: Example/ProjectCase" "configure deve reportar identidade canônica"
+
+  pass "configure-runner persiste capitalização canônica no registry"
+}
+
+main() {
+  mkdir -p "$TMP_ROOT/systemd-runtime"
+  make_fake_commands "$TMP_ROOT/bin"
+  test_admin_preflight_blocks_before_registration_token
+  test_add_plan_is_read_only_and_skips_registration_token
+  test_add_plan_and_apply_share_effective_runner_spec
+  test_add_uses_canonical_repository_identity
+  test_add_progress_is_tty_only
+  test_migrate_failure_reports_partial_recovery
+  test_configure_failure_is_marked_inconclusive
+  test_configure_persists_canonical_repo_case
+  printf '\nContratos de provisioning seguro passaram.\n'
+}
+
+main "$@"

@@ -99,7 +99,7 @@ Use autostart apenas quando um runner realmente precisar permanecer disponível 
 Instale opcionalmente:
 
 ```bash
-./setup-cockpit.sh install
+./scripts/setup/setup-cockpit.sh install
 ```
 
 O Cockpit fornece administração padrão do host e dos serviços para:
@@ -113,7 +113,7 @@ Não exponha a porta administrativa diretamente à internet pública. Prefira VP
 
 ## Ambiente de cache
 
-`runner-services.sh` materializa as variáveis de cache em:
+`scripts/runner/services.sh` materializa as variáveis de cache em:
 
 ```text
 ${XDG_STATE_HOME:-~/.local/state}/actions-runners/service-env/<runner>.env
@@ -132,7 +132,7 @@ Esses artefatos são locais da máquina e não são versionados.
 Para remover somente a integração systemd durante uma migração avançada:
 
 ```bash
-./runner-services.sh uninstall my-api
+./scripts/runner/services.sh uninstall my-api
 ```
 
 Esse comando interno preserva o registro no GitHub e o diretório do runner.

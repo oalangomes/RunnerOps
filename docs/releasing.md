@@ -28,19 +28,14 @@ No commit de release:
 ## 3. Rodar validações locais
 
 ```bash
-bash -n configure-runner.sh runners.sh runner-services.sh runner-runtime-env.sh \
-  init-machine-config.sh sync-local-git-excludes.sh install-agent-skills.sh runnerctl install.sh runner-package.sh \
-  ci-watch.sh tests/test-runnerctl-contracts.sh tests/test-runnerctl-routing-contracts.sh \
-  tests/test-runner-package-contracts.sh tests/test-ci-watch-contracts.sh tests/test-agent-skills-contracts.sh \
-  tests/test-performance-skill-contracts.sh
+mapfile -d '' shell_files < <(find scripts tests -type f -name '*.sh' -print0)
+bash -n runnerctl install.sh scripts/systemd/runnerops-systemctl "${shell_files[@]}"
+python3 -B -m py_compile $(find src tests .github/scripts -type f -name '*.py' -print)
 
-bash tests/test-runnerctl-contracts.sh
-bash tests/test-runnerctl-routing-contracts.sh
-python3 -B tests/test-autoscale-scheduler-contracts.py
-bash tests/test-runner-package-contracts.sh
-bash tests/test-ci-watch-contracts.sh
-bash tests/test-agent-skills-contracts.sh
-bash tests/test-performance-skill-contracts.sh
+for test_file in tests/runner/*.sh tests/skills/*.sh; do bash "$test_file"; done
+for test_file in tests/capacity/*.py tests/operational/*.py tests/autoscale/*.py; do
+  python3 -B "$test_file"
+done
 ```
 
 ## 4. Validar instalação e upgrade

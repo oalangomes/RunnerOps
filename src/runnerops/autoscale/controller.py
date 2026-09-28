@@ -19,17 +19,17 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-import capacity
-from autoscale_contracts import AuditError, action_record, timestamp, utcnow
-from autoscale_planner import PolicyError, collect_host_facts, load_policy, plan, policy_fingerprint
-from autoscale_provision import provision_exact
-from autoscale_provision_controller import (
+from runnerops import capacity
+from runnerops.autoscale.contracts import AuditError, action_record, timestamp, utcnow
+from runnerops.autoscale.planner import PolicyError, collect_host_facts, load_policy, plan, policy_fingerprint
+from runnerops.autoscale.provision import provision_exact
+from runnerops.autoscale.provision_controller import (
     pending_provision_actions,
     planned_action as planned_provision_action,
     reconcile_or_apply as reconcile_or_apply_provision,
 )
-from autoscale_runtime import decision_from_plan, pending_start_actions, read_planner_evidence
-from autoscale_store import AuditStore, database_path
+from runnerops.autoscale.runtime import decision_from_plan, pending_start_actions, read_planner_evidence
+from runnerops.autoscale.store import AuditStore, database_path
 
 SCHEMA_VERSION = 1
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"

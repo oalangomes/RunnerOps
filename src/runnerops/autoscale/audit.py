@@ -7,7 +7,7 @@ import re
 import sys
 from datetime import timedelta
 
-from autoscale_contracts import AuditError, utcnow
+from runnerops.autoscale.contracts import AuditError, utcnow
 
 
 def duration(value):
@@ -74,7 +74,7 @@ def main():
     args = parser.parse_args()
     try:
         try:
-            from autoscale_store import AuditStore
+            from runnerops.autoscale.store import AuditStore
         except ImportError:
             raise AuditError("sqlite_capability_unavailable") from None
         with AuditStore() as store:

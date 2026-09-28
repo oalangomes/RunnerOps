@@ -9,8 +9,8 @@ import re
 import sys
 
 import capacity
-from autoscale_contracts import AuditError, utcnow
-from autoscale_store import AuditStore
+from runnerops.autoscale.contracts import AuditError, utcnow
+from runnerops.autoscale.store import AuditStore
 
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 CAPABILITY_LIMITATIONS = frozenset({

@@ -11,10 +11,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import capacity
-from autoscale_contracts import AuditError, canonical_repo, label_list, timestamp
-from autoscale_runtime import read_planner_evidence
-from autoscale_provision import (
+from runnerops import capacity
+from runnerops.autoscale.contracts import AuditError, canonical_repo, label_list, timestamp
+from runnerops.autoscale.runtime import read_planner_evidence
+from runnerops.autoscale.provision import (
     ProvisionPolicyError,
     load_provision_policy,
     provisioning_candidate,
@@ -205,7 +205,7 @@ def _empty_audit(status, error):
 def load_audit_evidence(repository):
     """Read only the retained facts needed by the planner; never create the store."""
     try:
-        from autoscale_store import AuditStore
+        from runnerops.autoscale.store import AuditStore
 
         with AuditStore() as store:
             return read_planner_evidence(store, repository)

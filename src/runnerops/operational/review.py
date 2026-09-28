@@ -19,7 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from operational_report import COLLECTOR_FIELDS, build_report, duration
+from runnerops.operational.report import COLLECTOR_FIELDS, build_report, duration
 
 
 PROMPT_VERSION = "runnerops-operational-review-v2"

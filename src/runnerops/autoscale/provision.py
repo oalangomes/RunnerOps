@@ -11,7 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from autoscale_contracts import AuditError, canonical_repo, label_list
+from runnerops.autoscale.contracts import AuditError, canonical_repo, label_list
 
 PROFILES = {"generic", "node", "python", "flutter", "java", "go", "dotnet"}
 ARCHES = {"auto", "x64", "arm64"}

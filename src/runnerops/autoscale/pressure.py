@@ -9,7 +9,7 @@ starts a new observed segment without adding the unknown interval to proven time
 import hashlib
 import json
 
-from autoscale_contracts import AuditError, encode, instant, label_list, timestamp
+from runnerops.autoscale.contracts import AuditError, encode, instant, label_list, timestamp
 
 PRESSURE_TABLES = ("pressure_qualifications", "pressure_segments")
 PRESSURE_MIGRATION = (

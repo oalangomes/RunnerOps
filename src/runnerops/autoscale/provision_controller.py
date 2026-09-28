@@ -7,9 +7,9 @@ module owns only the mutation-specific action lifecycle and never starts runners
 import hashlib
 import json
 
-from autoscale_contracts import action_record, canonical_repo, decision_record, timestamp
-from autoscale_provision import provisioned_identity
-from autoscale_planner import policy_fingerprint
+from runnerops.autoscale.contracts import action_record, canonical_repo, decision_record, timestamp
+from runnerops.autoscale.provision import provisioned_identity
+from runnerops.autoscale.planner import policy_fingerprint
 
 
 def _action_id(decision_id, target):

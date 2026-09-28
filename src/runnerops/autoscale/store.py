@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
-from autoscale_contracts import (
+from runnerops.autoscale.contracts import (
     AuditError,
     action_record,
     canonical_repo,
@@ -21,7 +21,7 @@ from autoscale_contracts import (
     timestamp,
     utcnow,
 )
-from autoscale_pressure import (
+from runnerops.autoscale.pressure import (
     PRESSURE_MIGRATION,
     check_schema as check_pressure_schema,
     observe_pressure,

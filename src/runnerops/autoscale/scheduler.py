@@ -16,9 +16,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import capacity
-from autoscale_contracts import AuditError
-from autoscale_planner import PolicyError, load_policy
+from runnerops import capacity
+from runnerops.autoscale.contracts import AuditError
+from runnerops.autoscale.planner import PolicyError, load_policy
 
 
 REPO_PATTERN = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -116,7 +116,7 @@ def _policy_environment(repository, interval):
     """Capture one normalized scheduler policy that survives later config changes."""
 
     try:
-        from autoscale_store import Settings
+        from runnerops.autoscale.store import Settings
 
         policy = load_policy()
         settings = Settings.from_env()

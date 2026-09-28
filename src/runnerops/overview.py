@@ -5,8 +5,8 @@ import argparse
 import re
 import sys
 
-import capacity
-from autoscale_planner import (
+from runnerops import capacity
+from runnerops.autoscale.planner import (
     PolicyError,
     collect_host_facts,
     load_audit_evidence,

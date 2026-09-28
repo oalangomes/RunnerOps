@@ -8,6 +8,7 @@ actions-runner-*.tar.gz
 .runner-service-env/
 *.tmp
 *.log
+*.pyc
 
 # Machine-local configuration
 *.conf
@@ -18,4 +19,4 @@ actions-runner-*.tar.gz
 .codex/skills/
 graphify-out/
 .serena/project.yml
-.serena/.gitignore
+

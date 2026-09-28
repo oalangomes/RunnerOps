@@ -8,7 +8,7 @@ state itself.
 import json
 from datetime import timezone
 
-from autoscale_contracts import (
+from runnerops.autoscale.contracts import (
     AuditError,
     action_record,
     canonical_repo,
@@ -17,7 +17,7 @@ from autoscale_contracts import (
     label_list,
     timestamp,
 )
-from autoscale_pressure import read_pressure_evidence
+from runnerops.autoscale.pressure import read_pressure_evidence
 
 # Exact queue evidence remains bounded independently from aggregate scope evidence.
 MAX_PLANNER_QUEUE_ROWS = 1000

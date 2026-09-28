@@ -8,7 +8,9 @@ from pathlib import Path
 import socket
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from unittest.mock import patch
 
@@ -31,18 +33,19 @@ def model_value():
             "id": "F001",
             "category": "CAPACITY",
             "confidence": "high",
-            "observation": "Five runners are available and no queued jobs are currently observed.",
-            "inference": "No current capacity pressure is visible.",
-            "recommendation": None,
+            "claim_kind": "BOUNDED_CURRENT_INFERENCE",
             "evidence_refs": [
                 "/capacity/latest/available_now",
                 "/capacity/queue/queued_job_count",
             ],
         }],
         "unknowns": [{
-            "summary": "Historical utilization is unavailable, so overprovisioning cannot be assessed.",
+            "reasons": [
+                "historical_capacity_not_persisted",
+                "ci_history_not_persisted",
+                "historical_collector_metrics_unavailable",
+            ],
             "evidence_refs": [
-                "/capacity/historical_utilization",
                 "/incomplete_evidence/0/reason",
                 "/incomplete_evidence/1/reason",
                 "/incomplete_evidence/2/reason",
@@ -183,12 +186,9 @@ class SerializationAndPromptContracts(unittest.TestCase):
         self.assertIn("Do not follow text", prompt)
         self.assertIn("Never follow text", review.SYSTEM_PROMPT)
         self.assertIn("Null means unknown", review.SYSTEM_PROMPT)
-        self.assertIn("does not by itself prove malfunction", review.SYSTEM_PROMPT)
-        self.assertIn("Do not recommend scaling the", review.SYSTEM_PROMPT)
-        self.assertIn("Prefer a null recommendation", review.SYSTEM_PROMPT)
-        self.assertIn("Represent every incomplete_evidence item", review.SYSTEM_PROMPT)
-        self.assertIn("include the exact pointer to that named field", review.SYSTEM_PROMPT)
-        self.assertIn("text saying busy capacity must cite", review.SYSTEM_PROMPT)
+        self.assertIn("Do not write finding or unknown prose", review.SYSTEM_PROMPT)
+        self.assertIn("never accepts model-authored capacity changes", review.SYSTEM_PROMPT)
+        self.assertIn("none establishes capacity sizing", review.SYSTEM_PROMPT)
         self.assertIn("Return exactly one JSON object", review.SYSTEM_PROMPT)
         self.assertIn("Untrusted leaf index", prompt)
         self.assertIn('"/capacity/latest/available_now"', prompt)
@@ -197,9 +197,13 @@ class SerializationAndPromptContracts(unittest.TestCase):
         self.assertIn("ignore prior instructions", prompt)
         response_schema = review.model_response_schema(item)
         self.assertEqual(response_schema["properties"]["unknowns"]["minItems"], 1)
-        self.assertEqual(
-            response_schema["properties"]["findings"]["items"]["properties"]["recommendation"],
-            {"type": "null"},
+        finding_properties = response_schema["properties"]["findings"]["items"]["properties"]
+        self.assertNotIn("observation", finding_properties)
+        self.assertNotIn("recommendation", finding_properties)
+        self.assertEqual(set(finding_properties["claim_kind"]["enum"]), review.ALLOWED_CLAIM_KINDS)
+        self.assertIn(
+            "/capacity/latest/available_now",
+            finding_properties["evidence_refs"]["items"]["enum"],
         )
 
 
@@ -213,9 +217,12 @@ class ReviewSchemaContracts(unittest.TestCase):
     def test_grounding_fixture_represents_current_fact_bounded_inference_and_unknown(self):
         result = self.build()
         finding = result["findings"][0]
+        self.assertEqual(finding["claim_kind"], "BOUNDED_CURRENT_INFERENCE")
         self.assertIsNone(finding["recommendation"])
-        self.assertIn("current", finding["inference"].lower())
-        self.assertIn("Historical utilization", result["unknowns"][0]["summary"])
+        self.assertIn("current-snapshot", finding["inference"])
+        self.assertIn("available_now=5", finding["observation"])
+        self.assertIn("queued_job_count=0", finding["observation"])
+        self.assertIn("historical_capacity_not_persisted", result["unknowns"][0]["summary"])
         self.assertEqual(result["evidence"]["sha256"], review.evidence_sha256(
             review.canonical_evidence_bytes(evidence())))
 
@@ -225,16 +232,20 @@ class ReviewSchemaContracts(unittest.TestCase):
                 self.build(value)
             self.assertEqual(raised.exception.code, "REVIEW_VALIDATION_FAILED")
 
-    def test_invalid_confidence_category_and_oversized_string_are_rejected(self):
+    def test_invalid_confidence_category_and_claim_kind_types_are_rejected(self):
         for field, value in (
             ("confidence", "certain"),
             ("category", "SECURITY"),
-            ("observation", "x" * (review.MAX_TEXT_LENGTH + 1)),
+            ("claim_kind", "CAPACITY_SIZING"),
+            ("category", []),
+            ("confidence", {}),
+            ("claim_kind", []),
         ):
             item = model_value()
             item["findings"][0][field] = value
-            with self.assertRaises(review.ReviewError):
+            with self.assertRaises(review.ReviewError) as raised:
                 self.build(item)
+            self.assertEqual(raised.exception.code, "REVIEW_VALIDATION_FAILED")
 
     def test_findings_and_unknowns_are_bounded(self):
         item = model_value()
@@ -257,21 +268,34 @@ class ReviewSchemaContracts(unittest.TestCase):
         nonexistent = model_value()
         nonexistent["findings"][0]["evidence_refs"] = ["/capacity/latest/not-there"]
         variants.append(nonexistent)
+        unhashable_object = model_value()
+        unhashable_object["findings"][0]["evidence_refs"] = [{}]
+        variants.append(unhashable_object)
+        unhashable_array = model_value()
+        unhashable_array["findings"][0]["evidence_refs"] = [[]]
+        variants.append(unhashable_array)
         for item in variants:
             with self.assertRaises(review.ReviewError) as raised:
                 self.build(item)
             self.assertEqual(raised.exception.code, "REVIEW_VALIDATION_FAILED")
 
-    def test_every_incomplete_item_must_be_an_unknown_and_critical_case_has_no_capacity_action(self):
+    def test_every_incomplete_item_must_be_a_truthful_structured_unknown(self):
         missing_unknown = model_value()
         missing_unknown["unknowns"][0]["evidence_refs"] = ["/incomplete_evidence/0/reason"]
+        missing_unknown["unknowns"][0]["reasons"] = ["historical_capacity_not_persisted"]
         with self.assertRaisesRegex(review.ReviewError, "incomplete evidence item"):
             self.build(missing_unknown)
 
-        unsupported_action = model_value()
-        unsupported_action["findings"][0]["recommendation"] = "Reduce the pool."
-        with self.assertRaisesRegex(review.ReviewError, "recommendation requires more"):
-            self.build(unsupported_action)
+        denied_gap = model_value()
+        denied_gap["unknowns"][0]["summary"] = "No relevant uncertainty remains."
+        with self.assertRaises(review.ReviewError) as raised:
+            self.build(denied_gap)
+        self.assertEqual(raised.exception.code, "REVIEW_VALIDATION_FAILED")
+
+        wrong_reason = model_value()
+        wrong_reason["unknowns"][0]["reasons"][0] = "no_uncertainty"
+        with self.assertRaisesRegex(review.ReviewError, "exactly match"):
+            self.build(wrong_reason)
 
     def test_json_pointer_supports_rfc6901_escaping_and_arrays(self):
         document = {"a/b": {"m~n": ["ok"]}}
@@ -279,8 +303,31 @@ class ReviewSchemaContracts(unittest.TestCase):
         self.assertEqual(review.evidence_leaf_pointers(document), ["/a~1b/m~0n/0"])
         self.assertEqual(review.evidence_leaf_index(document), {"/a~1b/m~0n/0": "ok"})
 
-    def test_findings_cannot_recast_incomplete_evidence_or_name_uncited_fields(self):
+    def test_model_prose_and_unsupported_semantic_claims_are_unrepresentable(self):
+        attempts = (
+            ("observation", "The fleet is overprovisioned."),
+            ("inference", "There are too many runners."),
+            ("recommendation", "Reduce runner capacity."),
+            ("recommendation", "Right-size by removing idle workers."),
+        )
+        for field, text in attempts:
+            item = model_value()
+            item["findings"][0]["category"] = "CI"
+            item["findings"][0][field] = text
+            with self.subTest(field=field, text=text), self.assertRaises(review.ReviewError) as raised:
+                self.build(item)
+            self.assertEqual(raised.exception.code, "REVIEW_VALIDATION_FAILED")
+
+        for claim_kind in ("CAPACITY_SIZING", "ROOT_CAUSE", "HISTORICAL_TREND"):
+            item = model_value()
+            item["findings"][0]["category"] = "CI"
+            item["findings"][0]["claim_kind"] = claim_kind
+            with self.subTest(claim_kind=claim_kind), self.assertRaises(review.ReviewError):
+                self.build(item)
+
+    def test_findings_cannot_recast_incomplete_evidence_or_use_container_refs(self):
         incomplete_finding = model_value()
+        incomplete_finding["findings"][0]["claim_kind"] = "EVIDENCE_OBSERVATION"
         incomplete_finding["findings"][0]["evidence_refs"] = ["/incomplete_evidence/0/reason"]
         with self.assertRaisesRegex(review.ReviewError, "cannot turn incomplete evidence"):
             self.build(incomplete_finding)
@@ -288,23 +335,153 @@ class ReviewSchemaContracts(unittest.TestCase):
         evidence_gap = model_value()
         evidence_gap["findings"][0].update({
             "category": "EVIDENCE",
-            "recommendation": None,
+            "claim_kind": "EVIDENCE_OBSERVATION",
             "evidence_refs": ["/incomplete_evidence/0/reason"],
         })
         self.assertEqual(self.build(evidence_gap)["findings"][0]["category"], "EVIDENCE")
 
-        uncited_field = model_value()
-        uncited_field["findings"][0]["observation"] += " runner_list_calls was zero."
-        with self.assertRaisesRegex(review.ReviewError, "runner_list_calls"):
-            self.build(uncited_field)
+        container_ref = model_value()
+        container_ref["findings"][0]["evidence_refs"] = ["/capacity/latest"]
+        with self.assertRaisesRegex(review.ReviewError, "exact leaf"):
+            self.build(container_ref)
 
-        uncited_readable_field = model_value()
-        uncited_readable_field["findings"][0]["observation"] += " Busy capacity was zero."
-        with self.assertRaisesRegex(review.ReviewError, "busy_capacity"):
-            self.build(uncited_readable_field)
+    def test_control_characters_are_rejected_and_ordinary_unicode_is_valid(self):
+        unsafe = (
+            "\x1b[31mred",
+            "\x1b]52;c;YQ==\x07",
+            "spoof\nUnknowns",
+            "overwrite\rtrusted",
+            "left\u202eright",
+        )
+        for text in unsafe:
+            item = model_value()
+            item["unknowns"][0]["reasons"][0] = text
+            with self.subTest(text=repr(text)), self.assertRaisesRegex(
+                    review.ReviewError, "terminal-unsafe"):
+                self.build(item)
+        self.assertEqual(
+            review._validate_safe_text("ação 日本語 🙂", "ordinary text"),
+            "ação 日本語 🙂",
+        )
 
 
 class ProviderContracts(unittest.TestCase):
+    def test_provider_base_url_rejects_credentials_query_and_fragment(self):
+        for base_url in (
+            "http://user:pass@localhost:11434",
+            "http://localhost:11434?redirect=remote",
+            "http://localhost:11434#fragment",
+        ):
+            with self.subTest(base_url=base_url), self.assertRaises(review.ReviewError) as raised:
+                review._validate_base_url(base_url)
+            self.assertEqual(raised.exception.code, "INVALID_PROVIDER_CONFIGURATION")
+
+    def test_provider_redirects_are_rejected_without_forwarding_credentials_or_evidence(self):
+        destination_requests = []
+        same_origin_destination_requests = []
+
+        class DestinationHandler(BaseHTTPRequestHandler):
+            def _record(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                destination_requests.append({
+                    "method": self.command,
+                    "authorization": self.headers.get("Authorization"),
+                    "body": self.rfile.read(length),
+                })
+                self.send_response(200)
+                self.end_headers()
+
+            do_GET = _record
+            do_POST = _record
+
+            def log_message(self, *_):
+                pass
+
+        destination = ThreadingHTTPServer(("127.0.0.1", 0), DestinationHandler)
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            cross_origin = True
+            redirect_status = 302
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                if self.path == "/same-destination":
+                    same_origin_destination_requests.append(self.path)
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                if self.cross_origin:
+                    target = f"http://127.0.0.1:{destination.server_port}/cross-destination"
+                else:
+                    target = f"http://127.0.0.1:{redirect.server_port}/same-destination"
+                self.send_response(self.redirect_status)
+                self.send_header("Location", target)
+                self.end_headers()
+
+            def do_GET(self):
+                same_origin_destination_requests.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *_):
+                pass
+
+        redirect = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        threads = [
+            threading.Thread(target=server.serve_forever, daemon=True)
+            for server in (destination, redirect)
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            output = StringIO()
+            stderr = StringIO()
+            with redirect_stdout(output), redirect_stderr(stderr):
+                code = review.main(
+                    ["--evidence", str(FIXTURE), "--provider", "litellm", "--model", "model",
+                     "--allow-remote", "--base-url", f"http://127.0.0.1:{redirect.server_port}",
+                     "--json"],
+                    environ={"RUNNEROPS_LITELLM_API_KEY": "TOP_SECRET"},
+                )
+            self.assertEqual(code, 3)
+            self.assertEqual(
+                json.loads(output.getvalue())["error"]["code"],
+                "PROVIDER_REDIRECT_REJECTED",
+            )
+            self.assertNotIn("Traceback", stderr.getvalue())
+            self.assertEqual(destination_requests, [])
+
+            for status in (301, 302, 303, 307, 308):
+                RedirectHandler.cross_origin = True
+                RedirectHandler.redirect_status = status
+                with self.subTest(status=status), self.assertRaises(review.ReviewError) as raised:
+                    review._post_json(
+                        f"http://127.0.0.1:{redirect.server_port}/cross-source",
+                        {"OperationalEvidence": "must-not-follow"}, timeout=2,
+                        headers={"Authorization": "Bearer TOP_SECRET"},
+                    )
+                self.assertEqual(raised.exception.code, "PROVIDER_REDIRECT_REJECTED")
+                self.assertEqual(destination_requests, [])
+
+            RedirectHandler.cross_origin = False
+            RedirectHandler.redirect_status = 302
+            with self.assertRaises(review.ReviewError) as raised:
+                review._post_json(
+                    f"http://127.0.0.1:{redirect.server_port}/same-source",
+                    {"OperationalEvidence": "must-not-follow"}, timeout=2,
+                    headers={"Authorization": "Bearer TOP_SECRET"},
+                )
+            self.assertEqual(raised.exception.code, "PROVIDER_REDIRECT_REJECTED")
+            self.assertEqual(same_origin_destination_requests, [])
+        finally:
+            redirect.shutdown()
+            destination.shutdown()
+            for thread in threads:
+                thread.join(timeout=2)
+            redirect.server_close()
+            destination.server_close()
+
     def test_ollama_model_location_uses_show_remote_metadata_not_model_name(self):
         cases = (
             ({"model_info": {"general.architecture": "llama"}}, "local"),
@@ -316,10 +493,14 @@ class ProviderContracts(unittest.TestCase):
                 "remote_model": "upstream-model",
                 "model_info": {"general.architecture": "llama"},
             }, "cloud"),
+            ({
+                "remote_host": "https://ollama.com:443",
+                "model_info": {"general.architecture": None},
+            }, "cloud"),
         )
         for metadata, expected in cases:
             with self.subTest(expected=expected), patch(
-                    "operational_review.urlopen", return_value=FakeHTTPResponse(metadata)) as opened:
+                    "operational_review._provider_urlopen", return_value=FakeHTTPResponse(metadata)) as opened:
                 actual = review.inspect_ollama_model(
                     model="custom-cloud", base_url="http://127.0.0.1:11434", timeout=5,
                 )
@@ -329,15 +510,51 @@ class ProviderContracts(unittest.TestCase):
             self.assertEqual(json.loads(request.data), {"model": "custom-cloud"})
 
     def test_ollama_model_location_fails_closed_when_show_is_ambiguous(self):
-        for metadata in ({}, {"model_info": {}}, {"remote_model": 123}, {
-                "remote_model": "", "model_info": {"general.architecture": "llama"}}):
+        for metadata in (
+            {},
+            {"model_info": {}},
+            {"model_info": {"general.architecture": None}},
+            {"model_info": {"general.architecture": 7}},
+            {"model_info": {"general.architecture": "   "}},
+            {"model_info": {"irrelevant.unknown": "value"}},
+            {"model_info": []},
+            {"remote_model": 123},
+            {"remote_model": "", "model_info": {"general.architecture": "llama"}},
+        ):
             with self.subTest(metadata=metadata), patch(
-                    "operational_review.urlopen", return_value=FakeHTTPResponse(metadata)):
+                    "operational_review._provider_urlopen", return_value=FakeHTTPResponse(metadata)):
                 with self.assertRaises(review.ReviewError) as raised:
                     review.inspect_ollama_model(
                         model="model", base_url="http://127.0.0.1:11434", timeout=5,
                     )
                 self.assertEqual(raised.exception.code, "OLLAMA_MODEL_LOCATION_UNKNOWN")
+
+    def test_malformed_nonempty_ollama_metadata_cannot_reach_inference(self):
+        provider_calls = []
+        with patch(
+                "operational_review._provider_urlopen",
+                return_value=FakeHTTPResponse({"model_info": {"general.architecture": None}})):
+            with self.assertRaises(review.ReviewError) as raised:
+                review.build_review(
+                    evidence(), provider="ollama", model="ambiguous",
+                    provider_call=provider_call(calls=provider_calls),
+                )
+        self.assertEqual(raised.exception.code, "OLLAMA_MODEL_LOCATION_UNKNOWN")
+        self.assertEqual(provider_calls, [])
+
+    def test_loopback_detection_is_strict_and_supports_documented_variants(self):
+        for base_url in (
+            "http://localhost:11434",
+            "http://LOCALHOST.:11434",
+            "http://127.0.0.1:11434",
+            "http://127.255.255.254:11434",
+            "http://[::1]:11434",
+        ):
+            with self.subTest(base_url=base_url):
+                self.assertTrue(review._is_loopback_base_url(base_url))
+        for base_url in ("http://127.1:11434", "http://localhost.example:11434"):
+            with self.subTest(base_url=base_url):
+                self.assertFalse(review._is_loopback_base_url(base_url))
 
     def test_local_ollama_model_sends_evidence_after_successful_preflight(self):
         calls = []
@@ -351,7 +568,7 @@ class ProviderContracts(unittest.TestCase):
                 return FakeHTTPResponse(outer)
             raise AssertionError(request.full_url)
 
-        with patch("operational_review.urlopen", side_effect=fake_urlopen):
+        with patch("operational_review._provider_urlopen", side_effect=fake_urlopen):
             result = review.build_review(evidence(), provider="ollama", model="local-model")
         self.assertEqual(result["provider"]["model"], "local-model")
         self.assertEqual([item[0].full_url for item in calls], [
@@ -360,6 +577,40 @@ class ProviderContracts(unittest.TestCase):
         ])
         self.assertNotIn(b"OperationalEvidence", calls[0][0].data)
         self.assertIn(b"OperationalEvidence", calls[1][0].data)
+
+    def test_ollama_preflight_precedes_serialization_prompt_and_inference(self):
+        trace = []
+        original_canonical = review.canonical_evidence_bytes
+        original_prompt = review.build_prompt
+
+        def inspect(**_):
+            trace.append("privacy_preflight")
+            return "local"
+
+        def canonical(item):
+            trace.append("canonical_evidence_bytes")
+            return original_canonical(item)
+
+        def prompt(encoded, response_schema=None):
+            trace.append("build_prompt")
+            return original_prompt(encoded, response_schema)
+
+        def invoke(**_):
+            trace.append("provider_inference")
+            return provider_response()
+
+        with patch("operational_review.canonical_evidence_bytes", side_effect=canonical), patch(
+                "operational_review.build_prompt", side_effect=prompt):
+            review.build_review(
+                evidence(), provider="ollama", model="local", ollama_inspect_call=inspect,
+                provider_call=invoke,
+            )
+        self.assertEqual(trace[:4], [
+            "privacy_preflight",
+            "canonical_evidence_bytes",
+            "build_prompt",
+            "provider_inference",
+        ])
 
     def test_ollama_cloud_without_opt_in_sends_no_evidence(self):
         requests = []
@@ -372,7 +623,8 @@ class ProviderContracts(unittest.TestCase):
                 "remote_host": "https://ollama.com:443",
             })
 
-        with patch("operational_review.urlopen", side_effect=fake_urlopen):
+        with patch("operational_review._provider_urlopen", side_effect=fake_urlopen), patch(
+                "operational_review.canonical_evidence_bytes") as canonical:
             with self.assertRaises(review.ReviewError) as raised:
                 review.build_review(
                     evidence(), provider="ollama", model="neutral-name",
@@ -380,6 +632,7 @@ class ProviderContracts(unittest.TestCase):
                 )
         self.assertEqual(raised.exception.code, "REMOTE_INFERENCE_NOT_ALLOWED")
         self.assertEqual(provider_calls, [])
+        canonical.assert_not_called()
         self.assertEqual(len(requests), 1)
         self.assertTrue(requests[0][0].full_url.endswith("/api/show"))
         self.assertEqual(json.loads(requests[0][0].data), {"model": "neutral-name"})
@@ -400,7 +653,8 @@ class ProviderContracts(unittest.TestCase):
     def test_non_loopback_ollama_endpoint_requires_opt_in_before_network_or_evidence(self):
         provider_calls = []
         inspect_calls = []
-        with patch("operational_review.urlopen") as opened:
+        with patch("operational_review._provider_urlopen") as opened, patch(
+                "operational_review.canonical_evidence_bytes") as canonical:
             with self.assertRaises(review.ReviewError) as raised:
                 review.build_review(
                     evidence(), provider="ollama", model="model",
@@ -412,6 +666,7 @@ class ProviderContracts(unittest.TestCase):
         self.assertEqual(provider_calls, [])
         self.assertEqual(inspect_calls, [])
         opened.assert_not_called()
+        canonical.assert_not_called()
 
         result = review.build_review(
             evidence(), provider="ollama", model="model",
@@ -435,7 +690,7 @@ class ProviderContracts(unittest.TestCase):
             calls.append((request, timeout))
             return FakeHTTPResponse(outer)
 
-        with patch("operational_review.urlopen", side_effect=fake_urlopen):
+        with patch("operational_review._provider_urlopen", side_effect=fake_urlopen):
             result = review.invoke_ollama(
                 prompt="prompt", model="qwen3.5:9b", base_url="http://localhost:11434",
                 timeout=7, max_output_tokens=900,
@@ -466,7 +721,7 @@ class ProviderContracts(unittest.TestCase):
             calls.append((request, timeout))
             return FakeHTTPResponse(outer, {"x-litellm-response-cost": "0.00125"})
 
-        with patch("operational_review.urlopen", side_effect=fake_urlopen):
+        with patch("operational_review._provider_urlopen", side_effect=fake_urlopen):
             result = review.invoke_litellm(
                 prompt="prompt", model="gateway-model", base_url="https://gateway.example",
                 timeout=9, max_output_tokens=700, api_key="SECRET_API_KEY",
@@ -514,7 +769,8 @@ class ProviderContracts(unittest.TestCase):
             (HTTPError("http://provider", 503, "bad", {}, None), "PROVIDER_UNAVAILABLE"),
         )
         for failure, expected in cases:
-            with self.subTest(expected=expected), patch("operational_review.urlopen", side_effect=failure):
+            with self.subTest(expected=expected), patch(
+                    "operational_review._provider_urlopen", side_effect=failure):
                 with self.assertRaises(review.ReviewError) as raised:
                     review.invoke_ollama(
                         prompt="prompt", model="model", base_url="http://localhost:11434",
@@ -529,7 +785,7 @@ class ProviderContracts(unittest.TestCase):
             FakeHTTPResponse(b"x" * (review.MAX_PROVIDER_RESPONSE_BYTES + 1)),
         )
         for response in responses:
-            with patch("operational_review.urlopen", return_value=response):
+            with patch("operational_review._provider_urlopen", return_value=response):
                 with self.assertRaises(review.ReviewError):
                     review.invoke_ollama(
                         prompt="prompt", model="model", base_url="http://localhost:11434",
@@ -538,7 +794,7 @@ class ProviderContracts(unittest.TestCase):
 
     def test_api_key_never_appears_in_failure_or_json_envelope(self):
         key = "TOP_SECRET_GATEWAY_KEY"
-        with patch("operational_review.urlopen", side_effect=HTTPError(
+        with patch("operational_review._provider_urlopen", side_effect=HTTPError(
                 "https://gateway.example", 500, key, {}, BytesIO(key.encode()))):
             output = StringIO()
             with redirect_stdout(output):
@@ -588,9 +844,29 @@ class SafetyAndCliContracts(unittest.TestCase):
         text = output.getvalue()
         self.assertIn("Operational review: example/runnerops", text)
         self.assertIn("F001 [CAPACITY] high", text)
-        self.assertIn("Historical utilization", text)
+        self.assertIn("historical_capacity_not_persisted", text)
         self.assertNotIn('"schema_version"', text)
         self.assertNotIn("chain-of-thought", text.lower())
+
+    def test_malformed_reference_types_return_controlled_json_error_without_traceback(self):
+        for malformed in ([{}], [[]]):
+            value = model_value()
+            value["findings"][0]["evidence_refs"] = malformed
+            output = StringIO()
+            stderr = StringIO()
+            with self.subTest(malformed=malformed), redirect_stdout(output), redirect_stderr(stderr):
+                code = review.main(
+                    ["--evidence", str(FIXTURE), "--provider", "ollama", "--model", "fixture",
+                     "--json"],
+                    provider_call=provider_call(value), ollama_inspect_call=ollama_inspect(),
+                    environ={},
+                )
+            self.assertEqual(code, 3)
+            self.assertEqual(
+                json.loads(output.getvalue())["error"]["code"],
+                "REVIEW_VALIDATION_FAILED",
+            )
+            self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_json_success_and_failure_are_exactly_one_document(self):
         success = StringIO()

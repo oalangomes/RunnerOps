@@ -5,7 +5,7 @@
 
 **AI review cannot mutate RunnerOps infrastructure.**
 
-**Recommendations are advisory and evidence-grounded; deterministic RunnerOps
+**V1 recommendations are null-only; deterministic RunnerOps
 policy/planner/controller remains authoritative.**
 
 O fluxo V1 é uma única passagem, sem agente, memória, ferramentas ou contexto
@@ -14,9 +14,13 @@ adicional:
 ```text
 OperationalEvidence
       ↓
+structural + secret validation
+      ↓
+provider privacy preflight
+      ↓
 canonical safe serialization
       ↓
-Review Prompt v1
+Review Prompt v2
       ↓
 ┌──────────────┬──────────────┐
 │ Ollama       │ LiteLLM      │
@@ -83,8 +87,9 @@ construir ou enviar o prompt, RunnerOps aplica estas regras:
    `{"model":"<nome>"}`. `remote_model` ou `remote_host` não vazio classifica o
    modelo como Ollama Cloud e exige `--allow-remote`;
 4. sem esses campos remotos, o modelo só é aceito como local quando
-   `model_info` é um objeto não vazio. Metadata ausente, vazia ou malformada
-   falha com `OLLAMA_MODEL_LOCATION_UNKNOWN`.
+   `model_info.general.architecture` é uma string não vazia e sem controles.
+   `model_info` ausente, vazio, com campos irrelevantes, valor nulo ou tipo
+   incorreto falha com `OLLAMA_MODEL_LOCATION_UNKNOWN`.
 
 Essa regra usa os campos machine-readable do Ollama para modelos remotos, não
 um sufixo ou substring do nome. Os campos seguem o
@@ -125,6 +130,9 @@ RunnerOps não conhece nem roteia o vendor upstream. Todo uso LiteLLM exige
 `--allow-remote`, inclusive quando o gateway está em localhost, porque ele ainda
 pode encaminhar evidência a um serviço remoto. A checagem ocorre antes da
 chamada. Não há adapters diretos de OpenAI, Anthropic, Gemini ou outros vendors.
+Todos os requests de provider rejeitam HTTP 30x. RunnerOps não segue redirect
+nem em `/api/show`, nem em `/api/chat`, nem em `/v1/chat/completions`; portanto
+`Authorization` e a evidência nunca são encaminhados implicitamente a outro URL.
 
 ## Serialização e digest
 
@@ -141,7 +149,7 @@ não são removidos silenciosamente nem enviados. A lista de campos do collector
 envia ambiente, inventário de filesystem, conteúdo do registry ou logs livres.
 
 A evidência é delimitada como dados não confiáveis no prompt estático
-`runnerops-operational-review-v1`. O prompt proíbe seguir instruções contidas em
+`runnerops-operational-review-v2`. O prompt proíbe seguir instruções contidas em
 valores, transformar `null` em zero, inventar fatos ausentes, converter uma
 observação atual em histórico ou declarar causa a partir de correlação.
 
@@ -154,7 +162,7 @@ montados pelo RunnerOps; o modelo não pode fornecê-los ou substituí-los.
 {
   "schema_version": 1,
   "kind": "OperationalReview",
-  "prompt_version": "runnerops-operational-review-v1",
+  "prompt_version": "runnerops-operational-review-v2",
   "provider": {"name": "ollama", "model": "qwen3.5:9b"},
   "evidence": {
     "kind": "OperationalEvidence",
@@ -168,15 +176,20 @@ montados pelo RunnerOps; o modelo não pode fornecê-los ou substituí-los.
       "id": "F001",
       "category": "CAPACITY",
       "confidence": "high",
-      "observation": "...",
-      "inference": null,
+      "claim_kind": "BOUNDED_CURRENT_INFERENCE",
+      "observation": "Cited evidence values: /capacity/latest/available_now=5; /capacity/queue/queued_job_count=0.",
+      "inference": "The cited values support only a current-snapshot inference; historical behavior, capacity sizing, and root cause remain undetermined.",
       "recommendation": null,
-      "evidence_refs": ["/capacity/latest/available_now"]
+      "evidence_refs": [
+        "/capacity/latest/available_now",
+        "/capacity/queue/queued_job_count"
+      ]
     }
   ],
   "unknowns": [
     {
-      "summary": "...",
+      "reasons": ["historical_capacity_not_persisted"],
+      "summary": "Incomplete evidence remains unknown: historical_capacity_not_persisted.",
       "evidence_refs": ["/incomplete_evidence/0/reason"]
     }
   ],
@@ -194,6 +207,20 @@ Confiança aceita: `low`, `medium` e `high`. Há no máximo 2 findings, 6
 unknowns e 20 referências por item; textos têm no máximo 2000 caracteres. Todo
 finding e unknown exige pelo menos uma referência.
 
+O modelo não fornece `observation`, `inference`, `recommendation` ou `summary`.
+Sua resposta contém somente IDs, categoria, confiança, `claim_kind`, motivos
+estruturados e referências folha. RunnerOps deriva a prosa do artefato depois da
+validação. Os `claim_kind` aceitos são:
+
+- `EVIDENCE_OBSERVATION`: enumeração literal dos valores citados;
+- `BOUNDED_CURRENT_INFERENCE`: inferência explicitamente limitada ao snapshot;
+- `BOUNDED_PERIOD_INFERENCE`: inferência explicitamente limitada ao período.
+
+Não existem classes V1 para `CAPACITY_SIZING`, `HISTORICAL_TREND` ou
+`ROOT_CAUSE`. Toda recomendação é `null`. Assim, mudar `category` não permite
+converter snapshot ocioso em sizing, overprovisioning, redução de runners ou
+causa raiz.
+
 Referências são JSON Pointer RFC 6901 e precisam resolver no documento exato
 serializado. Sintaxe inválida, índice de array inválido ou caminho inexistente
 rejeita a resposta completa. Saídas malformadas nunca viram review parcial.
@@ -203,18 +230,11 @@ seus valores exatos, exigindo que o modelo copie referências desse índice. O
 resolve cada referência contra a evidência original; o catálogo não concede
 confiança ao output do modelo.
 
-Cada entrada de `incomplete_evidence` precisa ser citada em `unknowns`. Quando a
-fila atual é zero e `historical_utilization` é `null`, recomendações de
-`CAPACITY` ou `AUTOSCALE` são rejeitadas: essa combinação não prova sizing,
-subutilização ou overprovisioning. Nesse cenário o schema enviado ao provider
-também restringe `recommendation` a `null`, evitando gerar uma saída sabidamente
-inválida; o validator continua sendo a barreira autoritativa.
-Findings sustentados somente por `incomplete_evidence` precisam ser da categoria
-`EVIDENCE`, sem recomendação, e os gaps continuam obrigatórios em `unknowns`.
-Assim, falta de evidência pode ser diagnosticada, mas não convertida em ação de
-capacidade/autoscale. Quando o texto usa um nome de campo identificável, como
-`runner_list_calls` ou sua forma legível `runner list calls`, o finding precisa
-citar esse campo explicitamente.
+Cada entrada de `incomplete_evidence` precisa ser citada pelo pointer exato
+`/incomplete_evidence/N/reason`. O campo estruturado `reasons` precisa coincidir
+exatamente com os valores citados; `summary` é derivado pelo RunnerOps. O modelo
+não pode citar um gap e negar sua incerteza em prosa livre. Findings sustentados
+somente por gaps precisam ser `EVIDENCE`.
 
 ## Source map e validação
 
@@ -224,8 +244,10 @@ citar esse campo explicitamente.
 | `evidence.period` | `/period/from`, `/period/to` | RunnerOps | contrato inclusive/exclusive de v1 |
 | `evidence.sha256` | bytes JSON canônicos completos | RunnerOps | SHA-256 lowercase de 64 hex |
 | `provider` e `prompt_version` | configuração CLI e constante do produto | RunnerOps | providers/model/prompt permitidos |
-| `findings.*` | resposta do modelo | modelo | schema, vocabulário, limites e refs existentes |
-| `unknowns.*` | resposta do modelo | modelo | schema, limites e refs existentes |
+| `findings.id/category/confidence/claim_kind/refs` | resposta do modelo | modelo, sob enum e refs folha | schema, tipos, vocabulário, limites e pré-requisitos do claim |
+| `findings.observation/inference/recommendation` | derivação determinística | RunnerOps | recomputada na validação; recommendation null-only |
+| `unknowns.reasons/refs` | resposta estruturada do modelo | modelo, sob valores exatos da evidência | cada gap obrigatório e reason exato |
+| `unknowns.summary` | derivação determinística | RunnerOps | recomputada na validação |
 | `usage.input_tokens/output_tokens` | campos do provider, quando presentes | provider | inteiro não negativo ou `null` |
 | `usage.latency_ms` | relógio monotônico ao redor da chamada | RunnerOps | inteiro não negativo |
 | `usage.provider_cost` | header explícito `x-litellm-response-cost` | LiteLLM | número finito não negativo ou `null` |
@@ -236,12 +258,16 @@ RunnerOps não calcula custo com tabelas de preço. Ollama fornece contagens
 
 ## Falhas e privacidade
 
-Timeout, conexão recusada, auth, modelo/endpoint ausente, HTTP 4xx/5xx, JSON
+Timeout, conexão recusada, auth, modelo/endpoint ausente, redirect HTTP, HTTP 4xx/5xx, JSON
 malformado, resposta grande demais, review inválido e referência inexistente
 falham fechados. O exit code é 2 para configuração/argumentos e 3 para falha de
 runtime/provider/validação. Não há traceback para falhas esperadas. JSON usa um
 único envelope `OperationalReviewError`; mensagens não incluem body bruto,
 Authorization ou chave.
+
+Strings de evidência e campos estruturados rejeitam C0/C1, ESC, DEL, quebras de
+linha, separadores de linha/parágrafo e controles Unicode de formatação/bidi.
+A prosa derivada também é validada antes de entrar no artefato ou terminal.
 
 O gateway LiteLLM pode ter logging próprio. Quem o opera é responsável por
 configurar retenção, redaction e o upstream adequado ao nível de sensibilidade
@@ -251,8 +277,8 @@ do gateway.
 ## Limitações V1
 
 - uma chamada e uma resposta; sem retry, fallback, tools, agentes ou drill-down;
-- nenhuma avaliação automática da qualidade semântica além de grounding por
-  referências e schema;
+- V1 privilegia segurança: apenas observações e inferências bounded são
+  representáveis; não há prosa livre do modelo, sizing, causa raiz ou recomendação;
 - disponibilidade histórica ausente deve permanecer unknown; capacidade atual
   ociosa não prova overprovisioning;
 - sem benchmark multi-model, memória, RAG, embeddings ou banco adicional;

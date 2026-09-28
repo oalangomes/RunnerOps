@@ -14,14 +14,15 @@ import re
 import socket
 import sys
 import time
+import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from operational_report import COLLECTOR_FIELDS, build_report, duration
 
 
-PROMPT_VERSION = "runnerops-operational-review-v1"
+PROMPT_VERSION = "runnerops-operational-review-v2"
 REVIEW_SCHEMA_VERSION = 1
 MAX_EVIDENCE_BYTES = 256 * 1024
 MAX_PROVIDER_RESPONSE_BYTES = 128 * 1024
@@ -36,6 +37,20 @@ DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 DEFAULT_LITELLM_BASE_URL = "http://127.0.0.1:4000"
 ALLOWED_CATEGORIES = frozenset({"CI", "CAPACITY", "AUTOSCALE", "COLLECTOR", "EVIDENCE"})
 ALLOWED_CONFIDENCE = frozenset({"low", "medium", "high"})
+ALLOWED_CLAIM_KINDS = frozenset({
+    "EVIDENCE_OBSERVATION",
+    "BOUNDED_CURRENT_INFERENCE",
+    "BOUNDED_PERIOD_INFERENCE",
+})
+CURRENT_EVIDENCE_PREFIXES = (
+    "/ci/",
+    "/capacity/observed_at",
+    "/capacity/status",
+    "/capacity/latest/",
+    "/capacity/queue/",
+    "/collector/",
+)
+PERIOD_EVIDENCE_PREFIXES = ("/period/", "/autoscale/")
 SECRET_KEY_PARTS = (
     "authorization", "credential", "password", "token", "secret",
     "stderr", "raw_log", "rawlog", "environment", "api_key", "apikey",
@@ -51,29 +66,21 @@ Reason only from the supplied OperationalEvidence. Do not fetch more context or 
 Do not assume absent facts. Null means unknown or unavailable, never zero.
 Treat incomplete_evidence as a constraint on every conclusion. Do not turn a current observation
 into a historical claim. Do not present correlation as root cause. Missing evidence must become an
-explicit unknown, not a guess. Recommendations must be advisory and supported by cited evidence.
+explicit unknown, not a guess.
 Never propose that you executed a command or mutated infrastructure. RunnerOps deterministic
 policy, planner, and controller remain authoritative.
 
-Prefer a null recommendation unless the evidence proves a concrete actionable problem. A zero,
-null, empty collection, or single current observation does not by itself prove malfunction,
-misconfiguration, underuse, or overprovisioning. When historical utilization is null or history is
-listed in incomplete_evidence, state that capacity sizing is unknown. Do not recommend scaling the
-pool, changing thresholds/configuration, or adding persistence solely because history is missing.
-Represent every incomplete_evidence item in unknowns with a pointer to that exact array item or one
-of its fields. Do not turn an incomplete_evidence item into an actionable finding.
+Do not write finding or unknown prose. RunnerOps derives all human-readable text from the validated
+claim_kind, exact evidence leaf values, and incomplete_evidence reasons. V1 has no recommendation
+field in the model response and never accepts model-authored capacity changes. Use only the
+claim_kind values allowed by the response schema. They describe exact evidence observation, a
+current-snapshot-bounded inference, or period-bounded activity; none establishes capacity sizing,
+historical trends, overprovisioning, or root cause.
 
-Separate each finding into observation, nullable inference, and nullable recommendation. Every
-finding needs at least one JSON Pointer in evidence_refs. Every pointer must identify an existing
-value in the exact evidence document. Use only these categories: CI, CAPACITY, AUTOSCALE,
-COLLECTOR, EVIDENCE. If any text names an evidence field identifier, or its human-readable form,
-such as runner_list_calls / runner list calls or available_now / available now, evidence_refs must
-include the exact pointer to that named field.
-Before returning JSON, scan every finding's observation, inference, and recommendation. For each
-field name used there, copy its matching pointer from the leaf index into that finding's
-evidence_refs. For example, text saying busy capacity must cite the leaf ending /busy_capacity.
-Use only these confidence values: low, medium, high. Return at most 2
-findings and 6 unknowns."""
+Every finding needs at least one JSON Pointer copied verbatim from the supplied leaf index. Use only
+the categories and confidence values allowed by the response schema. Every incomplete_evidence item
+must be represented in unknowns by its exact /incomplete_evidence/N/reason pointer and exact reason
+value. Return at most 2 findings and 6 unknown groups."""
 
 
 MODEL_RESPONSE_SCHEMA = {
@@ -90,17 +97,14 @@ MODEL_RESPONSE_SCHEMA = {
                     "id": {"type": "string", "pattern": "^F[0-9]{3}$"},
                     "category": {"type": "string", "enum": sorted(ALLOWED_CATEGORIES)},
                     "confidence": {"type": "string", "enum": sorted(ALLOWED_CONFIDENCE)},
-                    "observation": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_LENGTH},
-                    "inference": {"type": ["string", "null"], "maxLength": MAX_TEXT_LENGTH},
-                    "recommendation": {"type": ["string", "null"], "maxLength": MAX_TEXT_LENGTH},
+                    "claim_kind": {"type": "string", "enum": sorted(ALLOWED_CLAIM_KINDS)},
                     "evidence_refs": {
                         "type": "array", "minItems": 1, "maxItems": MAX_REFS,
                         "items": {"type": "string", "maxLength": 512},
                     },
                 },
                 "required": [
-                    "id", "category", "confidence", "observation", "inference",
-                    "recommendation", "evidence_refs",
+                    "id", "category", "confidence", "claim_kind", "evidence_refs",
                 ],
             },
         },
@@ -111,13 +115,16 @@ MODEL_RESPONSE_SCHEMA = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "summary": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_LENGTH},
+                    "reasons": {
+                        "type": "array", "minItems": 1, "maxItems": MAX_REFS,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 256},
+                    },
                     "evidence_refs": {
                         "type": "array", "minItems": 1, "maxItems": MAX_REFS,
                         "items": {"type": "string", "maxLength": 512},
                     },
                 },
-                "required": ["summary", "evidence_refs"],
+                "required": ["reasons", "evidence_refs"],
             },
         },
     },
@@ -127,11 +134,19 @@ MODEL_RESPONSE_SCHEMA = {
 
 def model_response_schema(evidence):
     schema = copy.deepcopy(MODEL_RESPONSE_SCHEMA)
-    if evidence.get("incomplete_evidence"):
-        schema["properties"]["unknowns"]["minItems"] = 1
-    queue = evidence.get("capacity", {}).get("queue") or {}
-    if queue.get("queued_job_count") == 0 and evidence.get("capacity", {}).get("historical_utilization") is None:
-        schema["properties"]["findings"]["items"]["properties"]["recommendation"] = {"type": "null"}
+    leaf_pointers = evidence_leaf_pointers(evidence)
+    schema["properties"]["findings"]["items"]["properties"]["evidence_refs"]["items"]["enum"] = leaf_pointers
+    incomplete = evidence.get("incomplete_evidence") or []
+    unknown_schema = schema["properties"]["unknowns"]
+    if incomplete:
+        unknown_schema["minItems"] = 1
+        item = unknown_schema["items"]["properties"]
+        item["reasons"]["items"]["enum"] = sorted({gap["reason"] for gap in incomplete})
+        item["evidence_refs"]["items"]["enum"] = [
+            f"/incomplete_evidence/{index}/reason" for index in range(len(incomplete))
+        ]
+    else:
+        unknown_schema["maxItems"] = 0
     return schema
 
 
@@ -186,6 +201,21 @@ def _expect_string(value, where, *, nullable=False, maximum=MAX_TEXT_LENGTH, cod
         _fail(code, f"{where} must be a non-empty string no longer than {maximum} characters")
 
 
+def _validate_safe_text(value, where, *, code="REVIEW_VALIDATION_FAILED"):
+    for character in value:
+        if unicodedata.category(character) in {"Cc", "Cf", "Zl", "Zp"}:
+            _fail(code, f"{where} contains terminal-unsafe control characters")
+    return value
+
+
+def _expect_safe_string(value, where, *, nullable=False, maximum=MAX_TEXT_LENGTH,
+                        code="REVIEW_VALIDATION_FAILED"):
+    _expect_string(value, where, nullable=nullable, maximum=maximum, code=code)
+    if value is not None:
+        _validate_safe_text(value, where, code=code)
+    return value
+
+
 def _normalized_key(key):
     return re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
 
@@ -195,6 +225,8 @@ def _reject_secret_fields(value, path=""):
         for key, child in value.items():
             if not isinstance(key, str):
                 _fail("INVALID_OPERATIONAL_EVIDENCE", f"non-string object key at {path or '/'}")
+            _validate_safe_text(key, f"OperationalEvidence key at {path or '/'}",
+                                code="INVALID_OPERATIONAL_EVIDENCE")
             normalized = _normalized_key(key)
             if normalized in SECRET_KEY_WORDS or any(part in normalized for part in SECRET_KEY_PARTS):
                 _fail("UNSAFE_OPERATIONAL_EVIDENCE", f"secret-bearing field is not allowed at {path or '/'}")
@@ -202,8 +234,11 @@ def _reject_secret_fields(value, path=""):
     elif isinstance(value, list):
         for index, child in enumerate(value):
             _reject_secret_fields(child, f"{path}/{index}")
-    elif isinstance(value, str) and len(value) > 16_384:
-        _fail("INVALID_OPERATIONAL_EVIDENCE", f"oversized string at {path or '/'}")
+    elif isinstance(value, str):
+        if len(value) > 16_384:
+            _fail("INVALID_OPERATIONAL_EVIDENCE", f"oversized string at {path or '/'}")
+        _validate_safe_text(value, f"OperationalEvidence string at {path or '/'}",
+                            code="INVALID_OPERATIONAL_EVIDENCE")
 
 
 def _validate_count_map(value, where):
@@ -330,7 +365,6 @@ def validate_operational_evidence(evidence):
         _expect_string(item["source"], f"incomplete_evidence[{index}].source", maximum=256)
         _expect_string(item["reason"], f"incomplete_evidence[{index}].reason", maximum=256)
 
-    canonical_evidence_bytes(evidence)
     return evidence
 
 
@@ -442,23 +476,37 @@ def _coerce_cost(value):
     return number if math.isfinite(number) and number >= 0 else None
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        del request, file_pointer, code, message, headers, new_url
+        return None
+
+
+def _provider_urlopen(request, *, timeout):
+    return build_opener(_RejectRedirects()).open(request, timeout=timeout)
+
+
 def _post_json(url, payload, *, timeout, headers=None):
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request_headers = {"Content-Type": "application/json", "Accept": "application/json"}
     request_headers.update(headers or {})
     request = Request(url, data=body, headers=request_headers, method="POST")
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with _provider_urlopen(request, timeout=timeout) as response:
             raw = response.read(MAX_PROVIDER_RESPONSE_BYTES + 1)
             response_headers = response.headers
     except HTTPError as exc:
-        if exc.code in {401, 403}:
+        status = exc.code
+        exc.close()
+        if 300 <= status < 400:
+            _fail("PROVIDER_REDIRECT_REJECTED", "provider redirects are not allowed")
+        if status in {401, 403}:
             _fail("PROVIDER_AUTHENTICATION_FAILED", "provider rejected authentication")
-        if exc.code == 404:
+        if status == 404:
             _fail("PROVIDER_MODEL_UNAVAILABLE", "provider endpoint or requested model was not found")
-        if 400 <= exc.code < 500:
-            _fail("PROVIDER_REQUEST_FAILED", f"provider returned HTTP {exc.code}")
-        _fail("PROVIDER_UNAVAILABLE", f"provider returned HTTP {exc.code}")
+        if 400 <= status < 500:
+            _fail("PROVIDER_REQUEST_FAILED", f"provider returned HTTP {status}")
+        _fail("PROVIDER_UNAVAILABLE", f"provider returned HTTP {status}")
     except (socket.timeout, TimeoutError):
         _fail("PROVIDER_TIMEOUT", "provider request timed out")
     except URLError as exc:
@@ -492,7 +540,17 @@ def _classify_ollama_model(metadata):
     if remote:
         return "cloud"
     model_info = metadata.get("model_info")
-    if isinstance(model_info, dict) and model_info:
+    if not isinstance(model_info, dict):
+        _fail(
+            "OLLAMA_MODEL_LOCATION_UNKNOWN",
+            "Ollama did not provide enough metadata to prove that the selected model is local",
+        )
+    architecture = model_info.get("general.architecture")
+    if isinstance(architecture, str) and architecture.strip():
+        _validate_safe_text(
+            architecture, "Ollama model_info.general.architecture",
+            code="OLLAMA_MODEL_LOCATION_UNKNOWN",
+        )
         return "local"
     _fail(
         "OLLAMA_MODEL_LOCATION_UNKNOWN",
@@ -630,13 +688,94 @@ def resolve_json_pointer(document, pointer):
     return current
 
 
-def _validate_refs(refs, evidence, where):
+def _validate_refs(refs, evidence, where, *, require_leaf=False):
     if not isinstance(refs, list) or not refs or len(refs) > MAX_REFS:
         _fail("REVIEW_VALIDATION_FAILED", f"{where}.evidence_refs must contain 1..{MAX_REFS} pointers")
+    for index, pointer in enumerate(refs):
+        _expect_safe_string(
+            pointer, f"{where}.evidence_refs[{index}]", maximum=512,
+            code="REVIEW_VALIDATION_FAILED",
+        )
     if len(set(refs)) != len(refs):
         _fail("REVIEW_VALIDATION_FAILED", f"{where}.evidence_refs contains duplicates")
+    leaf_pointers = set(evidence_leaf_pointers(evidence)) if require_leaf else None
     for pointer in refs:
         resolve_json_pointer(evidence, pointer)
+        if leaf_pointers is not None and pointer not in leaf_pointers:
+            _fail("REVIEW_VALIDATION_FAILED", f"{where}.evidence_refs must cite exact leaf values")
+
+
+def _expect_enum(value, allowed, where):
+    _expect_safe_string(value, where, maximum=256, code="REVIEW_VALIDATION_FAILED")
+    if value not in allowed:
+        _fail("REVIEW_VALIDATION_FAILED", f"{where} is invalid")
+
+
+def _validate_claim_scope(finding, where):
+    claim_kind = finding["claim_kind"]
+    refs = finding["evidence_refs"]
+    if claim_kind == "BOUNDED_CURRENT_INFERENCE" and not any(
+            pointer.startswith(CURRENT_EVIDENCE_PREFIXES) for pointer in refs):
+        _fail(
+            "REVIEW_VALIDATION_FAILED",
+            f"{where}.claim_kind requires current-state evidence",
+        )
+    if claim_kind == "BOUNDED_PERIOD_INFERENCE" and not any(
+            pointer.startswith(PERIOD_EVIDENCE_PREFIXES) for pointer in refs):
+        _fail(
+            "REVIEW_VALIDATION_FAILED",
+            f"{where}.claim_kind requires bounded-period evidence",
+        )
+
+
+def _format_evidence_value(value):
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _derived_finding_text(finding, evidence):
+    values = "; ".join(
+        f"{pointer}={_format_evidence_value(resolve_json_pointer(evidence, pointer))}"
+        for pointer in finding["evidence_refs"]
+    )
+    observation = f"Cited evidence values: {values}."
+    inference = None
+    if finding["claim_kind"] == "BOUNDED_CURRENT_INFERENCE":
+        inference = (
+            "The cited values support only a current-snapshot inference; historical behavior, "
+            "capacity sizing, and root cause remain undetermined."
+        )
+    elif finding["claim_kind"] == "BOUNDED_PERIOD_INFERENCE":
+        inference = (
+            "The cited values support only an inference within the bounded evidence period; "
+            "capacity sizing and root cause remain undetermined."
+        )
+    _expect_safe_string(observation, "derived finding observation", code="REVIEW_VALIDATION_FAILED")
+    _expect_safe_string(
+        inference, "derived finding inference", nullable=True, code="REVIEW_VALIDATION_FAILED",
+    )
+    return observation, inference, None
+
+
+def _derived_unknown_summary(unknown):
+    summary = "Incomplete evidence remains unknown: " + ", ".join(unknown["reasons"]) + "."
+    _expect_safe_string(summary, "derived unknown summary", code="REVIEW_VALIDATION_FAILED")
+    return summary
+
+
+def _materialize_model_response(value, evidence):
+    findings = []
+    for item in value["findings"]:
+        observation, inference, recommendation = _derived_finding_text(item, evidence)
+        findings.append({
+            **item,
+            "observation": observation,
+            "inference": inference,
+            "recommendation": recommendation,
+        })
+    unknowns = [
+        {**item, "summary": _derived_unknown_summary(item)} for item in value["unknowns"]
+    ]
+    return {"findings": findings, "unknowns": unknowns}
 
 
 def validate_model_response(value, evidence):
@@ -654,85 +793,68 @@ def validate_model_response(value, evidence):
         where = f"findings[{index}]"
         _expect_keys(
             finding,
-            {"id", "category", "confidence", "observation", "inference", "recommendation", "evidence_refs"},
+            {"id", "category", "confidence", "claim_kind", "evidence_refs"},
             where=where, code="REVIEW_VALIDATION_FAILED",
         )
-        if not isinstance(finding["id"], str) or not re.fullmatch(r"F[0-9]{3}", finding["id"]):
+        _expect_safe_string(
+            finding["id"], f"{where}.id", maximum=4, code="REVIEW_VALIDATION_FAILED",
+        )
+        if not re.fullmatch(r"F[0-9]{3}", finding["id"]):
             _fail("REVIEW_VALIDATION_FAILED", f"{where}.id must match FNNN")
         if finding["id"] in finding_ids:
             _fail("REVIEW_VALIDATION_FAILED", "finding ids must be unique")
         finding_ids.add(finding["id"])
-        if finding["category"] not in ALLOWED_CATEGORIES:
-            _fail("REVIEW_VALIDATION_FAILED", f"{where}.category is invalid")
-        if finding["confidence"] not in ALLOWED_CONFIDENCE:
-            _fail("REVIEW_VALIDATION_FAILED", f"{where}.confidence is invalid")
-        _expect_string(
-            finding["observation"], f"{where}.observation", code="REVIEW_VALIDATION_FAILED",
-        )
-        for field in ("inference", "recommendation"):
-            _expect_string(
-                finding[field], f"{where}.{field}", nullable=True, code="REVIEW_VALIDATION_FAILED",
-            )
-        _validate_refs(finding["evidence_refs"], evidence, where)
+        _expect_enum(finding["category"], ALLOWED_CATEGORIES, f"{where}.category")
+        _expect_enum(finding["confidence"], ALLOWED_CONFIDENCE, f"{where}.confidence")
+        _expect_enum(finding["claim_kind"], ALLOWED_CLAIM_KINDS, f"{where}.claim_kind")
+        _validate_refs(finding["evidence_refs"], evidence, where, require_leaf=True)
+        _validate_claim_scope(finding, where)
         only_incomplete = all(
             pointer.startswith("/incomplete_evidence/") for pointer in finding["evidence_refs"]
         )
-        if only_incomplete and (
-            finding["category"] != "EVIDENCE" or finding["recommendation"] is not None
-        ):
+        if only_incomplete and finding["category"] != "EVIDENCE":
             _fail(
                 "REVIEW_VALIDATION_FAILED",
-                f"{where} cannot turn incomplete evidence into a non-EVIDENCE or actionable finding",
+                f"{where} cannot turn incomplete evidence into a non-EVIDENCE finding",
             )
-        cited_fields = {_decode_pointer_token(pointer.rsplit("/", 1)[-1]) for pointer in finding["evidence_refs"]}
-        finding_text = " ".join(
-            text for text in (finding["observation"], finding["inference"], finding["recommendation"])
-            if text
-        )
-        evidence_fields = set()
-        for pointer in evidence_leaf_index(evidence):
-            field = _decode_pointer_token(pointer.rsplit("/", 1)[-1])
-            if "_" in field:
-                evidence_fields.add(field)
-        for field in evidence_fields:
-            identifier_used = re.search(
-                rf"(?<![A-Za-z0-9_]){re.escape(field)}(?![A-Za-z0-9_])", finding_text,
-            )
-            readable_used = re.search(
-                rf"(?<![A-Za-z0-9]){re.escape(field.replace('_', ' '))}(?![A-Za-z0-9])",
-                finding_text, flags=re.IGNORECASE,
-            )
-            if (identifier_used or readable_used) and field not in cited_fields:
-                _fail(
-                    "REVIEW_VALIDATION_FAILED",
-                    f"{where} mentions {field} without citing that field",
-                )
     for index, unknown in enumerate(unknowns):
         where = f"unknowns[{index}]"
         _expect_keys(
-            unknown, {"summary", "evidence_refs"}, where=where, code="REVIEW_VALIDATION_FAILED",
+            unknown, {"reasons", "evidence_refs"}, where=where, code="REVIEW_VALIDATION_FAILED",
         )
-        _expect_string(unknown["summary"], f"{where}.summary", code="REVIEW_VALIDATION_FAILED")
-        _validate_refs(unknown["evidence_refs"], evidence, where)
+        reasons = unknown["reasons"]
+        if not isinstance(reasons, list) or not reasons or len(reasons) > MAX_REFS:
+            _fail("REVIEW_VALIDATION_FAILED", f"{where}.reasons must contain 1..{MAX_REFS} values")
+        for reason_index, reason in enumerate(reasons):
+            _expect_safe_string(
+                reason, f"{where}.reasons[{reason_index}]", maximum=256,
+                code="REVIEW_VALIDATION_FAILED",
+            )
+        if len(set(reasons)) != len(reasons):
+            _fail("REVIEW_VALIDATION_FAILED", f"{where}.reasons contains duplicates")
+        _validate_refs(unknown["evidence_refs"], evidence, where, require_leaf=True)
+        expected_reasons = []
+        for pointer in unknown["evidence_refs"]:
+            if not re.fullmatch(r"/incomplete_evidence/(0|[1-9][0-9]*)/reason", pointer):
+                _fail(
+                    "REVIEW_VALIDATION_FAILED",
+                    f"{where}.evidence_refs must cite exact incomplete_evidence reason fields",
+                )
+            expected_reasons.append(resolve_json_pointer(evidence, pointer))
+        if set(reasons) != set(expected_reasons):
+            _fail(
+                "REVIEW_VALIDATION_FAILED",
+                f"{where}.reasons must exactly match the cited incomplete evidence",
+            )
     incomplete = evidence["incomplete_evidence"]
     unknown_refs = {pointer for unknown in unknowns for pointer in unknown["evidence_refs"]}
     for index in range(len(incomplete)):
-        prefix = f"/incomplete_evidence/{index}"
-        if not any(pointer == prefix or pointer.startswith(prefix + "/") for pointer in unknown_refs):
+        required_pointer = f"/incomplete_evidence/{index}/reason"
+        if required_pointer not in unknown_refs:
             _fail(
                 "REVIEW_VALIDATION_FAILED",
-                f"unknowns must cite incomplete evidence item: {prefix}",
+                f"unknowns must cite incomplete evidence item: /incomplete_evidence/{index}",
             )
-    current_queue = evidence["capacity"]["queue"] or {}
-    no_current_pressure = current_queue.get("queued_job_count") == 0
-    missing_capacity_history = evidence["capacity"]["historical_utilization"] is None
-    if no_current_pressure and missing_capacity_history:
-        for finding in findings:
-            if finding["category"] in {"CAPACITY", "AUTOSCALE"} and finding["recommendation"] is not None:
-                _fail(
-                    "REVIEW_VALIDATION_FAILED",
-                    "capacity/autoscale recommendation requires more than zero current queue and missing history",
-                )
     return value
 
 
@@ -772,7 +894,7 @@ def build_review(evidence, *, provider, model, base_url=None, timeout=DEFAULT_TI
                  api_key=None, provider_call=None, ollama_inspect_call=None):
     if provider not in {"ollama", "litellm"}:
         _fail("INVALID_PROVIDER_CONFIGURATION", "provider must be ollama or litellm", exit_code=2)
-    _expect_string(model, "model", maximum=256, code="INVALID_PROVIDER_CONFIGURATION")
+    _expect_safe_string(model, "model", maximum=256, code="INVALID_PROVIDER_CONFIGURATION")
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0 or timeout > 3600:
         _fail("INVALID_PROVIDER_CONFIGURATION", "timeout must be in the range (0, 3600]", exit_code=2)
     if not _is_int(max_output_tokens) or not 64 <= max_output_tokens <= 8192:
@@ -807,10 +929,11 @@ def build_review(evidence, *, provider, model, base_url=None, timeout=DEFAULT_TI
     if not isinstance(provider_response.content, str):
         _fail("PROVIDER_RESPONSE_INVALID", "provider adapter returned invalid model content")
     model_value = _parse_model_content(provider_response.content, evidence)
+    materialized = _materialize_model_response(model_value, evidence)
     review = _review_metadata(evidence, provider, model, digest)
     review.update({
-        "findings": model_value["findings"],
-        "unknowns": model_value["unknowns"],
+        "findings": materialized["findings"],
+        "unknowns": materialized["unknowns"],
         "usage": {
             "input_tokens": _coerce_usage(provider_response.input_tokens),
             "output_tokens": _coerce_usage(provider_response.output_tokens),
@@ -832,9 +955,13 @@ def validate_operational_review(review, evidence):
     if review["prompt_version"] != PROMPT_VERSION:
         _fail("REVIEW_VALIDATION_FAILED", "unexpected prompt version")
     _expect_keys(review["provider"], {"name", "model"}, where="provider", code="REVIEW_VALIDATION_FAILED")
+    _expect_safe_string(
+        review["provider"]["name"], "provider.name", maximum=32,
+        code="REVIEW_VALIDATION_FAILED",
+    )
     if review["provider"]["name"] not in {"ollama", "litellm"}:
         _fail("REVIEW_VALIDATION_FAILED", "review provider is invalid")
-    _expect_string(
+    _expect_safe_string(
         review["provider"]["model"], "provider.model", maximum=256,
         code="REVIEW_VALIDATION_FAILED",
     )
@@ -842,7 +969,8 @@ def validate_operational_review(review, evidence):
         review["evidence"], {"kind", "schema_version", "sha256", "period", "repository"},
         where="evidence metadata", code="REVIEW_VALIDATION_FAILED",
     )
-    if not re.fullmatch(r"[0-9a-f]{64}", review["evidence"]["sha256"]):
+    if not isinstance(review["evidence"]["sha256"], str) or not re.fullmatch(
+            r"[0-9a-f]{64}", review["evidence"]["sha256"]):
         _fail("REVIEW_VALIDATION_FAILED", "evidence sha256 is invalid")
     expected = _review_metadata(
         evidence, review["provider"]["name"], review["provider"]["model"],
@@ -863,7 +991,51 @@ def validate_operational_review(review, evidence):
     cost = review["usage"]["provider_cost"]
     if cost is not None and _coerce_cost(cost) is None:
         _fail("REVIEW_VALIDATION_FAILED", "usage.provider_cost must be null or non-negative")
-    validate_model_response({"findings": review["findings"], "unknowns": review["unknowns"]}, evidence)
+    if not isinstance(review["findings"], list) or not isinstance(review["unknowns"], list):
+        _fail("REVIEW_VALIDATION_FAILED", "review findings and unknowns must be arrays")
+    structured_findings = []
+    for index, finding in enumerate(review["findings"]):
+        where = f"OperationalReview.findings[{index}]"
+        _expect_keys(
+            finding,
+            {"id", "category", "confidence", "claim_kind", "observation", "inference",
+             "recommendation", "evidence_refs"},
+            where=where, code="REVIEW_VALIDATION_FAILED",
+        )
+        _expect_safe_string(
+            finding["observation"], f"{where}.observation", code="REVIEW_VALIDATION_FAILED",
+        )
+        _expect_safe_string(
+            finding["inference"], f"{where}.inference", nullable=True,
+            code="REVIEW_VALIDATION_FAILED",
+        )
+        if finding["recommendation"] is not None:
+            _fail("REVIEW_VALIDATION_FAILED", f"{where}.recommendation must be null in V1")
+        structured_findings.append({
+            key: finding[key] for key in
+            ("id", "category", "confidence", "claim_kind", "evidence_refs")
+        })
+    structured_unknowns = []
+    for index, unknown in enumerate(review["unknowns"]):
+        where = f"OperationalReview.unknowns[{index}]"
+        _expect_keys(
+            unknown, {"reasons", "summary", "evidence_refs"},
+            where=where, code="REVIEW_VALIDATION_FAILED",
+        )
+        _expect_safe_string(
+            unknown["summary"], f"{where}.summary", code="REVIEW_VALIDATION_FAILED",
+        )
+        structured_unknowns.append({
+            key: unknown[key] for key in ("reasons", "evidence_refs")
+        })
+    structured = validate_model_response(
+        {"findings": structured_findings, "unknowns": structured_unknowns}, evidence,
+    )
+    expected_materialized = _materialize_model_response(structured, evidence)
+    if review["findings"] != expected_materialized["findings"]:
+        _fail("REVIEW_VALIDATION_FAILED", "review finding text is not RunnerOps-derived")
+    if review["unknowns"] != expected_materialized["unknowns"]:
+        _fail("REVIEW_VALIDATION_FAILED", "review unknown text is not RunnerOps-derived")
     return review
 
 

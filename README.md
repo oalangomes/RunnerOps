@@ -440,9 +440,13 @@ planejamento read-only e leitura do histórico. As mutações locais governadas 
 `OperationalEvidence v1`, cita caminhos JSON Pointer existentes e nunca executa
 ações. O modo live reutiliza exatamente o builder de `report`; `--evidence`
 reproduz um artefato congelado sem nova coleta. Em Ollama, somente endpoint
-loopback com modelo confirmado local por `/api/show` dispensa consentimento;
+loopback com `model_info.general.architecture` não vazio confirmado por
+`/api/show` dispensa consentimento;
 Ollama Cloud e qualquer endpoint não-loopback exigem `--allow-remote` antes do
-envio da evidência. Endpoints podem ser definidos por
+envio da evidência. Redirects HTTP de providers são sempre rejeitados. O modelo
+retorna somente claims estruturados e referências folha; RunnerOps deriva a
+prosa, mantém recommendations nulas e representa cada gap por seu reason exato.
+Endpoints podem ser definidos por
 `RUNNEROPS_OLLAMA_BASE_URL` no `~/.config/actions-runners/config.env`. LiteLLM é
 um gateway externo opcional e também exige `--allow-remote` e
 `RUNNEROPS_LITELLM_API_KEY`. O modelo é sempre explícito. Veja o

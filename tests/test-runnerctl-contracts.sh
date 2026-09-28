@@ -243,7 +243,7 @@ test_help_and_completion_contracts() {
   local -a public_commands=(
     help init list groups status health doctor logs
     start stop restart plan migrate on-demand autostart
-    repo overview ensure add remove capacity autoscale
+    repo overview ensure add remove capacity report review autoscale
     package ci skills platform-home platform-authorize platform-doctor
     completion --version
   )
@@ -299,6 +299,7 @@ test_help_and_completion_contracts() {
   )"
   assert_contains "$output" "complete -F _runnerctl_completion runnerctl" "completion bash deve ser gerada sem dependência externa"
   assert_contains "$output" "autoscale" "completion deve listar comandos públicos"
+  assert_contains "$output" "review" "completion deve listar o review AI read-only"
 
   output="$(
     TEST_CALL_LOG="$log" \

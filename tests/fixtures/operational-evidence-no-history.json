@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "kind": "OperationalEvidence",
+  "period": {
+    "from": "2026-09-24T12:00:00+00:00",
+    "to": "2026-09-25T12:00:00+00:00",
+    "from_inclusive": true,
+    "to_exclusive": true
+  },
+  "repository": {
+    "requested": ".",
+    "nameWithOwner": "example/runnerops"
+  },
+  "ci": {
+    "queued_jobs_observed": 0,
+    "queue_age_seconds": {
+      "count": 0,
+      "min_seconds": null,
+      "max_seconds": null,
+      "average_seconds": null
+    },
+    "observed_at": "2026-09-25T11:59:00+00:00"
+  },
+  "capacity": {
+    "observed_at": "2026-09-25T11:59:00+00:00",
+    "status": "complete",
+    "latest": {
+      "available_now": 5,
+      "busy_capacity": 0,
+      "provisioned_idle": 0,
+      "inconclusive": 0
+    },
+    "queue": {
+      "observed_queued_job_count": 0,
+      "queued_job_count": 0
+    },
+    "historical_utilization": null
+  },
+  "autoscale": {
+    "decisions": {
+      "observed": 0,
+      "by_kind": {},
+      "reason_codes": {}
+    },
+    "actions": {
+      "observed": 0,
+      "by_kind": {},
+      "by_state": {},
+      "diagnostic_codes": {}
+    },
+    "recovery": {
+      "queue_episode_end_reasons": {}
+    },
+    "truncated": false
+  },
+  "collector": {
+    "wall_time_ms": 2800,
+    "github_calls": 6,
+    "run_list_calls": 5,
+    "job_list_calls": 0,
+    "runner_list_calls": 1,
+    "scheduler_overrun": false
+  },
+  "collection_status": "success",
+  "incomplete_evidence": [
+    {
+      "source": "capacity",
+      "reason": "historical_capacity_not_persisted"
+    },
+    {
+      "source": "ci",
+      "reason": "ci_history_not_persisted"
+    },
+    {
+      "source": "collector",
+      "reason": "historical_collector_metrics_unavailable"
+    }
+  ]
+}

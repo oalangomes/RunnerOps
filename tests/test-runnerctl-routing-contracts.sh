@@ -71,7 +71,15 @@ with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
     log.write("autoscale-scheduler:" + " ".join(sys.argv[1:]) + "\n")
 EOF
 
-  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py" "$platform/autoscale_controller.py" "$platform/autoscale_scheduler.py"
+  cat > "$platform/operational_review.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+    log.write("review:" + " ".join(sys.argv[1:]) + "\n")
+EOF
+
+  chmod +x "$platform/runners.sh" "$platform/runner-services.sh" "$platform/autoscale_planner.py" "$platform/autoscale_controller.py" "$platform/autoscale_scheduler.py" "$platform/operational_review.py"
 }
 
 run_ctl() {
@@ -243,6 +251,21 @@ test_autoscale_scheduler_routes_to_scheduler_boundary() {
   pass "autoscale scheduler preserva repo/flags e não toca lifecycle diretamente"
 }
 
+test_review_routes_to_read_only_review_boundary() {
+  local platform="$TMP_ROOT/review-platform"
+  local log="$TMP_ROOT/review.log"
+  make_fake_platform "$platform"
+  : > "$log"
+
+  run_ctl "$platform" "$log" review --evidence evidence.json --provider ollama --model fixture --json
+
+  assert_eq \
+    'review:--evidence evidence.json --provider ollama --model fixture --json' \
+    "$(cat "$log")" \
+    "runnerctl review deve preservar argumentos e usar boundary AI read-only próprio"
+  pass "review usa boundary próprio sem rotear para planner/controller/lifecycle"
+}
+
 main() {
   test_exact_runner_and_group_routing
   test_logs_follow_requires_exact_runner
@@ -252,6 +275,7 @@ main() {
   test_autoscale_plan_routes_to_read_only_planner
   test_autoscale_run_once_routes_to_governed_controller
   test_autoscale_scheduler_routes_to_scheduler_boundary
+  test_review_routes_to_read_only_review_boundary
   printf '\nContratos de routing/lifecycle passaram.\n'
 }
 

@@ -136,7 +136,7 @@ before apply and exports the internal `RUNNEROPS_EXACT_NAME` guard for the apply
 boundary. Normal human `runnerctl add` retains its useful auto-increment behavior;
 autoscale exact mode does not.
 
-If a collision appears between preview and apply, `scripts/runner/configure.sh` refuses to
+If a collision appears between preview and apply, the internal provisioning boundary refuses to
 auto-increment and atomically reserves only the exact directory. In that narrow
 race a short-lived GitHub registration token may already have been issued by
 `runnerctl`, but RunnerOps does **not** register a different identity such as

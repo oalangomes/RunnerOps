@@ -26,8 +26,7 @@ EXACT_NAME="${RUNNEROPS_EXACT_NAME:-}"
 usage() {
   cat <<'USAGE'
 Uso:
-  ./scripts/runner/configure.sh --github-line "<./config.sh --url ... --token ...>" [opcoes]
-  ./scripts/runner/configure.sh --repo-url URL --token-stdin [opcoes]
+  Helper interno chamado por runnerctl add. Interface publica: runnerctl help add.
 
 Opcoes:
   --github-line VALUE   linha copiada do GitHub com --url e --token
@@ -47,11 +46,6 @@ Opcoes:
   --work-folder VALUE   pasta de work do runner
   --replace             recria runner existente e usa --replace no config.sh
   -h, --help            mostra ajuda
-
-Exemplo:
-  ./scripts/runner/configure.sh \
-    --github-line "./config.sh --url https://github.com/example/my-api --token TOKEN" \
-    --labels "python,my-api,local-runner"
 
 Se my-api ja existir, uma nova execucao sem --replace cria my-api-2 e adiciona a label my-api-2.
 USAGE

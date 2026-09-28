@@ -7,11 +7,6 @@ RUNNEROPS_SRC_ROOT="${RUNNEROPS_SRC_ROOT:-$RUNNEROPS_PLATFORM_HOME/src}"
 RUNNEROPS_SCRIPTS_ROOT="${RUNNEROPS_SCRIPTS_ROOT:-$RUNNEROPS_PLATFORM_HOME/scripts}"
 RUNNER_RUNTIME_BASE_DIR="$RUNNEROPS_PLATFORM_HOME"
 export RUNNEROPS_PLATFORM_HOME RUNNEROPS_SRC_ROOT RUNNEROPS_SCRIPTS_ROOT
-case ":${PYTHONPATH:-}:" in
-  *":$RUNNEROPS_SRC_ROOT:"*) ;;
-  *) PYTHONPATH="$RUNNEROPS_SRC_ROOT${PYTHONPATH:+:$PYTHONPATH}" ;;
-esac
-export PYTHONPATH
 RUNNER_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}/actions-runners"
 
 # Caller-provided autoscale environment is an explicit per-invocation override.
@@ -45,6 +40,16 @@ if [[ -f "$ACTIONS_RUNNERS_ENV" ]]; then
   source "$ACTIONS_RUNNERS_ENV"
   set +a
 fi
+
+runnerops_pythonpath="$RUNNEROPS_SRC_ROOT"
+IFS=: read -r -a runnerops_pythonpath_entries <<< "${PYTHONPATH:-}"
+for runnerops_pythonpath_entry in "${runnerops_pythonpath_entries[@]}"; do
+  [[ "$runnerops_pythonpath_entry" == "$RUNNEROPS_SRC_ROOT" ]] && continue
+  runnerops_pythonpath+="${runnerops_pythonpath_entry:+:$runnerops_pythonpath_entry}"
+done
+PYTHONPATH="$runnerops_pythonpath"
+export PYTHONPATH
+unset runnerops_pythonpath runnerops_pythonpath_entries runnerops_pythonpath_entry
 
 for i in "${!RUNNEROPS_CALLER_AUTOSCALE_NAMES[@]}"; do
   name="${RUNNEROPS_CALLER_AUTOSCALE_NAMES[$i]}"

@@ -286,7 +286,7 @@ runnerctl add . \
   --runner-arch auto
 ```
 
-Para controle manual/offline do pacote, `scripts/runner/configure.sh --runner-tar ... --expected-sha256 ...` permanece disponível como escape hatch interno/avançado.
+O download, a verificação e a configuração do pacote são gerenciados internamente por `runnerctl add`; use a CLI pública em vez de chamar scripts internos.
 
 ### 5. Resultado on-demand
 

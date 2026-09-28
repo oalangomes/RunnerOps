@@ -7,7 +7,7 @@ description: Manage local GitHub Actions self-hosted runners through runnerctl. 
 
 Use `runnerctl` as the stable public interface for lifecycle and provisioning.
 
-Do not discover or call `runners.sh`, `runner-services.sh`, `configure-runner.sh`, `svc.sh` or `systemctl` directly.
+Do not discover or call RunnerOps internal scripts under `scripts/` directly. Use `runnerctl` as the public interface. Do not call `svc.sh` or `systemctl` directly.
 
 Read-only GitHub CLI/API calls are allowed only when remote runner registration/status must be verified and RunnerOps reports the remote state as inconclusive. Never use them to bypass `runnerctl add` or manually obtain a registration token.
 

@@ -295,6 +295,11 @@ jobs:
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" capacity .
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" autoscale status .
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" autoscale plan .
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" report . --since 24h
 
       - name: Exercise current checkout CI feedback bridge
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'

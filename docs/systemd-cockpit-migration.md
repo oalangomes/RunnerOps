@@ -113,7 +113,7 @@ Não exponha a porta administrativa diretamente à internet pública. Prefira VP
 
 ## Ambiente de cache
 
-`scripts/runner/services.sh` materializa as variáveis de cache em:
+A integração interna de serviços materializa as variáveis de cache em:
 
 ```text
 ${XDG_STATE_HOME:-~/.local/state}/actions-runners/service-env/<runner>.env
@@ -129,13 +129,7 @@ Esses artefatos são locais da máquina e não são versionados.
 
 ## Rollback de migração
 
-Para remover somente a integração systemd durante uma migração avançada:
-
-```bash
-./scripts/runner/services.sh uninstall my-api
-```
-
-Esse comando interno preserva o registro no GitHub e o diretório do runner.
+Não há uma operação pública RunnerOps para remover somente a integração systemd. Scripts internos não devem ser chamados diretamente, e a remoção governada abaixo tem escopo mais amplo.
 
 Para remoção governada da plataforma, prefira a interface pública:
 

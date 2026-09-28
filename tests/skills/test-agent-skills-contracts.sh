@@ -19,9 +19,11 @@ require_text() {
   grep -Fq -- "$needle" "$file" || fail "$message"
 }
 
-require_absent_command() {
+require_absent_executable_example() {
   local file="$1" command="$2" message="$3"
-  if grep -Eq "^[[:space:]]*${command}([[:space:]]|$)" "$file"; then
+  local examples
+  examples="$(awk '/^```/ { in_code = !in_code; next } in_code { print }' "$file")"
+  if grep -Eq "^[[:space:]]*(sudo[[:space:]]+)?(bash[[:space:]]+)?${command}([[:space:]]|$)" <<< "$examples"; then
     fail "$message"
   fi
 }
@@ -57,14 +59,15 @@ require_text "$MANAGE" "state=unknown" "skill de gestão deve tratar lifecycle u
 require_text "$MANAGE" "Do not paraphrase that as full functional integrity" "skill de gestão não deve superestimar doctor"
 require_text "$MANAGE" "Never start a shared group when repository-scoped or exact-runner operation satisfies the request." "skill de gestão deve preferir operação repo-scoped/exata"
 
-# Executable examples must stay on the public boundary. Mentions in prose such as
-# "do not call systemctl" are allowed; direct command examples are not.
-require_absent_command "$PRE" "runners\.sh" "skill pre-PR não pode executar runners.sh"
-require_absent_command "$PRE" "runner-services\.sh" "skill pre-PR não pode executar runner-services.sh"
-require_absent_command "$PRE" "systemctl" "skill pre-PR não pode executar systemctl diretamente"
-require_absent_command "$MANAGE" "runners\.sh" "skill de gestão não pode executar runners.sh"
-require_absent_command "$MANAGE" "runner-services\.sh" "skill de gestão não pode executar runner-services.sh"
-require_absent_command "$MANAGE" "systemctl" "skill de gestão não pode executar systemctl diretamente"
+# Executable examples must stay on the public boundary. Prose may explain that
+# internal scripts and systemctl must not be called directly.
+for skill in "$PRE" "$MANAGE"; do
+  require_text "$skill" 'Use `runnerctl` as the public interface' "skills devem apontar runnerctl como interface pública"
+  require_absent_executable_example "$skill" '(\./)?scripts/runner/lifecycle\.sh' "skill não pode executar scripts/runner/lifecycle.sh"
+  require_absent_executable_example "$skill" '(\./)?scripts/runner/services\.sh' "skill não pode executar scripts/runner/services.sh"
+  require_absent_executable_example "$skill" '(\./)?scripts/runner/configure\.sh' "skill não pode executar scripts/runner/configure.sh"
+  require_absent_executable_example "$skill" 'systemctl' "skill não pode executar systemctl diretamente"
+done
 
 tmp_home="$(mktemp -d)"
 trap 'rm -rf "$tmp_home"' EXIT

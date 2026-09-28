@@ -248,15 +248,34 @@ jobs:
           printf 'runner_name=%s\nrunner_os=%s\nrunner_arch=%s\n' \
             "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
 
-      - name: Dogfood installed RunnerOps control plane
+      - name: Dogfood current checkout against real host state
         shell: bash
         run: |
-          command -v runnerctl >/dev/null 2>&1
-          runnerctl --version
-          platform_home="$(runnerctl platform-home)"
+          current_runnerctl="$GITHUB_WORKSPACE/runnerctl"
+          test -x "$current_runnerctl"
+
+          # An installed runnerctl may legitimately lag behind the PR checkout.
+          # Surface that fact for diagnostics, but qualify the exact checkout under test.
+          installed_runnerctl="$(command -v runnerctl 2>/dev/null || true)"
+          if [[ -n "$installed_runnerctl" ]]; then
+            printf 'installed_runnerctl=%s\n' "$installed_runnerctl"
+            "$installed_runnerctl" --version || true
+          else
+            printf 'installed_runnerctl=unavailable\n'
+          fi
+
+          ACTIONS_RUNNERS_HOME="$GITHUB_WORKSPACE" "$current_runnerctl" --version
+          platform_home="$(
+            ACTIONS_RUNNERS_HOME="$GITHUB_WORKSPACE" "$current_runnerctl" platform-home
+          )"
+          expected_platform_home="$(realpath -m "$GITHUB_WORKSPACE")"
           printf 'platform_home=%s\n' "$platform_home"
-          runnerctl platform-doctor
-          test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
+          test "$platform_home" = "$expected_platform_home"
+
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" platform-doctor
+          test "$(
+            ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" repo .
+          )" = "${GITHUB_REPOSITORY,,}"
 
           # The local RunnerOps id and GitHub's agent name are separate identities.
           # Resolve the current local id from this job's workspace plus the official
@@ -273,9 +292,9 @@ jobs:
           printf 'github_runner_name=%s\nlocal_runner_name=%s\nidentity_source=workspace+registration\n' \
             "$RUNNER_NAME" "$local_runner_name"
 
-          runnerctl status "$local_runner_name"
-          runnerctl health "$local_runner_name"
-          runnerctl plan "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
 
       - name: Exercise current checkout CI feedback bridge
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'

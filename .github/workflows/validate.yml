@@ -29,70 +29,14 @@ jobs:
       - name: Validate shell syntax
         shell: bash
         run: |
-          bash -n \
-            configure-runner.sh \
-            runners.sh \
-            runner-services.sh \
-            runner-runtime-env.sh \
-            init-machine-config.sh \
-            sync-local-git-excludes.sh \
-            install-agent-skills.sh \
-            runnerctl \
-            install.sh \
-            authorize-runtime.sh \
-            runnerops-systemctl \
-            runner-package.sh \
-            setup-cockpit.sh \
-            cache.sh \
-            prewarm-cache.sh \
-            prewarm-actions.sh \
-            runner-cache-env.sh \
-            ci-watch.sh \
-            tests/test-runnerctl-contracts.sh \
-            tests/test-runnerctl-routing-contracts.sh \
-            tests/test-runner-package-contracts.sh \
-            tests/test-ci-watch-contracts.sh \
-            tests/test-agent-skills-contracts.sh \
-            tests/test-performance-skill-contracts.sh \
-            tests/test-lifecycle-truthfulness-contracts.sh \
-            tests/test-safe-provisioning-contracts.sh \
-            tests/test-legacy-diagnostics-contracts.sh \
-            tests/test-noninteractive-runtime-contracts.sh
+          mapfile -d '' shell_files < <(find scripts tests -type f -name '*.sh' -print0)
+          bash -n runnerctl install.sh scripts/systemd/runnerops-systemctl "${shell_files[@]}"
 
       - name: Validate Python syntax
         shell: bash
         run: |
-          python3 -B -m py_compile \
-            capacity.py \
-            operational_report.py \
-            operational_review.py \
-            autoscale_contracts.py \
-            autoscale_pressure.py \
-            autoscale_store.py \
-            autoscale_audit.py \
-            autoscale_planner.py \
-            autoscale_provision.py \
-            autoscale_provision_controller.py \
-            autoscale_runtime.py \
-            autoscale_controller.py \
-            autoscale_scheduler.py \
-            .github/scripts/resolve-runner-identity.py \
-            tests/test-capacity-contracts.py \
-            tests/test-capacity-collector-performance.py \
-            tests/test-capacity-bom-contract.py \
-            tests/test-operational-report-contracts.py \
-            tests/test-operational-review-contracts.py \
-            tests/test-autoscale-audit-contracts.py \
-            tests/test-autoscale-pressure-contracts.py \
-            tests/test-autoscale-pressure-planner-contracts.py \
-            tests/test-autoscale-planner-contracts.py \
-            tests/test-autoscale-provision-contracts.py \
-            tests/test-autoscale-provision-controller-contracts.py \
-            tests/test-autoscale-provision-planner-contracts.py \
-            tests/test-autoscale-provision-run-once-contracts.py \
-            tests/test-autoscale-readonly-plan-timing.py \
-            tests/test-autoscale-controller-contracts.py \
-            tests/test-autoscale-scheduler-contracts.py
+          mapfile -d '' python_files < <(find src tests .github/scripts -type f -name '*.py' -print0)
+          python3 -B -m py_compile "${python_files[@]}"
 
       - name: Validate dogfood identity resolver
         shell: bash
@@ -117,7 +61,7 @@ jobs:
         shell: bash
         run: |
           ACTIONS_RUNNERS_ENV="$RUNNER_TEMP/missing.env" bash -c '
-            source ./runner-runtime-env.sh
+            source ./scripts/runner/runtime-env.sh
             test "$RUNNERS_CONFIG" = "$HOME/.config/actions-runners/runners.conf"
             test "$RUNNER_DATA_ROOT" = "$HOME/.local/share/actions-runners/runners"
             test "$RUNNER_CACHE_ROOT" = "$HOME/.cache/actions-runners"
@@ -131,40 +75,20 @@ jobs:
           ./runnerctl --version
           ./runnerctl platform-home
           test "$(./runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
-          ./runner-package.sh detect
-          ./runner-package.sh --help
+          ./scripts/runner/package.sh detect
+          ./scripts/runner/package.sh --help
           XDG_CONFIG_HOME="$RUNNER_TEMP/config" RUNNERCTL_BIN_DIR="$RUNNER_TEMP/bin" ./install.sh
           XDG_CONFIG_HOME="$RUNNER_TEMP/config" "$RUNNER_TEMP/bin/runnerctl" platform-home
 
       - name: Validate runnerctl contracts
         shell: bash
         run: |
-          bash tests/test-runnerctl-contracts.sh
-          bash tests/test-runnerctl-routing-contracts.sh
-          bash tests/test-runner-package-contracts.sh
-          bash tests/test-ci-watch-contracts.sh
-          bash tests/test-agent-skills-contracts.sh
-          bash tests/test-performance-skill-contracts.sh
-          bash tests/test-lifecycle-truthfulness-contracts.sh
-          bash tests/test-safe-provisioning-contracts.sh
-          bash tests/test-legacy-diagnostics-contracts.sh
-          bash tests/test-noninteractive-runtime-contracts.sh
-          python3 -B tests/test-capacity-contracts.py
-          python3 -B tests/test-capacity-collector-performance.py
-          python3 -B tests/test-capacity-bom-contract.py
-          python3 -B tests/test-operational-report-contracts.py
-          python3 -B tests/test-operational-review-contracts.py
-          python3 -B tests/test-autoscale-audit-contracts.py
-          python3 -B tests/test-autoscale-pressure-contracts.py
-          python3 -B tests/test-autoscale-pressure-planner-contracts.py
-          python3 -B tests/test-autoscale-planner-contracts.py
-          python3 -B tests/test-autoscale-provision-contracts.py
-          python3 -B tests/test-autoscale-provision-controller-contracts.py
-          python3 -B tests/test-autoscale-provision-planner-contracts.py
-          python3 -B tests/test-autoscale-provision-run-once-contracts.py
-          python3 -B tests/test-autoscale-readonly-plan-timing.py
-          python3 -B tests/test-autoscale-controller-contracts.py
-          python3 -B tests/test-autoscale-scheduler-contracts.py
+          for test_file in tests/runner/*.sh tests/skills/*.sh; do
+            bash "$test_file"
+          done
+          for test_file in tests/capacity/*.py tests/operational/*.py tests/autoscale/*.py; do
+            python3 -B "$test_file"
+          done
 
       - name: Validate governed removal plan
         shell: bash
@@ -192,8 +116,8 @@ jobs:
 
       - name: Validate portable Agent Skills
         run: |
-          ./install-agent-skills.sh --list
-          ./install-agent-skills.sh --tool all --dry-run
+          ./scripts/setup/install-agent-skills.sh --list
+          ./scripts/setup/install-agent-skills.sh --tool all --dry-run
 
       - name: Validate README brand asset
         shell: bash
@@ -269,7 +193,7 @@ jobs:
         run: |
           watch_rc=0
           watch_output="$(
-            bash ./ci-watch.sh \
+            bash ./scripts/ci/watch.sh \
               --repo "$GITHUB_REPOSITORY" \
               --sha "$TARGET_SHA" \
               --json \
@@ -324,21 +248,40 @@ jobs:
           printf 'runner_name=%s\nrunner_os=%s\nrunner_arch=%s\n' \
             "$RUNNER_NAME" "$RUNNER_OS" "$RUNNER_ARCH"
 
-      - name: Dogfood installed RunnerOps control plane
+      - name: Dogfood current checkout against real host state
         shell: bash
         run: |
-          command -v runnerctl >/dev/null 2>&1
-          runnerctl --version
-          platform_home="$(runnerctl platform-home)"
+          current_runnerctl="$GITHUB_WORKSPACE/runnerctl"
+          test -x "$current_runnerctl"
+
+          # An installed runnerctl may legitimately lag behind the PR checkout.
+          # Surface that fact for diagnostics, but qualify the exact checkout under test.
+          installed_runnerctl="$(command -v runnerctl 2>/dev/null || true)"
+          if [[ -n "$installed_runnerctl" ]]; then
+            printf 'installed_runnerctl=%s\n' "$installed_runnerctl"
+            "$installed_runnerctl" --version || true
+          else
+            printf 'installed_runnerctl=unavailable\n'
+          fi
+
+          ACTIONS_RUNNERS_HOME="$GITHUB_WORKSPACE" "$current_runnerctl" --version
+          platform_home="$(
+            ACTIONS_RUNNERS_HOME="$GITHUB_WORKSPACE" "$current_runnerctl" platform-home
+          )"
+          expected_platform_home="$(realpath -m "$GITHUB_WORKSPACE")"
           printf 'platform_home=%s\n' "$platform_home"
-          runnerctl platform-doctor
-          test "$(runnerctl repo .)" = "${GITHUB_REPOSITORY,,}"
+          test "$platform_home" = "$expected_platform_home"
+
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" platform-doctor
+          test "$(
+            ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" repo .
+          )" = "${GITHUB_REPOSITORY,,}"
 
           # The local RunnerOps id and GitHub's agent name are separate identities.
           # Resolve the current local id from this job's workspace plus the official
           # local .runner registration metadata; no runner-admin API is required.
           # shellcheck source=/dev/null
-          source "$platform_home/runner-runtime-env.sh"
+          source "$platform_home/scripts/runner/runtime-env.sh"
           local_runner_name="$(
             python3 -B ./.github/scripts/resolve-runner-identity.py \
               --registry "$RUNNERS_CONFIG" \
@@ -349,9 +292,43 @@ jobs:
           printf 'github_runner_name=%s\nlocal_runner_name=%s\nidentity_source=workspace+registration\n' \
             "$RUNNER_NAME" "$local_runner_name"
 
-          runnerctl status "$local_runner_name"
-          runnerctl health "$local_runner_name"
-          runnerctl plan "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
+          
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
+
+          run_readonly_contract() {
+            local rc=0
+
+            "$@" || rc=$?
+
+            case "$rc" in
+              0|3)
+                return 0
+                ;;
+              *)
+                echo "unexpected exit code: $rc for: $*" >&2
+                return "$rc"
+                ;;
+            esac
+          }
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" capacity .
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" autoscale status .
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" autoscale plan .
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" report . --since 24h
 
       - name: Exercise current checkout CI feedback bridge
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
@@ -362,7 +339,7 @@ jobs:
         run: |
           watch_rc=0
           watch_output="$(
-            bash ./ci-watch.sh \
+            bash ./scripts/ci/watch.sh \
               --repo "$GITHUB_REPOSITORY" \
               --sha "$TARGET_SHA" \
               --json \

@@ -17,7 +17,7 @@ Require the public CLI:
 command -v runnerctl
 ```
 
-Do not locate the actions-runners checkout yourself and do not call internal scripts such as `runners.sh`, `runner-services.sh`, `svc.sh` or `systemctl` directly.
+Do not locate the actions-runners checkout yourself or discover and call RunnerOps internal scripts under `scripts/` directly. Use `runnerctl` as the public interface; do not call `svc.sh` or `systemctl` directly.
 
 ## Determine whether a local runner is needed
 

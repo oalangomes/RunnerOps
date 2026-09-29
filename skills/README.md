@@ -54,7 +54,7 @@ runnerctl skills install agents
 Instale somente uma skill:
 
 ```bash
-./install-agent-skills.sh \
+./scripts/setup/install-agent-skills.sh \
   --tool claude \
   --skill runnerops-manage-runners
 ```
@@ -62,7 +62,7 @@ Instale somente uma skill:
 Visualize o que seria feito sem gravar:
 
 ```bash
-./install-agent-skills.sh --tool all --dry-run
+./scripts/setup/install-agent-skills.sh --tool all --dry-run
 ```
 
 ## Destinos no nível do usuário
@@ -81,7 +81,7 @@ O destino genérico `~/.agents/skills` é útil para ferramentas compatíveis co
 Para instalar dentro de outro repositório em vez do diretório home:
 
 ```bash
-./install-agent-skills.sh \
+./scripts/setup/install-agent-skills.sh \
   --tool copilot \
   --scope project \
   --project-dir ~/projects/example
@@ -130,6 +130,6 @@ Ao instalar uma skill com o nome novo, o installer remove somente o diretório l
 
 ## Compatibilidade
 
-As Agent Skills canônicas vivem somente em `skills/` e devem ser instaladas por `runnerctl skills install ...` ou `install-agent-skills.sh`.
+As Agent Skills canônicas vivem somente em `skills/` e devem ser instaladas por `runnerctl skills install ...` ou pelo helper interno `scripts/setup/install-agent-skills.sh`.
 
 Adaptadores específicos de provedor só devem ser introduzidos quando uma ferramenta exigir comportamento que não possa ser expresso pelo `SKILL.md` compartilhado.

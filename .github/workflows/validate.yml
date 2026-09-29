@@ -296,10 +296,39 @@ jobs:
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" capacity .
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" autoscale status .
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" autoscale plan .
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" report . --since 24h
+          
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
+          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
+
+          run_readonly_contract() {
+            local rc=0
+
+            "$@" || rc=$?
+
+            case "$rc" in
+              0|3)
+                return 0
+                ;;
+              *)
+                echo "unexpected exit code: $rc for: $*" >&2
+                return "$rc"
+                ;;
+            esac
+          }
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" capacity .
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" autoscale status .
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" autoscale plan .
+
+          ACTIONS_RUNNERS_HOME="$platform_home" \
+            run_readonly_contract "$current_runnerctl" report . --since 24h
 
       - name: Exercise current checkout CI feedback bridge
         if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'

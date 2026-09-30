@@ -9,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from .contracts import EphemeralAction
 from .identity import OWNER_MARKER, disposable_root
@@ -48,25 +49,36 @@ class GitHubRuntime:
         return token
 
     def observe_runner(self, repository: str, identity: str) -> Dict[str, Any]:
-        output = self._run(
-            [
-                "api", "--method", "GET",
-                "repos/{}/actions/runners?per_page=100&name={}".format(repository, identity),
-                "--paginate", "--slurp",
-            ],
-            "observe_runner",
-        )
-        try:
-            pages = json.loads(output)
-        except json.JSONDecodeError as error:
-            raise RuntimeFailure("GitHub runner observation was not valid JSON") from error
-        if isinstance(pages, dict):
-            pages = [pages]
         matches = []
-        for page in pages:
-            for runner in page.get("runners", []):
+        observed = 0
+        for page_number in range(1, 101):
+            endpoint = (
+                "repos/{}/actions/runners?name={}&per_page=100&page={}".format(
+                    repository, quote(identity, safe=""), page_number
+                )
+            )
+            output = self._run(
+                ["api", "--method", "GET", endpoint],
+                "observe_runner_page_{}".format(page_number),
+            )
+            try:
+                page = json.loads(output)
+                runners = page["runners"]
+                total = page["total_count"]
+            except (json.JSONDecodeError, KeyError, TypeError) as error:
+                raise RuntimeFailure("GitHub runner observation was not valid JSON") from error
+            if (not isinstance(page, dict) or not isinstance(runners, list)
+                    or type(total) is not int or total < 0
+                    or any(not isinstance(runner, dict) for runner in runners)):
+                raise RuntimeFailure("GitHub runner observation had an invalid schema")
+            observed += len(runners)
+            for runner in runners:
                 if runner.get("name") == identity:
                     matches.append(runner)
+            if len(runners) < 100 or observed >= total:
+                break
+        else:
+            raise RuntimeFailure("GitHub runner observation exceeded bounded pagination")
         if not matches:
             return {"status": "ABSENT", "runner_id": None, "remote_status": None,
                     "busy": False, "reason": "exact_identity_absent"}

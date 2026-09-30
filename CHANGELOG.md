@@ -19,6 +19,7 @@ O projeto segue versionamento SemVer enquanto a API p√∫blica amadurece. Em vers√
 - RunnerOps runtime code is now organized under `src/runnerops/`, internal shell implementation under `scripts/`, and tests by subsystem under `tests/`. The stable public boundaries remain `runnerctl` and `install.sh`; existing runner registry/state locations, systemd identities and autoscale contracts are unchanged.
 - the capacity collector keeps the safe performance work from #105: process-local canonical repository caching, bounded parallel jobs queries, one bounded retry, call/timing instrumentation and scheduler headroom visibility.
 - project documentation and the public site now state the dual role explicitly: RunnerOps is both a working local GitHub Actions runner control plane and a public engineering lab for reproducible systems/AI/DevOps experiments.
+- release publication is now automated after a merged PR reaches green master CI: PATCH by default, optional MINOR/MAJOR override, a second CI gate for the generated release commit, and tag/GitHub Release publication only after that exact release commit validates.
 
 ### Fixed
 

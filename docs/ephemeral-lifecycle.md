@@ -134,3 +134,8 @@ Until that transcript exists on a real host, the implementation status is:
 CODE COMPLETE / CONTRACTS GREEN
 REAL-HOST QUALIFICATION PENDING
 ```
+
+The first completed qualification transcript is published in
+[`issue-120-real-host-qualification.md`](issue-120-real-host-qualification.md),
+with sanitized structured evidence in
+[`evidence/issue-120-real-host-qualification.json`](evidence/issue-120-real-host-qualification.json).

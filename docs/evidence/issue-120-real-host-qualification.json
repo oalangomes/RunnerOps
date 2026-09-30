@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "kind": "RunnerOpsRealHostQualification",
+  "issue": 120,
+  "result": "PASS",
+  "repository": "this RunnerOps repository",
+  "branch": "feat/issue-120-ephemeral-lifecycle",
+  "qualified_sha": "3c83ddadef6f43c3de1638c2cca9239342f60c45",
+  "implementation_commits": [
+    "1f195b8",
+    "3c83dda"
+  ],
+  "workflow": {
+    "run_id": 36785377870,
+    "url": "https://github.com/oalangomes/RunnerOps/actions/runs/36785377870",
+    "status": "completed",
+    "conclusion": "success",
+    "created_at": "2026-09-30T22:24:23Z",
+    "hosted_validation_conclusion": "success",
+    "exact_job": {
+      "name": "One controlled ephemeral job",
+      "status": "completed",
+      "conclusion": "success",
+      "runner_name": "runnerops-ephemeral-557bb9f9d6e8eec2",
+      "labels": [
+        "self-hosted",
+        "Linux",
+        "X64",
+        "runnerops-ephemeral-557bb9f9d6e8eec2"
+      ]
+    },
+    "generic_self_hosted_job": "skipped",
+    "runnerctl_ci_watch": {
+      "status": "success",
+      "run_count": 1
+    }
+  },
+  "action": {
+    "action_id": "81008759391c4b4cbd508d4e993ad789",
+    "runner_identity": "runnerops-ephemeral-557bb9f9d6e8eec2",
+    "registration": {
+      "attempted": true,
+      "attempts": 1,
+      "configured": true,
+      "uncertainty": false,
+      "reconcile_required": false
+    },
+    "workload": {
+      "observed": true,
+      "first_busy_at": "2026-09-30T22:25:03.723526+00:00",
+      "lifecycle_job_conclusion": "unknown",
+      "github_workflow_conclusion": "success"
+    },
+    "terminal": {
+      "proven": true,
+      "observed_at": "2026-09-30T22:25:45.359688+00:00",
+      "reason": "workload_observed_then_local_exit_and_remote_absence"
+    },
+    "cleanup": {
+      "final_state": "CLEANED",
+      "result": "SUCCEEDED",
+      "attempts": 1,
+      "completed_at": "2026-09-30T22:26:59.211934+00:00",
+      "remote_removed": true,
+      "local_stopped": true,
+      "root_removed": true,
+      "idempotent_repeat_confirmed": true,
+      "reason": "exact_remote_local_and_root_cleanup_complete"
+    },
+    "major_transitions": [
+      {
+        "at": "2026-09-30T22:21:08.441288+00:00",
+        "to": "REQUESTED",
+        "reason": "create_requested"
+      },
+      {
+        "at": "2026-09-30T22:21:28.391198+00:00",
+        "to": "INCONCLUSIVE_REGISTRATION",
+        "reason": "exact_identity_not_proven_absent_before_registration"
+      },
+      {
+        "at": "2026-09-30T22:23:43.713645+00:00",
+        "to": "REQUESTED",
+        "reason": "repeated_exact_remote_absence_proves_registration_retry_safe"
+      },
+      {
+        "at": "2026-09-30T22:23:50.926777+00:00",
+        "to": "REGISTERING",
+        "reason": "registration_initiated"
+      },
+      {
+        "at": "2026-09-30T22:23:58.460495+00:00",
+        "to": "REGISTERED",
+        "reason": "local_configuration_succeeded"
+      },
+      {
+        "at": "2026-09-30T22:24:01.770492+00:00",
+        "to": "ONLINE",
+        "reason": "exact_runner_online"
+      },
+      {
+        "at": "2026-09-30T22:25:03.726389+00:00",
+        "to": "BUSY",
+        "reason": "exact_runner_busy"
+      },
+      {
+        "at": "2026-09-30T22:25:45.359702+00:00",
+        "to": "TERMINAL",
+        "reason": "one_job_lifecycle_terminal_job_conclusion_unknown"
+      },
+      {
+        "at": "2026-09-30T22:26:58.870140+00:00",
+        "to": "CLEANUP_PENDING",
+        "reason": "bounded_cleanup_started"
+      },
+      {
+        "at": "2026-09-30T22:26:59.211954+00:00",
+        "to": "CLEANED",
+        "reason": "bounded_cleanup_complete"
+      }
+    ]
+  },
+  "fail_closed_recovery": {
+    "initial_remote_observation": "UNKNOWN",
+    "registration_attempted_before_reconciliation": false,
+    "registration_attempts_before_reconciliation": 0,
+    "new_identity_allocated": false,
+    "absence_observations_required": 2,
+    "same_action_resumed": true,
+    "compatibility_fix": "bounded explicit GET pagination without gh --slurp"
+  },
+  "capacity": {
+    "qualification_before": {
+      "observed_at": "2026-09-30T22:20:59.760748+00:00",
+      "available_now": 5,
+      "busy_capacity": 0,
+      "provisioned_idle": 0,
+      "inconclusive": 1,
+      "active_local_runner_count": 5,
+      "queued_job_count": 0,
+      "collector_errors": 0
+    },
+    "qualification_after": {
+      "observed_at": "2026-09-30T22:27:00.796058+00:00",
+      "available_now": 5,
+      "busy_capacity": 0,
+      "provisioned_idle": 0,
+      "inconclusive": 1,
+      "active_local_runner_count": 5,
+      "queued_job_count": 0,
+      "collector_errors": 0
+    },
+    "restored_on_demand": {
+      "observed_at": "2026-09-30T22:33:11.436980+00:00",
+      "available_now": 1,
+      "busy_capacity": 0,
+      "provisioned_idle": 4,
+      "inconclusive": 1,
+      "active_local_runner_count": 1,
+      "queued_job_count": 0,
+      "collector_errors": 0
+    },
+    "inconclusive_reason": "one pre-existing remote-only registration lacked matching local evidence"
+  },
+  "validation": {
+    "ephemeral_python_tests_passed": 32,
+    "ephemeral_shell_contracts_passed": 1,
+    "capacity_autoscale_regression_tests_passed": 116,
+    "shell_syntax": "passed",
+    "python_compilation": "passed",
+    "workflow_yaml": "passed",
+    "git_diff_check": "passed"
+  },
+  "privacy": {
+    "registration_material_persisted": false,
+    "credentials_included": false,
+    "machine_paths_included": false,
+    "persistent_runner_names_included": false,
+    "host_identity_included": false
+  }
+}

@@ -222,7 +222,12 @@ if [[ "${#ONLY_ACTIONS[@]}" -gt 0 ]]; then
 fi
 
 read_config
-mapfile -t INDEXES < <(target_indexes "$TARGET")
+indexes_output=""
+if ! indexes_output="$(target_indexes "$TARGET" 2>&1)"; then
+  printf '%s\n' "$indexes_output" >&2
+  exit 1
+fi
+mapfile -t INDEXES <<< "$indexes_output"
 
 for i in "${INDEXES[@]}"; do
   if [[ "${RUNNER_ENABLED[$i]}" != "true" ]]; then

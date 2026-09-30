@@ -227,11 +227,49 @@ EOF
   pass "legacy start exige processo do runner e remove PID stale de forma repetível"
 }
 
+test_unknown_runner_exits_nonzero_before_mapfile() {
+  local runner_dir="$TMP_ROOT/known-runner"
+  local registry="$TMP_ROOT/unknown-runners.conf"
+  local output rc=0
+
+  mkdir -p "$runner_dir"
+  cat > "$runner_dir/run.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$runner_dir/run.sh"
+  printf '%s\n' '{"agentId":7,"agentName":"known"}' > "$runner_dir/.runner"
+  printf '%s\n' '# name|path|profile|repo|enabled|group' > "$registry"
+  printf 'known|%s|generic|example/project|true|example\n' "$runner_dir" >> "$registry"
+
+  set +e
+  output="$(
+    PATH="$TMP_ROOT/bin:$PATH" \
+      ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+      RUNNERS_CONFIG="$registry" \
+      RUNNER_STATE_ROOT="$TMP_ROOT/unknown-state" \
+      RUNNER_CACHE_ROOT="$TMP_ROOT/unknown-cache" \
+      RUNNER_SYSTEMD_RUNTIME_DIR="$TMP_ROOT/no-systemd" \
+      "$ROOT/scripts/runner/lifecycle.sh" start __runner_inexistente__ 2>&1
+  )"
+  rc=$?
+  set -e
+
+  [[ "$rc" -ne 0 ]] || {
+    printf 'rc=%s\noutput:\n%s\n' "$rc" "$output" >&2
+    fail "start de runner desconhecido deve falhar com exit non-zero"
+  }
+  assert_contains "$output" "ERRO: runner desconhecido: __runner_inexistente__" "lifecycle deve preservar a mensagem do runner desconhecido"
+
+  pass "runner desconhecido aborta com non-zero antes de mapfile process substitution"
+}
+
 main() {
   make_fake_systemctl "$TMP_ROOT/bin"
   test_query_failure_is_not_healthy
   test_inactive_on_demand_remains_healthy_idle
   test_legacy_start_failure_cleans_stale_pid
+  test_unknown_runner_exits_nonzero_before_mapfile
   printf '\nContratos de lifecycle truthfulness passaram.\n'
 }
 

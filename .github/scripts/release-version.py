@@ -5,18 +5,19 @@ import argparse
 import datetime as dt
 import re
 from pathlib import Path
+from typing import Optional, Tuple
 
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
 
-def parse_version(value: str) -> tuple[int, int, int]:
+def parse_version(value: str) -> Tuple[int, int, int]:
     match = VERSION_RE.fullmatch(value.strip())
     if not match:
         raise ValueError(f"invalid semantic version: {value!r}")
     return tuple(int(part) for part in match.groups())
 
 
-def format_version(parts: tuple[int, int, int]) -> str:
+def format_version(parts: Tuple[int, int, int]) -> str:
     return ".".join(str(part) for part in parts)
 
 
@@ -62,7 +63,7 @@ def current_version(root: Path) -> str:
     return match.group(1)
 
 
-def changelog_entry(version: str, *, pr_number: str | None, pr_title: str | None, manual: bool, bump: str) -> str:
+def changelog_entry(version: str, *, pr_number: Optional[str], pr_title: Optional[str], manual: bool, bump: str) -> str:
     date = dt.date.today().isoformat()
     if manual:
         detail = f"Manual {bump} release requested through the release workflow."
@@ -84,10 +85,10 @@ def update_files(
     root: Path,
     *,
     bump: str,
-    pr_number: str | None = None,
-    pr_title: str | None = None,
+    pr_number: Optional[str] = None,
+    pr_title: Optional[str] = None,
     manual: bool = False,
-) -> tuple[str, str]:
+) -> Tuple[str, str]:
     old = current_version(root)
     new = bump_version(old, bump)
 

@@ -1,101 +1,116 @@
-## RunnerOps v0.4.0 — Governed local provisioning
+## RunnerOps v0.5.0 — Operational Evidence & Review
 
-RunnerOps v0.4.0 extends the governed autoscaling boundary from activating existing capacity to **bounded local runner provisioning**.
+RunnerOps v0.5.0 adds a bounded operational evidence layer and a grounded, read-only AI review path without handing control-plane authority to a model.
 
-The local scale-out path is now:
-
-```text
-queue/capacity observation
-→ durable pressure evidence
-→ deterministic planning
-→ governed PROVISION_LOCAL
-→ verified provisioned_idle
-→ later START_LOCAL
-→ VERIFIED_ONLINE
-→ auditable outcome
-```
-
-### Bounded local pool growth
-
-`runnerctl autoscale run-once` can now execute `PROVISION_LOCAL` when local provisioning is explicitly enabled and policy allows pool growth.
-
-Provisioning is:
-
-- opt-in and disabled by default;
-- limited separately from active-runner capacity;
-- one registration at most per controller iteration;
-- deterministic, using the lowest free `<prefix>-NN` slot;
-- constrained to an explicit profile, group and label template.
-
-Existing compatible `provisioned_idle` capacity still takes precedence: the planner selects `START_LOCAL` before provisioning another runner.
-
-### Replay-safe provisioning
-
-Provisioning now has a durable action lifecycle:
+The new analysis flow is:
 
 ```text
-planned
-→ started
-→ succeeded | failed | inconclusive
+runtime + GitHub evidence
+        ↓
+OperationalEvidence v1
+        ↓
+canonical safe serialization + digest
+        ↓
+Ollama or LiteLLM
+        ↓
+strict grounded validation
+        ↓
+OperationalReview v1
 ```
 
-Once an action crosses the provisioning boundary, RunnerOps never blindly calls `runnerctl add` again for that action. A later iteration reconciles the exact persisted target against fresh local + GitHub evidence.
+### OperationalEvidence v1
 
-This prevents an inconclusive verification window from becoming duplicate infrastructure.
+`runnerctl report` turns the evidence RunnerOps already has into a bounded operational artifact:
 
-### Exact target safety
+```bash
+runnerctl report . --since 24h
+runnerctl report . --since 24h --json
+```
 
-The governed autoscaler does not use the human-friendly auto-suffix behavior of interactive `runnerctl add`.
+The report keeps current capacity, available autoscale/audit history, collector metadata and known evidence gaps separate.
 
-For autoscale provisioning:
+Historical information that RunnerOps does not persist is not fabricated. Missing capabilities, truncation and runtime collection problems remain explicit.
 
-- the target identity is immutable;
-- collisions are rejected rather than silently becoming `target-2`;
-- success requires the exact target to be observed as a healthy local `provisioned_idle` registration;
-- the GitHub registration identity is persisted in the audit trail.
+### Evidence-grounded AI review
 
-### Independent limits
+`runnerctl review` analyzes OperationalEvidence without becoming part of runner lifecycle or autoscale control:
 
-v0.4.0 separates:
+```bash
+runnerctl review . --since 24h --provider ollama --model <model>
+runnerctl review --evidence evidence.json --provider ollama --model <model>
+runnerctl review . --since 24h --provider litellm --model <model> --allow-remote
+```
 
-- `RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_RUNNERS` — active local capacity;
-- `RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS` — total registered local pool size.
+The review contract includes:
 
-This allows RunnerOps to keep a bounded idle pool without conflating registrations with active processes.
+- explicit provider and model selection;
+- frozen-evidence replay;
+- canonical evidence hashing;
+- bounded findings and unknowns;
+- exact RFC 6901 JSON Pointer evidence references;
+- strict fail-closed validation;
+- explicit remote acknowledgement before evidence leaves the local boundary.
+
+RunnerOps owns the trusted metadata and rendering. Model output cannot invoke lifecycle, planner, controller, provisioning, shell/tools or audit-store writes.
+
+### Fresh evidence over unsafe cache reuse
+
+During the #105 collector work, RunnerOps experimented with persistent jobs-list reuse.
+
+Adversarial review found the assumption unsafe: unchanged workflow-run metadata does not prove that the jobs collection is unchanged. A stale empty jobs response could therefore suppress newly queued work.
+
+v0.5.0 keeps the safe performance improvements while restoring the stronger evidence contract:
+
+- fresh jobs requests for every discovered active workflow run;
+- process-local repository canonicalization cache only;
+- bounded parallel jobs requests;
+- one bounded retry;
+- GitHub-call and wall-time instrumentation;
+- scheduler headroom / overrun visibility.
+
+The persistent jobs cache is gone.
+
+### Repository architecture
+
+The repository has also been reorganized around explicit domains:
+
+```text
+runnerctl / install.sh        public boundary
+src/runnerops/                Python runtime
+scripts/                      internal shell implementation
+tests/                        subsystem contracts
+docs/                         architecture / operations
+skills/                       agent-facing operational contracts
+```
+
+The migration does not move user state or change runner registrations, autoscale semantics, CapacitySnapshot, OperationalEvidence or OperationalReview schemas.
+
+The runtime now uses normal `runnerops.*` package modules, with `<platform>/src` preserved in `PYTHONPATH` even when machine configuration defines its own Python path.
 
 ### Real-host qualification
 
-The v0.4.0 path was qualified on a real Linux/WSL2 + systemd host with a real GitHub Actions workload.
+The new surfaces were exercised beyond fixtures:
 
-Observed end-to-end evidence included:
+- OperationalReview was dogfooded with configured local Ollama using both frozen and live OperationalEvidence;
+- repository-layout qualification used the exact workflow checkout on a real self-hosted RunnerOps host;
+- read-only dogfood exercised runner inventory, capacity, autoscale status/plan and operational report without mutating the persistent runner pool.
 
-- real sustained queued pressure with no matching capacity;
-- deterministic `PROVISION_LOCAL` selection;
-- pool growth from 4 to the configured maximum of 5;
-- one exact new registration;
-- an inconclusive post-provision verification followed by recovery of the same action without a second add;
-- `PROVISION_VERIFIED_IDLE`;
-- a later planner decision selecting `START_LOCAL` for that same runner;
-- `VERIFIED_ONLINE`;
-- the queued GitHub Actions job executing successfully on the newly provisioned runner;
-- no duplicate registration;
-- final scheduler state disabled/inactive for the controlled qualification.
+### Safety boundary
 
-The focused qualification suite passed 133 tests, followed by green repository CI and public-portability validation.
+v0.5.0 still keeps deterministic RunnerOps logic as the scaling authority.
 
-### Safety boundaries
+AI review is an analyst over evidence, not a controller.
 
-v0.4.0 still does **not** execute:
+The release does **not** add:
 
-- `BURST_CLOUD`;
+- LLM-driven scaling or target selection;
+- cloud burst;
 - scale-in;
-- batch provisioning;
-- `ensure .` as an autoscale fallback;
-- LLM-based scaling policy or target selection.
+- ephemeral runner lifecycle;
+- containers/VM orchestration;
+- persistent queue/job caching.
 
-The deterministic planner remains the scaling authority, and local provisioning remains explicit policy.
-
-This release closes the governed local scale-out loop: RunnerOps can now both **activate existing local capacity** and **grow the bounded local runner pool**.
+Ephemeral runners are the next lifecycle study, tracked separately in #120.
 
 **Full changelog:**  
-https://github.com/oalangomes/RunnerOps/compare/v0.3.0...v0.4.0
+https://github.com/oalangomes/RunnerOps/compare/v0.4.0...v0.5.0

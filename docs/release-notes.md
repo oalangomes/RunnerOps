@@ -95,6 +95,14 @@ The new surfaces were exercised beyond fixtures:
 - repository-layout qualification used the exact workflow checkout on a real self-hosted RunnerOps host;
 - read-only dogfood exercised runner inventory, capacity, autoscale status/plan and operational report without mutating the persistent runner pool.
 
+### Automated release cadence
+
+Starting with this baseline, RunnerOps can publish a SemVer release for every merged pull request after master CI is green.
+
+The default is PATCH. A PR may opt into MINOR or MAJOR through an explicit release label, and the same three bump modes are available through manual workflow dispatch.
+
+The generated release commit is validated again before its tag and GitHub Release are published, so release identity is never tagged before the exact commit passes CI.
+
 ### Safety boundary
 
 v0.5.0 still keeps deterministic RunnerOps logic as the scaling authority.

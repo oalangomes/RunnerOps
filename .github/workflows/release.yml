@@ -1,0 +1,370 @@
+name: Publish RunnerOps release
+
+on:
+  workflow_run:
+    workflows:
+      - Validate runner platform
+    types:
+      - completed
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version bump
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: write
+
+concurrency:
+  group: runnerops-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version and publish
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      - name: Decide release action
+        id: decide
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          MANUAL_BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin master --tags --force
+
+          master_sha="$(git rev-parse HEAD)"
+          source_version="$(./runnerctl --version | awk '{print $2}')"
+          source_tag="v$source_version"
+
+          echo "master_sha=$master_sha"
+          echo "source_version=$source_version"
+
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            trigger_sha="$WORKFLOW_HEAD_SHA"
+            if [[ "$master_sha" != "$trigger_sha" ]]; then
+              echo "::error::master advanced after the validated commit; refusing to version unvalidated HEAD"
+              echo "::error::validated=$trigger_sha current=$master_sha"
+              exit 1
+            fi
+
+            subject="$(git log -1 --format=%s "$trigger_sha")"
+            if [[ "$subject" =~ ^chore\(release\):\ v([0-9]+\.[0-9]+\.[0-9]+)\ \[release-publish\]$ ]]; then
+              expected_version="${BASH_REMATCH[1]}"
+              if [[ "$source_version" != "$expected_version" ]]; then
+                echo "::error::release commit version mismatch: source=$source_version commit=$expected_version"
+                exit 1
+              fi
+
+              if git rev-parse -q --verify "refs/tags/v$source_version" >/dev/null &&
+                 gh release view "v$source_version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                {
+                  echo "action=skip"
+                  echo "reason=release_commit_already_published"
+                } >> "$GITHUB_OUTPUT"
+              else
+                {
+                  echo "action=publish"
+                  echo "version=$source_version"
+                  echo "reason=validated_release_commit"
+                } >> "$GITHUB_OUTPUT"
+              fi
+              exit 0
+            fi
+          fi
+
+          tag_exists=false
+          if git rev-parse -q --verify "refs/tags/$source_tag" >/dev/null; then
+            tag_exists=true
+          fi
+
+          release_exists=false
+          if gh release view "$source_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_exists=true
+          fi
+
+          if [[ "$tag_exists" == false ]]; then
+            if [[ "$EVENT_NAME" != "workflow_run" ]]; then
+              echo "::error::$source_tag is not published yet; bootstrap requires a successful master validation"
+              exit 1
+            fi
+            {
+              echo "action=publish"
+              echo "version=$source_version"
+              echo "reason=bootstrap_current_version"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$release_exists" == false ]]; then
+            tagged_sha="$(git rev-list -n 1 "$source_tag")"
+            if [[ "$tagged_sha" != "$master_sha" ]]; then
+              echo "::error::$source_tag exists without a GitHub Release but does not point at current master"
+              exit 1
+            fi
+            {
+              echo "action=publish"
+              echo "version=$source_version"
+              echo "reason=recover_missing_release"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            {
+              echo "action=bump"
+              echo "bump=$MANUAL_BUMP"
+              echo "manual=true"
+              echo "pr_number="
+              echo "pr_title="
+              echo "reason=manual"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          trigger_sha="$WORKFLOW_HEAD_SHA"
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/commits/$trigger_sha/pulls")"
+          pr_count="$(jq '[.[] | select(.merged_at != null)] | length' <<< "$pr_json")"
+
+          if [[ "$pr_count" -eq 0 ]]; then
+            echo "No merged PR is associated with $trigger_sha; direct master push does not create a release."
+            {
+              echo "action=skip"
+              echo "reason=no_merged_pr"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$pr_count" -ne 1 ]]; then
+            echo "::error::expected one merged PR for $trigger_sha, found $pr_count"
+            exit 1
+          fi
+
+          pr_number="$(jq -r '[.[] | select(.merged_at != null)][0].number' <<< "$pr_json")"
+          pr_title="$(jq -r '[.[] | select(.merged_at != null)][0].title' <<< "$pr_json" | tr '\r\n' '  ')"
+          labels="$(jq -r '[.[] | select(.merged_at != null)][0].labels[].name' <<< "$pr_json")"
+
+          has_major=false
+          has_minor=false
+          grep -Fxq 'release:major' <<< "$labels" && has_major=true || true
+          grep -Fxq 'release:minor' <<< "$labels" && has_minor=true || true
+
+          if [[ "$has_major" == true && "$has_minor" == true ]]; then
+            echo "::error::PR #$pr_number has both release:major and release:minor"
+            exit 1
+          fi
+
+          bump=patch
+          if [[ "$has_major" == true ]]; then
+            bump=major
+          elif [[ "$has_minor" == true ]]; then
+            bump=minor
+          fi
+
+          {
+            echo "action=bump"
+            echo "bump=$bump"
+            echo "manual=false"
+            echo "pr_number=$pr_number"
+            echo "pr_title=$pr_title"
+            echo "reason=merged_pr"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release commit
+        if: steps.decide.outputs.action == 'bump'
+        id: bump
+        shell: bash
+        env:
+          BUMP: ${{ steps.decide.outputs.bump }}
+          MANUAL: ${{ steps.decide.outputs.manual }}
+          PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
+          PR_TITLE: ${{ steps.decide.outputs.pr_title }}
+        run: |
+          set -euo pipefail
+
+          args=(--bump "$BUMP")
+          if [[ "$MANUAL" == "true" ]]; then
+            args+=(--manual)
+          else
+            args+=(--pr-number "$PR_NUMBER" --pr-title "$PR_TITLE")
+          fi
+
+          target_version="$(python3 -B .github/scripts/release-version.py "${args[@]}")"
+          echo "version=$target_version" >> "$GITHUB_OUTPUT"
+
+          git diff --check
+          python3 -B tests/release/test-release-version.py
+          bash tests/runner/test-runnerctl-contracts.sh
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            runnerctl \
+            tests/runner/test-runnerctl-contracts.sh \
+            README.md \
+            site/index.html \
+            .github/workflows/validate.yml \
+            .github/workflows/pages.yml \
+            CHANGELOG.md
+
+          git commit -m "chore(release): v$target_version [release-publish]"
+          git push origin HEAD:master
+
+          release_sha="$(git rev-parse HEAD)"
+          echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate generated release commit
+        if: steps.decide.outputs.action == 'bump'
+        id: release_ci
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.bump.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          gh workflow run validate.yml --repo "$GITHUB_REPOSITORY" --ref master
+
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow validate.yml \
+                --branch master \
+                --event workflow_dispatch \
+                --limit 20 \
+                --json databaseId,headSha \
+                --jq ".[] | select(.headSha == \\"$RELEASE_SHA\\") | .databaseId" \
+                | head -n 1
+            )"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "::error::could not resolve validation run for release commit $RELEASE_SHA"
+            exit 1
+          fi
+
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status --interval 5
+
+      - name: Publish validated release
+        if: steps.decide.outputs.action == 'publish' || steps.decide.outputs.action == 'bump'
+        shell: bash
+        env:
+          DECIDED_VERSION: ${{ steps.decide.outputs.version }}
+          BUMPED_VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          version="$DECIDED_VERSION"
+          if [[ -n "$BUMPED_VERSION" ]]; then
+            version="$BUMPED_VERSION"
+          fi
+          if [[ -z "$version" ]]; then
+            echo "::error::release version was not resolved"
+            exit 1
+          fi
+
+          tag="v$version"
+          release_sha="$(git rev-parse HEAD)"
+
+          if [[ "$(./runnerctl --version)" != "runnerctl $version" ]]; then
+            echo "::error::runnerctl version does not match $tag"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tagged_sha="$(git rev-list -n 1 "$tag")"
+            if [[ "$tagged_sha" != "$release_sha" ]]; then
+              echo "::error::$tag already points to $tagged_sha, expected $release_sha"
+              exit 1
+            fi
+          else
+            git tag -a "$tag" -m "RunnerOps $tag"
+            git push origin "$tag"
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists."
+          else
+            first_line="$(head -n 1 docs/release-notes.md || true)"
+            if [[ "$first_line" == *"$tag"* ]]; then
+              gh release create "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --verify-tag \
+                --title "RunnerOps $tag" \
+                --notes-file docs/release-notes.md
+            else
+              gh release create "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --verify-tag \
+                --title "RunnerOps $tag" \
+                --generate-notes
+            fi
+          fi
+
+          gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref master
+
+      - name: Release decision summary
+        if: always()
+        shell: bash
+        env:
+          ACTION: ${{ steps.decide.outputs.action || 'not-resolved' }}
+          REASON: ${{ steps.decide.outputs.reason || 'not-resolved' }}
+          BUMP: ${{ steps.decide.outputs.bump }}
+          VERSION: ${{ steps.decide.outputs.version }}
+          PREPARED_VERSION: ${{ steps.bump.outputs.version }}
+          VALIDATION_RUN: ${{ steps.release_ci.outputs.run_id }}
+        run: |
+          {
+            echo "### RunnerOps release"
+            echo
+            echo "- action: $ACTION"
+            echo "- reason: $REASON"
+            if [[ -n "$BUMP" ]]; then
+              echo "- bump: $BUMP"
+            fi
+            if [[ -n "$VERSION" ]]; then
+              echo "- version: v$VERSION"
+            fi
+            if [[ -n "$PREPARED_VERSION" ]]; then
+              echo "- prepared version: v$PREPARED_VERSION"
+            fi
+            if [[ -n "$VALIDATION_RUN" ]]; then
+              echo "- release validation run: $VALIDATION_RUN"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

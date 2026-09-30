@@ -1,81 +1,143 @@
 # Processo de release do RunnerOps
 
-Este processo existe para impedir que uma tag seja criada apenas porque a branch parece pronta.
+RunnerOps publica releases SemVer a partir de `master`.
 
-## 1. Confirmar o delta
+## Regra padrão
 
-Compare a release anterior com a candidata:
+Cada pull request efetivamente mergeado em `master` gera uma nova release com incremento de **PATCH**:
 
-```bash
-git fetch --tags
-PREVIOUS_TAG="$(git describe --tags --abbrev=0)"
-git log --oneline "$PREVIOUS_TAG"..HEAD
-git diff --stat "$PREVIOUS_TAG"..HEAD
+```text
+v0.5.0
+  ↓ merge PR
+v0.5.1
+  ↓ merge PR
+v0.5.2
 ```
 
-Atualize `CHANGELOG.md` somente com mudanças realmente presentes no delta.
+Push direto em `master` não cria release automática.
 
-## 2. Fechar a versão
+A publicação só começa depois que o workflow **Validate runner platform** termina com sucesso para o commit exato de `master`.
 
-Durante desenvolvimento, `runnerctl --version` pode reportar uma versão com sufixo `-dev`.
+## Override por PR
 
-No commit de release:
+O comportamento padrão pode ser elevado explicitamente antes do merge:
 
-- remova o sufixo de desenvolvimento;
-- confirme que `runnerctl --version` corresponde exatamente à tag planejada;
-- atualize o changelog.
+- label `release:minor` → incrementa MINOR e zera PATCH;
+- label `release:major` → incrementa MAJOR e zera MINOR/PATCH;
+- sem label → PATCH.
 
-## 3. Rodar validações locais
+As duas labels não podem coexistir no mesmo PR.
 
-```bash
-mapfile -d '' shell_files < <(find scripts tests -type f -name '*.sh' -print0)
-bash -n runnerctl install.sh scripts/systemd/runnerops-systemctl "${shell_files[@]}"
-python3 -B -m py_compile $(find src tests .github/scripts -type f -name '*.py' -print)
+Exemplos:
 
-for test_file in tests/runner/*.sh tests/skills/*.sh; do bash "$test_file"; done
-for test_file in tests/capacity/*.py tests/operational/*.py tests/autoscale/*.py; do
-  python3 -B "$test_file"
-done
+```text
+0.5.7 + patch → 0.5.8
+0.5.7 + minor → 0.6.0
+0.5.7 + major → 1.0.0
 ```
 
-## 4. Validar instalação e upgrade
+## Release manual
 
-Em checkout limpo/arbitrário:
+O workflow **Publish RunnerOps release** também aceita `workflow_dispatch`.
 
-```bash
-./install.sh
-runnerctl --version
-runnerctl platform-home
-runnerctl init
-runnerctl platform-doctor
+Escolha explicitamente:
+
+- `patch`;
+- `minor`;
+- `major`.
+
+A execução manual não publica direto. Ela cria primeiro o commit de identidade da nova versão; a tag e o GitHub Release só são publicados depois que esse commit também passa pelo **Validate runner platform**.
+
+## Fluxo automático
+
+```text
+PR mergeado em master
+        ↓
+Validate runner platform
+        ↓ success
+resolver bump
+        ↓
+PATCH por padrão
+MINOR/MAJOR por override
+        ↓
+atualizar identidade da versão
+        ↓
+commit chore(release): vX.Y.Z [release-publish]
+        ↓
+Validate runner platform
+        ↓ success
+tag anotada vX.Y.Z
+        ↓
+GitHub Release
 ```
 
-Para uma instalação existente, prove também que atualizar o checkout e executar `./install.sh` substitui a CLI instalada.
+Isso mantém a tag apontando para um commit que já passou pelo gate de CI.
 
-## 5. Smoke real
+## Identidade sincronizada
 
-Antes da tag, execute em Linux + systemd ou WSL2 + systemd:
+O helper de release atualiza de forma atômica:
 
-- registro de um runner descartável ou já reservado para smoke;
-- `runnerctl doctor` e `runnerctl health`;
-- estado on-demand saudável;
-- `runnerctl ensure .` apenas no repositório alvo;
-- execução de um workflow self-hosted;
-- `runnerctl ci watch` contra GitHub Actions real;
-- remoção governada quando o runner for descartável.
+- `runnerctl --version`;
+- contrato de versão em `tests/runner/test-runnerctl-contracts.sh`;
+- release estável no `README.md`;
+- identidade/link de release em `site/index.html`;
+- checks de identidade em `.github/workflows/validate.yml`;
+- checks de identidade em `.github/workflows/pages.yml`;
+- `CHANGELOG.md`.
 
-Não reutilize automaticamente a evidência de uma release anterior.
+O helper falha fechado quando a identidade esperada não aparece exatamente onde deveria.
 
-## 6. Tag
+## Release notes
 
-Somente depois dos gates:
+Se `docs/release-notes.md` já estiver preparado para a versão que está sendo publicada, esse arquivo é usado como corpo do GitHub Release.
 
-```bash
-git status --short
-runnerctl --version
-VERSION="$(runnerctl --version | awk '{print $2}')"
-git tag -a "v$VERSION" -m "RunnerOps v$VERSION"
-git push origin "v$VERSION"
+Caso contrário, o GitHub Release usa notas geradas automaticamente.
+
+Isso permite:
+
+- PATCH diário sem manutenção manual de release notes;
+- notas editoriais quando houver um corte MINOR/MAJOR ou marco relevante.
+
+## Bootstrap / recuperação
+
+Se o código em `master` já declara uma versão que ainda não possui tag, uma execução automática após CI verde publica **essa versão atual** sem avançá-la novamente.
+
+Esse caminho existe para bootstrap/recovery — por exemplo, fechar a baseline `v0.5.0` antes de começar os PATCH automáticos.
+
+Se uma tag existir sem GitHub Release, a automação só recupera a publicação quando a tag aponta para o commit atual esperado.
+
+## Anti-loop
+
+O commit automático de versão usa:
+
+```text
+chore(release): vX.Y.Z [release-publish]
 ```
 
-A tag de uma release publicada é imutável.
+O push desse commit é feito com o `GITHUB_TOKEN`, então o próprio release workflow dispara explicitamente um `workflow_dispatch` de `validate.yml` para validar o commit gerado antes da publicação.
+
+Se esse commit for observado novamente por um gatilho de release, o marcador impede um novo bump. Se a versão já estiver publicada, a execução pula; se a validação terminou mas a publicação anterior foi interrompida, o mesmo commit validado pode concluir a tag/release de forma idempotente.
+
+A criação da tag não dispara novo bump.
+
+## Concorrência
+
+Releases usam um único grupo de concorrência e não cancelam execuções em andamento.
+
+Além disso, o workflow exige que o SHA validado continue sendo o HEAD exato de `master` antes de preparar uma nova versão. Se `master` avançar enquanto um release está sendo resolvido, a automação falha em vez de versionar código que ainda não passou pelo gate correspondente.
+
+Na prática, evite mergear outro PR enquanto a versão do merge anterior ainda está sendo preparada.
+
+## Validação local do helper
+
+```bash
+python3 -B tests/release/test-release-version.py
+```
+
+O helper usa apenas a biblioteca padrão do Python.
+
+## Releases publicadas são imutáveis
+
+Tags/releases já publicadas não devem ser movidas.
+
+Se uma publicação parcial falhar, recupere o mesmo alvo; não reaproveite a versão para outro commit.

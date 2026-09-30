@@ -116,7 +116,7 @@ chore(release): vX.Y.Z [release-publish]
 
 O push desse commit é feito com o `GITHUB_TOKEN`, então o próprio release workflow dispara explicitamente um `workflow_dispatch` de `validate.yml` para validar o commit gerado antes da publicação.
 
-Se esse commit for observado novamente por um gatilho de release, o marcador faz a execução **pular** em vez de calcular outro bump.
+Se esse commit for observado novamente por um gatilho de release, o marcador impede um novo bump. Se a versão já estiver publicada, a execução pula; se a validação terminou mas a publicação anterior foi interrompida, o mesmo commit validado pode concluir a tag/release de forma idempotente.
 
 A criação da tag não dispara novo bump.
 

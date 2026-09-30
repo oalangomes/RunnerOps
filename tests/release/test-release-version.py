@@ -45,6 +45,9 @@ def test_bump_math():
 
 
 def test_patch_updates_public_identity():
+    module = load_module()
+    current = module.current_version(ROOT)
+    expected = module.bump_version(current, "patch")
     temp = fixture_root()
     try:
         completed = subprocess.run(
@@ -64,18 +67,18 @@ def test_patch_updates_public_identity():
             capture_output=True,
             check=True,
         )
-        assert completed.stdout.strip() == "0.5.1"
-        assert 'RUNNERCTL_VERSION="0.5.1"' in (temp / "runnerctl").read_text()
-        assert 'EXPECTED_RUNNERCTL_VERSION="0.5.1"' in (
+        assert completed.stdout.strip() == expected
+        assert f'RUNNERCTL_VERSION="{expected}"' in (temp / "runnerctl").read_text()
+        assert f'EXPECTED_RUNNERCTL_VERSION="{expected}"' in (
             temp / "tests/runner/test-runnerctl-contracts.sh"
         ).read_text()
-        assert "releases/tag/v0.5.1" in (temp / "README.md").read_text()
-        assert "RunnerOps v0.5.1" in (temp / "site/index.html").read_text()
-        assert "RunnerOps v0.5.1" in (
+        assert f"releases/tag/v{expected}" in (temp / "README.md").read_text()
+        assert f"RunnerOps v{expected}" in (temp / "site/index.html").read_text()
+        assert f"RunnerOps v{expected}" in (
             temp / ".github/workflows/validate.yml"
         ).read_text()
         changelog = (temp / "CHANGELOG.md").read_text()
-        assert "## v0.5.1" in changelog
+        assert f"## v{expected}" in changelog
         assert "PR #999" in changelog
     finally:
         shutil.rmtree(temp)

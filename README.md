@@ -6,7 +6,7 @@
 
 **Website:** https://oalangomes.github.io/RunnerOps/
 
-**Release estável atual:** [v0.4.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.4.0)
+**Release estável atual:** [v0.5.0](https://github.com/oalangomes/RunnerOps/releases/tag/v0.5.0)
 
 **CLI pública:** `runnerctl`
 

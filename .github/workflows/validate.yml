@@ -38,6 +38,11 @@ jobs:
           mapfile -d '' python_files < <(find src tests .github/scripts -type f -name '*.py' -print0)
           python3 -B -m py_compile "${python_files[@]}"
 
+      - name: Validate release automation
+        shell: bash
+        run: |
+          python3 -B tests/release/test-release-version.py
+
       - name: Validate dogfood identity resolver
         shell: bash
         run: |

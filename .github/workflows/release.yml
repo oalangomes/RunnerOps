@@ -79,10 +79,25 @@ jobs:
 
             subject="$(git log -1 --format=%s "$trigger_sha")"
             if [[ "$subject" =~ ^chore\(release\):\ v([0-9]+\.[0-9]+\.[0-9]+)\ \[release-publish\]$ ]]; then
-              {
-                echo "action=skip"
-                echo "reason=release_commit"
-              } >> "$GITHUB_OUTPUT"
+              expected_version="${BASH_REMATCH[1]}"
+              if [[ "$source_version" != "$expected_version" ]]; then
+                echo "::error::release commit version mismatch: source=$source_version commit=$expected_version"
+                exit 1
+              fi
+
+              if git rev-parse -q --verify "refs/tags/v$source_version" >/dev/null &&
+                 gh release view "v$source_version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                {
+                  echo "action=skip"
+                  echo "reason=release_commit_already_published"
+                } >> "$GITHUB_OUTPUT"
+              else
+                {
+                  echo "action=publish"
+                  echo "version=$source_version"
+                  echo "reason=validated_release_commit"
+                } >> "$GITHUB_OUTPUT"
+              fi
               exit 0
             fi
           fi

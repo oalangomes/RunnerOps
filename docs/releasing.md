@@ -114,7 +114,9 @@ O commit automático de versão usa:
 chore(release): vX.Y.Z [release-publish]
 ```
 
-Quando o CI desse commit termina, o workflow reconhece o marcador e **publica** a versão em vez de calcular outro bump.
+O push desse commit é feito com o `GITHUB_TOKEN`, então o próprio release workflow dispara explicitamente um `workflow_dispatch` de `validate.yml` para validar o commit gerado antes da publicação.
+
+Se esse commit for observado novamente por um gatilho de release, o marcador faz a execução **pular** em vez de calcular outro bump.
 
 A criação da tag não dispara novo bump.
 

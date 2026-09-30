@@ -40,10 +40,10 @@ assert_not_contains() {
 
 make_fake_platform() {
   local platform="$1"
-  mkdir -p "$platform/scripts/runner" "$platform/src/runnerops/autoscale" "$platform/src/runnerops/operational"
+  mkdir -p "$platform/scripts/runner" "$platform/src/runnerops/autoscale" "$platform/src/runnerops/operational" "$platform/src/runnerops/ephemeral"
   cp "$ROOT/runnerctl" "$platform/runnerctl"
   cp "$ROOT/scripts/runner/runtime-env.sh" "$platform/scripts/runner/runtime-env.sh"
-  touch "$platform/src/runnerops/__init__.py" "$platform/src/runnerops/autoscale/__init__.py" "$platform/src/runnerops/operational/__init__.py"
+  touch "$platform/src/runnerops/__init__.py" "$platform/src/runnerops/autoscale/__init__.py" "$platform/src/runnerops/operational/__init__.py" "$platform/src/runnerops/ephemeral/__init__.py"
 
   cat > "$platform/scripts/runner/lifecycle.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -87,6 +87,14 @@ import os
 import sys
 with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
     log.write("review:" + " ".join(sys.argv[1:]) + "\n")
+EOF
+
+  cat > "$platform/src/runnerops/ephemeral/cli.py" <<'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+with open(os.environ["TEST_CALL_LOG"], "a", encoding="utf-8") as log:
+    log.write("ephemeral:" + " ".join(sys.argv[1:]) + "\n")
 EOF
 
   chmod +x "$platform/runnerctl" "$platform/scripts/runner/lifecycle.sh" "$platform/scripts/runner/services.sh"
@@ -303,6 +311,57 @@ test_review_routes_to_read_only_review_boundary() {
   pass "review usa boundary próprio sem rotear para planner/controller/lifecycle"
 }
 
+test_ephemeral_routes_to_dedicated_lifecycle_boundary() {
+  local platform="$TMP_ROOT/ephemeral-platform"
+  local log="$TMP_ROOT/ephemeral.log"
+  make_fake_platform "$platform"
+  : > "$log"
+
+  run_ctl "$platform" "$log" ephemeral status 0123456789abcdef0123456789abcdef --json
+
+  assert_eq \
+    'ephemeral:status 0123456789abcdef0123456789abcdef --json' \
+    "$(cat "$log")" \
+    "runnerctl ephemeral deve usar boundary próprio sem rotear para autoscale/persistent lifecycle"
+  pass "ephemeral usa boundary público dedicado"
+}
+
+test_ephemeral_create_reuses_canonical_repo_profile_and_labels_boundary() {
+  local platform="$TMP_ROOT/ephemeral-create-platform"
+  local log="$TMP_ROOT/ephemeral-create.log"
+  local gh_log="$TMP_ROOT/ephemeral-create-gh.log"
+  local fake_bin="$TMP_ROOT/ephemeral-create-bin"
+  make_fake_platform "$platform"
+  mkdir -p "$fake_bin"
+  : > "$log"
+  : > "$gh_log"
+  cat > "$fake_bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'gh:%s\n' "$*" >> "${TEST_GH_LOG:?}"
+if [[ "${1:-}" == "auth" && "${2:-}" == "status" ]]; then exit 0; fi
+if [[ "${1:-}" == "repo" && "${2:-}" == "view" ]]; then
+  printf '%s\n' 'Example/Repo'
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$fake_bin/gh"
+
+  PATH="$fake_bin:$PATH" TEST_GH_LOG="$gh_log" \
+    run_ctl "$platform" "$log" ephemeral create example/repo \
+      --profile generic --labels custom,ephemeral \
+      --action-id 0123456789abcdef0123456789abcdef --json
+
+  assert_eq \
+    'ephemeral:create Example/Repo --profile generic --labels custom,ephemeral --action-id 0123456789abcdef0123456789abcdef --json' \
+    "$(cat "$log")" \
+    "ephemeral create deve encaminhar repo canônico e spec resolvida ao boundary Python"
+  assert_not_contains "$(cat "$gh_log")" "registration-token" \
+    "runnerctl deve deixar material de registro exclusivamente para o lifecycle boundary"
+  pass "ephemeral create reutiliza resolução canônica sem antecipar registration material"
+}
+
 main() {
   test_exact_runner_and_group_routing
   test_logs_follow_requires_exact_runner
@@ -314,6 +373,8 @@ main() {
   test_autoscale_run_once_routes_to_governed_controller
   test_autoscale_scheduler_routes_to_scheduler_boundary
   test_review_routes_to_read_only_review_boundary
+  test_ephemeral_routes_to_dedicated_lifecycle_boundary
+  test_ephemeral_create_reuses_canonical_repo_profile_and_labels_boundary
   printf '\nContratos de routing/lifecycle passaram.\n'
 }
 

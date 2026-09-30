@@ -6,6 +6,17 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      ephemeral_runner_label:
+        description: Exact runnerops-ephemeral-* identity for opt-in real-host qualification
+        required: false
+        default: ""
+        type: string
+      ephemeral_action_id:
+        description: Exact 32-character RunnerOps ephemeral action id
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -71,6 +82,7 @@ jobs:
             test "$RUNNER_DATA_ROOT" = "$HOME/.local/share/actions-runners/runners"
             test "$RUNNER_CACHE_ROOT" = "$HOME/.cache/actions-runners"
             test "$RUNNER_STATE_ROOT" = "$HOME/.local/state/actions-runners"
+            test "$RUNNER_EPHEMERAL_ROOT" = "$HOME/.local/share/actions-runners/runners/.ephemeral"
           '
 
       - name: Validate runnerctl
@@ -88,10 +100,10 @@ jobs:
       - name: Validate runnerctl contracts
         shell: bash
         run: |
-          for test_file in tests/runner/*.sh tests/skills/*.sh; do
+          for test_file in tests/runner/*.sh tests/ephemeral/*.sh tests/skills/*.sh; do
             bash "$test_file"
           done
-          for test_file in tests/capacity/*.py tests/operational/*.py tests/autoscale/*.py; do
+          for test_file in tests/capacity/*.py tests/operational/*.py tests/autoscale/*.py tests/ephemeral/*.py; do
             python3 -B "$test_file"
           done
 
@@ -178,6 +190,16 @@ jobs:
 
           test ! -d codex-skills
 
+      - name: Validate ephemeral qualification inputs
+        if: github.event_name == 'workflow_dispatch' && inputs.ephemeral_runner_label != ''
+        shell: bash
+        env:
+          EXPECTED_RUNNER: ${{ inputs.ephemeral_runner_label }}
+          EXPECTED_ACTION: ${{ inputs.ephemeral_action_id }}
+        run: |
+          [[ "$EXPECTED_RUNNER" =~ ^runnerops-ephemeral-[a-f0-9]{16}$ ]]
+          [[ "$EXPECTED_ACTION" =~ ^[a-f0-9]{32}$ ]]
+
   real-ci-watch-smoke:
     name: Hosted GitHub API smoke
     if: github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000'
@@ -231,7 +253,9 @@ jobs:
 
   self-hosted-dogfood:
     name: RunnerOps self-hosted dogfood
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      inputs.ephemeral_runner_label == ''
     needs: static-validation
     runs-on: [self-hosted, Linux, X64, runnerops, local-runner]
     timeout-minutes: 10
@@ -371,3 +395,34 @@ jobs:
             0|1|3) ;;
             *) exit "$watch_rc" ;;
           esac
+
+  ephemeral-one-job-qualification:
+    name: One controlled ephemeral job
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.ephemeral_runner_label != ''
+    needs: static-validation
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - ${{ inputs.ephemeral_runner_label }}
+    timeout-minutes: 5
+    steps:
+      - name: Prove exact dispatched identity
+        shell: bash
+        env:
+          EXPECTED_RUNNER: ${{ inputs.ephemeral_runner_label }}
+          EXPECTED_ACTION: ${{ inputs.ephemeral_action_id }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_RUNNER" =~ ^runnerops-ephemeral-[a-f0-9]{16}$ ]]
+          [[ "$EXPECTED_ACTION" =~ ^[a-f0-9]{32}$ ]]
+          test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
+          {
+            echo "runner=$RUNNER_NAME"
+            echo "action_id=$EXPECTED_ACTION"
+            echo "host=$RUNNER_OS/$RUNNER_ARCH"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # Keep BUSY observable long enough for the explicit qualification loop.
+          sleep 20

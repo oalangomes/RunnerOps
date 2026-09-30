@@ -30,6 +30,14 @@ assert_contains() {
   }
 }
 
+assert_not_contains() {
+  local haystack="$1" needle="$2" message="$3"
+  [[ "$haystack" != *"$needle"* ]] || {
+    printf 'unexpected: %s\noutput:\n%s\n' "$needle" "$haystack" >&2
+    fail "$message"
+  }
+}
+
 make_fake_platform() {
   local platform="$1"
   mkdir -p "$platform/scripts/runner" "$platform/src/runnerops/autoscale" "$platform/src/runnerops/operational"
@@ -187,6 +195,33 @@ test_lifecycle_mutation_summaries() {
   pass "start/restart preservam boundary e emitem resumo acionável"
 }
 
+test_failed_lifecycle_mutation_summary_and_next_are_suppressed() {
+  local platform="$TMP_ROOT/lifecycle-failure-platform"
+  local log="$TMP_ROOT/lifecycle-failure.log"
+  local output
+
+  make_fake_platform "$platform"
+  cat > "$platform/scripts/runner/lifecycle.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'ERRO: runner desconhecido: runnerops\n' >&2
+exit 1
+EOF
+  chmod +x "$platform/scripts/runner/lifecycle.sh"
+  : > "$log"
+
+  if output="$(run_ctl "$platform" "$log" start runnerops 2>&1)"; then
+    fail "start de runner desconhecido deve falhar"
+  fi
+
+  assert_contains "$output" "ERRO: runner desconhecido: runnerops" "falha operacional deve preservar a mensagem de erro"
+  assert_contains "$output" "[SUMMARY] status=failure operation=start target=runnerops" "resumo deve refletir falha operacional"
+  assert_not_contains "$output" "[SUMMARY] status=success" "resumo não deve afirmar success após falha"
+  assert_not_contains "$output" "[NEXT]" "next action deve ser suprimida após falha"
+
+  pass "falhas de lifecycle propagam status sem resumo de sucesso ou next action"
+}
+
 test_default_targets_are_explicit() {
   local platform="$TMP_ROOT/default-platform"
   local log="$TMP_ROOT/default.log"
@@ -273,6 +308,7 @@ main() {
   test_logs_follow_requires_exact_runner
   test_boot_policy_routing
   test_lifecycle_mutation_summaries
+  test_failed_lifecycle_mutation_summary_and_next_are_suppressed
   test_default_targets_are_explicit
   test_autoscale_plan_routes_to_read_only_planner
   test_autoscale_run_once_routes_to_governed_controller

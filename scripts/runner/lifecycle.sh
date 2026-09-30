@@ -1114,7 +1114,12 @@ if [[ "$ACTION" == "groups" ]]; then
   exit 0
 fi
 
-mapfile -t indexes < <(target_indexes "$TARGET")
+indexes_output=""
+if ! indexes_output="$(target_indexes "$TARGET" 2>&1)"; then
+  printf '%s\n' "$indexes_output" >&2
+  exit 1
+fi
+mapfile -t indexes <<< "$indexes_output"
 
 case "$ACTION" in
   start)

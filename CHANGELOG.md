@@ -6,6 +6,37 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ## Unreleased
 
+## v0.5.0 — 2026-09-29
+
+### Added
+
+- `runnerctl report [owner/repo|.] --since DURATION [--json]` introduces **OperationalEvidence v1**, a bounded read-only report over current capacity plus available autoscale/audit history. Missing historical capabilities, runtime failures and truncation remain explicit as incomplete evidence instead of being filled in by inference.
+- `runnerctl review` introduces **OperationalReview v1**, a read-only AI analysis layer over canonical OperationalEvidence. The command supports explicit Ollama and LiteLLM providers, frozen-evidence replay, bounded structured output, exact evidence references and deterministic RunnerOps-owned metadata.
+- review privacy/grounding guards include explicit model/provider selection, remote opt-in, canonical evidence hashing, strict JSON Pointer validation, bounded findings/unknowns, fail-closed malformed output handling and secret-bearing-field checks.
+
+### Changed
+
+- RunnerOps runtime code is now organized under `src/runnerops/`, internal shell implementation under `scripts/`, and tests by subsystem under `tests/`. The stable public boundaries remain `runnerctl` and `install.sh`; existing runner registry/state locations, systemd identities and autoscale contracts are unchanged.
+- the capacity collector keeps the safe performance work from #105: process-local canonical repository caching, bounded parallel jobs queries, one bounded retry, call/timing instrumentation and scheduler headroom visibility.
+- project documentation and the public site now state the dual role explicitly: RunnerOps is both a working local GitHub Actions runner control plane and a public engineering lab for reproducible systems/AI/DevOps experiments.
+
+### Fixed
+
+- persistent jobs-list caching introduced during #105 experimentation was removed after adversarial review showed that unchanged workflow-run metadata cannot safely prove an unchanged jobs collection. Every CapacitySnapshot again refreshes jobs for each discovered active run, preventing stale empty evidence from suppressing queued work.
+- the new package runtime reasserts `<platform>/src` in `PYTHONPATH` after machine configuration is loaded, while preserving user paths and avoiding duplicate RunnerOps entries.
+- self-hosted dogfood now qualifies the exact workflow checkout instead of relying on an installed CLI that may lag behind the branch under test, and accepts documented exit code 3 for valid read-only inconclusive evidence.
+
+### Security
+
+- OperationalReview remains outside the control plane: model output cannot start/stop/provision runners, call planner/controller actions, execute tools or write the autoscale audit store.
+- LiteLLM and non-local Ollama use require explicit remote acknowledgement before evidence is sent; credentials and raw provider responses are not rendered as review output.
+
+### Validation
+
+- OperationalEvidence and OperationalReview are covered by focused contract suites plus the existing capacity/autoscale/runner contracts.
+- OperationalReview was dogfooded with configured local Ollama using both frozen and live evidence.
+- the repository-layout migration was qualified through hosted validation and read-only self-hosted dogfood against real host state using the current checkout, including package routing for capacity/autoscale/report commands.
+
 ## v0.4.0 — 2026-09-23
 
 ### Added

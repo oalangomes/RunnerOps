@@ -1351,16 +1351,16 @@ lifecycle_mutation() {
     summary "success" "$cmd" "target=$target"
     next_action "runnerctl status $target && runnerctl health $target"
     return 0
-  fi
-
-  rc=$?
-  if [[ "$rc" -eq 3 ]]; then
-    summary "inconclusive" "$cmd" "target=$target" >&2
   else
-    summary "failure" "$cmd" "target=$target" >&2
+    rc=$?
+    if [[ "$rc" -eq 3 ]]; then
+      summary "inconclusive" "$cmd" "target=$target" >&2
+      next_action "runnerctl doctor $target" >&2
+    else
+      summary "failure" "$cmd" "target=$target" >&2
+    fi
+    return "$rc"
   fi
-  next_action "runnerctl doctor $target" >&2
-  return "$rc"
 }
 
 ci_watch() {

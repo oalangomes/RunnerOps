@@ -302,6 +302,9 @@ jobs:
           tag="v$version"
           release_sha="$(git rev-parse HEAD)"
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           if [[ "$(./runnerctl --version)" != "runnerctl $version" ]]; then
             echo "::error::runnerctl version does not match $tag"
             exit 1

@@ -131,9 +131,9 @@ CI feedback:
 - Do not use `runnerctl ensure .` as the normal PR preflight.
 - Do not call `runnerctl ephemeral create` as an LLM-selected substitute for autoscale.
 - Do not call internal platform scripts directly.
-- Do not create/reconfigure/remove runners from this pre-PR skill.
+- Do not directly add/reconfigure/remove runners from this pre-PR skill; the governed autoscale boundary above is the only allowed provisioning path when explicitly required.
 - Do not expose registration tokens.
-- Do not bypass a failed local-runner gate.
+- Do not bypass inconclusive capacity evidence by broad activation.
 - Do not claim CI is green without a conclusive watcher result when the task requires CI validation.
 - Do not replace `runnerctl ci watch` with aggressive custom polling.
 - Do not restart/remove a runner because a test, lint or build step failed.

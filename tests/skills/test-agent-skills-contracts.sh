@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PRE="$ROOT/skills/runnerops-pr-validation/SKILL.md"
 MANAGE="$ROOT/skills/runnerops-manage-runners/SKILL.md"
 PERF="$ROOT/skills/runnerops-ci-performance/SKILL.md"
+AGENTS="$ROOT/AGENTS.md"
+COPILOT="$ROOT/.github/copilot-instructions.md"
 
 fail() {
   printf '[FAIL] %s\n' "$1" >&2
@@ -32,6 +34,8 @@ require_absent_executable_example() {
 [[ -f "$PRE" ]] || fail "skill pre-PR ausente"
 [[ -f "$MANAGE" ]] || fail "skill de gestão ausente"
 [[ -f "$PERF" ]] || fail "skill de performance ausente"
+[[ -f "$AGENTS" ]] || fail "AGENTS.md ausente"
+[[ -f "$COPILOT" ]] || fail "copilot instructions ausente"
 
 require_text "$PRE" "name: runnerops-pr-validation" "skill pre-PR deve usar nome RunnerOps canônico"
 require_text "$MANAGE" "name: runnerops-manage-runners" "skill de gestão deve usar nome RunnerOps canônico"
@@ -77,6 +81,13 @@ require_text "$PERF" "runnerctl capacity . --json" "skill de performance deve us
 require_text "$PERF" "runnerctl autoscale status . --json" "skill de performance deve ser autoscale-aware"
 require_text "$PERF" 'Queue pressure does not imply “start all runners”.' "skill de performance não deve recomendar broad start por fila"
 require_text "$PERF" 'CREATE_EPHEMERAL' "skill de performance deve distinguir primitive ephemeral de autoscale automático"
+
+require_text "$AGENTS" "Sincronização obrigatória das Agent Skills" "AGENTS deve exigir sincronização das skills"
+require_text "$AGENTS" 'Nenhuma mudança funcional está completa até que o impacto em `skills/` tenha sido revisado.' "AGENTS deve tratar skill review como gate funcional"
+require_text "$AGENTS" "tests/skills/test-agent-skills-contracts.sh" "AGENTS deve exigir atualização dos contratos de skills"
+require_text "$COPILOT" "Mandatory Agent Skills synchronization" "Copilot instructions deve exigir sincronização das skills"
+require_text "$COPILOT" "No functional change is complete while an affected skill still teaches obsolete behavior." "Copilot deve bloquear skill drift"
+require_text "$COPILOT" "Agent Skills impact: none" "Copilot deve exigir justificativa quando não houver impacto"
 
 # Executable examples must stay on the public boundary. Prose may explain that
 # internal scripts and systemctl must not be called directly.

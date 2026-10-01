@@ -16,6 +16,36 @@ RunnerOps é o produto deste repositório. `runnerctl` é sua interface pública
 - Prefira Agent Skills neutras de provedor em `skills/<nome>/SKILL.md`.
 - Não introduza cópias específicas de provedor, a menos que um cliente não consiga expressar o comportamento pela skill compartilhada.
 
+## Sincronização obrigatória das Agent Skills
+
+As Agent Skills fazem parte da interface operacional do RunnerOps e devem evoluir junto com o produto.
+
+- Nenhuma mudança funcional está completa até que o impacto em `skills/` tenha sido revisado.
+- Toda nova capacidade, comando público, mudança de lifecycle, autoscale/capacity semantics, policy, safety boundary, recovery flow, exit code ou comportamento operacional deve atualizar, na mesma entrega, as skills afetadas e seus contratos.
+- Revise explicitamente `skills/README.md`, todos os `skills/*/SKILL.md` relevantes e `tests/skills/test-agent-skills-contracts.sh`.
+- Não preserve instruções legadas nas skills quando elas contradisserem o comportamento atual do produto. Exemplo: um novo fluxo capacity-first/autoscale-aware não pode continuar ensinando agentes a ativar capacidade ampla preventivamente.
+- Skills devem consumir as interfaces públicas atuais do `runnerctl`; não devem reproduzir lógica interna do planner/controller nem substituir decisões determinísticas por heurística de LLM.
+- Novas capacidades que ainda sejam primitives explícitos não devem ser descritas nas skills como automação já entregue. Documente claramente o boundary atual.
+- Quando uma mudança realmente não tiver impacto em comportamento consumível por agentes, registre explicitamente na PR/relatório: `Agent Skills impact: none`, com justificativa curta.
+- Alterações em Agent Skills devem atualizar os contratos textuais/portabilidade correspondentes e executar a validação de skills.
+- Ao revisar uma PR funcional, trate skill drift como regressão de produto, não como dívida opcional de documentação.
+
+Regra prática:
+
+```text
+feature/runtime semantics changed
+        ↓
+review affected Agent Skills
+        ↓
+update SKILL.md + skills/README.md when applicable
+        ↓
+update tests/skills contracts
+        ↓
+validate
+        ↓
+only then consider the change complete
+```
+
 ## Disciplina de mudança
 
 - Mantenha exemplos públicos genéricos; não adicione nomes de usuário, hostnames ou projetos do mantenedor.

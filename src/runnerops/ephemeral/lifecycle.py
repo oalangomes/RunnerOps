@@ -31,13 +31,37 @@ class EphemeralLifecycle:
         clock: Callable[[], str] = utc_now,
         monotonic: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] = time.sleep,
+        registration_absence_confirm_seconds: float = 3.0,
     ):
+        if registration_absence_confirm_seconds <= 0:
+            raise ValueError("registration absence confirmation window must be positive")
         self.store = store
         self.local = local_runtime
         self.github = github_runtime
         self.clock = clock
         self.monotonic = monotonic
         self.sleeper = sleeper
+        self.registration_absence_confirm_seconds = registration_absence_confirm_seconds
+
+    @staticmethod
+    def _parse_observed_at(value: Any) -> Optional[datetime]:
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return parsed
+
+    @staticmethod
+    def _reset_absence_confirmation(action: EphemeralAction) -> None:
+        action.registration.update({
+            "consecutive_absence_observations": 0,
+            "first_absence_observed_at": None,
+            "last_absence_observed_at": None,
+        })
 
     def _save_transition(self, action: EphemeralAction, state: LifecycleState, reason: str) -> None:
         action.transition(state, self.clock(), reason)
@@ -136,7 +160,9 @@ class EphemeralLifecycle:
         if remote["status"] != "ABSENT":
             action.registration.update({"uncertainty": True, "reconcile_required": True,
                                         "safe_retry_authorized": False,
-                                        "consecutive_absence_observations": 0})
+                                        "consecutive_absence_observations": 0,
+                                        "first_absence_observed_at": None,
+                                        "last_absence_observed_at": None})
             self._save_transition(action, LifecycleState.INCONCLUSIVE_REGISTRATION,
                                   "exact_identity_not_proven_absent_before_registration")
             raise ReconcileRequired("exact runner identity is not safely absent; reconcile before registration")
@@ -170,7 +196,9 @@ class EphemeralLifecycle:
 
         action.registration.update({"configured": True, "uncertainty": False,
                                     "reconcile_required": False, "safe_retry_authorized": False,
-                                    "consecutive_absence_observations": 0})
+                                    "consecutive_absence_observations": 0,
+                                    "first_absence_observed_at": None,
+                                    "last_absence_observed_at": None})
         self._save_transition(action, LifecycleState.REGISTERED, "local_configuration_succeeded")
         try:
             process = self.local.start(action)
@@ -204,7 +232,8 @@ class EphemeralLifecycle:
             observation = self.github.observe_runner(action.repository, action.runner_identity)
         except Exception:
             observation = {"status": "UNKNOWN", "runner_id": None, "remote_status": None,
-                           "busy": None, "reason": "github_observation_failed"}
+                           "ephemeral": None, "busy": None,
+                           "reason": "github_observation_failed"}
         observation["observed_at"] = self.clock()
         action.github_observation = observation
         return observation
@@ -222,10 +251,30 @@ class EphemeralLifecycle:
                      "started_at_monotonic": action.local_observation.get("started_at_monotonic"),
                      "start_observed": action.local_observation.get("start_observed", False),
                      "config_present": False, "config_identity": None,
+                     "config_runner_id": None,
                      "reason": "local_observation_failed"}
         local["observed_at"] = self.clock()
         action.local_observation = local
         remote = self._observe_github(action)
+        if remote["status"] in ("ONLINE", "OFFLINE", "BUSY"):
+            local_id = local.get("config_runner_id")
+            remote_id = remote.get("runner_id")
+            identity_correlated = (
+                local.get("config_present") is True
+                and local.get("config_identity") == action.runner_identity
+                and type(local_id) is int and local_id > 0
+                and type(remote_id) is int and remote_id > 0
+                and local_id == remote_id
+                and remote.get("ephemeral") is not False
+            )
+            if not identity_correlated:
+                remote = dict(remote)
+                remote.update({
+                    "status": "UNKNOWN",
+                    "busy": None,
+                    "reason": "local_remote_runner_identity_not_correlated",
+                })
+                action.github_observation = remote
         if remote["status"] == "BUSY":
             now = self.clock()
             action.workload_evidence["observed"] = True
@@ -237,6 +286,8 @@ class EphemeralLifecycle:
     def status(self, action_id: str) -> EphemeralAction:
         with self.store.lock(action_id):
             action = self.store.load(action_id)
+            if action.action_state == LifecycleState.CLEANED.value:
+                return action
             self._record_observations(action)
             return action
 
@@ -246,6 +297,8 @@ class EphemeralLifecycle:
 
     def _reconcile_locked(self, action_id: str) -> EphemeralAction:
         action = self.store.load(action_id)
+        if action.action_state == LifecycleState.CLEANED.value:
+            return action
         if (action.action_state == LifecycleState.REGISTERING.value
                 and action.registration.get("attempted")
                 and not action.registration.get("configured")):
@@ -258,13 +311,14 @@ class EphemeralLifecycle:
         local = action.local_observation["status"]
 
         if remote in ("UNKNOWN", "AMBIGUOUS") or local == "UNKNOWN":
+            self._reset_absence_confirmation(action)
             target = (LifecycleState.INCONCLUSIVE_REGISTRATION
                       if action.registration.get("uncertainty") else LifecycleState.INCONCLUSIVE_TERMINAL)
             action.registration["reconcile_required"] = True
             self._save_transition(action, target, "observation_inconclusive")
             return action
         if action.registration.get("uncertainty") and remote in ("ONLINE", "OFFLINE", "BUSY"):
-            action.registration["consecutive_absence_observations"] = 0
+            self._reset_absence_confirmation(action)
             if not action.local_observation.get("config_present"):
                 self._save_transition(action, LifecycleState.INCONCLUSIVE_REGISTRATION,
                                       "exact_remote_identity_present_but_local_configuration_missing")
@@ -294,11 +348,11 @@ class EphemeralLifecycle:
                                       "uncertain_registration_recovered_exact_runner_offline")
             return action
         if (action.registration.get("configured")
-                and action.action_state == LifecycleState.REGISTERED.value
                 and remote in ("ONLINE", "OFFLINE")
                 and action.local_observation.get("config_present")
                 and local not in ("RUNNING", "STARTING")
-                and not action.workload_evidence.get("observed")):
+                and not action.workload_evidence.get("observed")
+                and not action.terminal_evidence.get("proven")):
             try:
                 process = self.local.start(action)
                 action.local_observation.update(process)
@@ -308,10 +362,10 @@ class EphemeralLifecycle:
                 self.store.save(action)
             except Exception:
                 self._save_transition(action, LifecycleState.INCONCLUSIVE_TERMINAL,
-                                      "registered_unit_restart_failed")
+                                      "configured_unit_restart_failed")
                 return action
             target = LifecycleState.ONLINE if remote == "ONLINE" else LifecycleState.REGISTERED
-            self._save_transition(action, target, "registered_unit_start_recovered")
+            self._save_transition(action, target, "configured_unit_start_recovered")
             return action
         if remote == "BUSY":
             self._save_transition(action, LifecycleState.BUSY, "exact_runner_busy")
@@ -334,18 +388,35 @@ class EphemeralLifecycle:
         # Exact remote identity is proven absent.
         if action.registration.get("uncertainty") and not action.registration.get("configured"):
             if local in ("ALLOCATED", "ABSENT") and not action.local_observation.get("config_present"):
+                observed_at = action.github_observation.get("observed_at")
+                observed_time = self._parse_observed_at(observed_at)
+                first_time = self._parse_observed_at(
+                    action.registration.get("first_absence_observed_at"))
+                last_time = self._parse_observed_at(
+                    action.registration.get("last_absence_observed_at"))
+                if (observed_time is None or (last_time is not None and observed_time < last_time)):
+                    self._reset_absence_confirmation(action)
+                    self._save_transition(action, LifecycleState.INCONCLUSIVE_REGISTRATION,
+                                          "exact_remote_absence_timestamp_invalid")
+                    return action
+                if first_time is None:
+                    first_time = observed_time
+                    action.registration["first_absence_observed_at"] = observed_at
                 absence_count = action.registration.get("consecutive_absence_observations", 0) + 1
                 action.registration["consecutive_absence_observations"] = absence_count
-                if absence_count >= 2:
+                action.registration["last_absence_observed_at"] = observed_at
+                elapsed = ((observed_time - first_time).total_seconds()
+                           if observed_time is not None and first_time is not None else 0.0)
+                if absence_count >= 2 and elapsed >= self.registration_absence_confirm_seconds:
                     action.registration.update({"uncertainty": False, "reconcile_required": False,
                                                 "safe_retry_authorized": True})
                     self._save_transition(action, LifecycleState.REQUESTED,
-                                          "repeated_exact_remote_absence_proves_registration_retry_safe")
+                                          "time_separated_exact_remote_absence_proves_registration_retry_safe")
                 else:
                     self._save_transition(action, LifecycleState.INCONCLUSIVE_REGISTRATION,
-                                          "exact_remote_absence_requires_bounded_confirmation")
+                                          "exact_remote_absence_confirmation_window_not_met")
             else:
-                action.registration["consecutive_absence_observations"] = 0
+                self._reset_absence_confirmation(action)
                 self._save_transition(action, LifecycleState.INCONCLUSIVE_REGISTRATION,
                                       "remote_absent_but_local_registration_artifacts_remain")
             return action
@@ -388,6 +459,10 @@ class EphemeralLifecycle:
             action.cleanup.update({"result": "INCONCLUSIVE", "reason": "observation_inconclusive"})
             self.store.save(action)
             raise CleanupRefused("cleanup requires conclusive exact local and remote observation")
+        if action.terminal_evidence.get("proven") is not True:
+            action.cleanup.update({"result": "REFUSED", "reason": "terminal_evidence_not_proven"})
+            self.store.save(action)
+            raise CleanupRefused("destructive cleanup requires proven terminal evidence")
 
         self.local.validate_owned_root(action, allow_missing=True)
         action.cleanup["attempts"] += 1

@@ -128,6 +128,13 @@ assert_contains "$workflow_source" "inputs.ephemeral_runner_label == ''" \
   "dogfood genérico não pode disputar o runner durante qualification"
 assert_contains "$workflow_source" 'test "$RUNNER_NAME" = "$EXPECTED_RUNNER"' \
   "qualification job deve provar a identidade consumidora"
+assert_contains "$workflow_source" 'expected_suffix="$(printf '\''%s'\'' "$EXPECTED_ACTION" | sha256sum | cut -c1-16)"' \
+  "qualification deve derivar a identidade exata do action id"
+assert_contains "$workflow_source" 'test "$EXPECTED_RUNNER" = "runnerops-ephemeral-$expected_suffix"' \
+  "qualification deve correlacionar action id e label antes do job"
+[[ "$(grep -Fc 'ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"' \
+  "$ROOT/.github/workflows/validate.yml")" -eq 1 ]] ||
+  fail "dogfood deve executar o bloco status/health/plan/list uma única vez"
 
 registry_after="$(sha256sum "$registry" | awk '{print $1}')"
 [[ "$registry_before" == "$registry_after" ]] || fail "lifecycle ephemeral não pode alterar registry persistente"

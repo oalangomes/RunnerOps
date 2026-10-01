@@ -81,23 +81,49 @@ class GitHubRuntime:
             raise RuntimeFailure("GitHub runner observation exceeded bounded pagination")
         if not matches:
             return {"status": "ABSENT", "runner_id": None, "remote_status": None,
-                    "busy": False, "reason": "exact_identity_absent"}
+                    "ephemeral": None, "busy": False, "reason": "exact_identity_absent"}
         if len(matches) != 1:
             return {"status": "AMBIGUOUS", "runner_id": None, "remote_status": None,
-                    "busy": None, "reason": "multiple_exact_identity_matches"}
+                    "ephemeral": None, "busy": None,
+                    "reason": "multiple_exact_identity_matches"}
         runner = matches[0]
+        runner_id = runner.get("id")
         busy = runner.get("busy")
         remote_status = runner.get("status")
+        ephemeral = runner.get("ephemeral") if "ephemeral" in runner else None
+        if type(runner_id) is not int or runner_id <= 0:
+            return {"status": "UNKNOWN", "runner_id": runner_id,
+                    "remote_status": remote_status, "ephemeral": ephemeral,
+                    "busy": busy if isinstance(busy, bool) else None,
+                    "reason": "remote_runner_id_invalid"}
+        if ephemeral is not None and not isinstance(ephemeral, bool):
+            return {"status": "UNKNOWN", "runner_id": runner_id,
+                    "remote_status": remote_status, "ephemeral": ephemeral,
+                    "busy": busy if isinstance(busy, bool) else None,
+                    "reason": "remote_ephemeral_value_invalid"}
+        if ephemeral is False:
+            return {"status": "UNKNOWN", "runner_id": runner_id,
+                    "remote_status": remote_status, "ephemeral": False,
+                    "busy": busy if isinstance(busy, bool) else None,
+                    "reason": "remote_runner_not_ephemeral"}
+        if not isinstance(busy, bool) or remote_status not in ("online", "offline"):
+            return {"status": "UNKNOWN", "runner_id": runner_id,
+                    "remote_status": remote_status, "ephemeral": ephemeral,
+                    "busy": busy if isinstance(busy, bool) else None,
+                    "reason": "remote_runner_state_invalid"}
         status = "BUSY" if busy is True else ("ONLINE" if remote_status == "online" else "OFFLINE")
         return {
             "status": status,
-            "runner_id": runner.get("id"),
+            "runner_id": runner_id,
             "remote_status": remote_status,
-            "busy": busy if isinstance(busy, bool) else None,
+            "ephemeral": ephemeral,
+            "busy": busy,
             "reason": "exact_identity_observed",
         }
 
     def delete_runner(self, repository: str, runner_id: int) -> None:
+        if type(runner_id) is not int or runner_id <= 0:
+            raise RuntimeFailure("refusing to delete an invalid GitHub runner id")
         self._run(
             ["api", "--method", "DELETE", "repos/{}/actions/runners/{}".format(repository, runner_id)],
             "delete_runner",
@@ -216,8 +242,11 @@ class LocalRuntime:
             "configure_ephemeral",
             input_text=registration_material + "\n",
         )
-        if self._local_config_identity(Path(action.disposable_root)) != action.runner_identity:
+        registration = self._local_config_registration(Path(action.disposable_root))
+        if registration["identity"] != action.runner_identity:
             raise RuntimeFailure("local runner configuration does not prove the exact identity")
+        if type(registration["runner_id"]) is not int or registration["runner_id"] <= 0:
+            raise RuntimeFailure("local runner configuration does not contain a valid runner id")
 
     def start(self, action: EphemeralAction) -> Dict[str, Any]:
         self.validate_owned_root(action, allow_missing=False)
@@ -278,21 +307,31 @@ class LocalRuntime:
         }
 
     @staticmethod
-    def _local_config_identity(root: Path) -> Optional[str]:
+    def _local_config_registration(root: Path) -> Dict[str, Any]:
         config = root / ".runner"
         if config.is_symlink() or not config.is_file():
-            return None
+            return {"identity": None, "runner_id": None}
         try:
             value = json.loads(config.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError):
-            return "__invalid__"
+            return {"identity": "__invalid__", "runner_id": "__invalid__"}
+        if not isinstance(value, dict):
+            return {"identity": "__invalid__", "runner_id": "__invalid__"}
         identity = value.get("agentName")
-        return identity if isinstance(identity, str) and identity else "__invalid__"
+        runner_id = value.get("agentId")
+        return {
+            "identity": identity if isinstance(identity, str) and identity else "__invalid__",
+            "runner_id": runner_id if type(runner_id) is int and runner_id > 0 else "__invalid__",
+        }
 
     def observe(self, action: EphemeralAction) -> Dict[str, Any]:
         root = Path(action.disposable_root)
         config_present = (root / ".runner").is_file() if root.is_dir() and not root.is_symlink() else False
-        config_identity = self._local_config_identity(root) if config_present else None
+        registration = self._local_config_registration(root) if config_present else {
+            "identity": None, "runner_id": None,
+        }
+        config_identity = registration["identity"]
+        config_runner_id = registration["runner_id"]
         unit = self.systemd_unit(action)
         systemd = self._systemd_observation(unit)
         start_observed = bool(action.local_observation.get("start_observed"))
@@ -304,16 +343,25 @@ class LocalRuntime:
         if (action.action_state == "CLEANED" and not root.exists()
                 and systemd["status"] in ("EXITED", "NOT_STARTED")):
             systemd.update({"status": "CLEANED", "config_present": False,
-                            "config_identity": None,
+                            "config_identity": None, "config_runner_id": None,
                             "reason": "root_absent_and_exact_systemd_unit_inactive"})
             return systemd
         if config_present and config_identity != action.runner_identity:
             systemd.update({"status": "UNKNOWN", "config_present": True,
                             "config_identity": config_identity,
+                            "config_runner_id": config_runner_id,
                             "reason": "local_configuration_identity_mismatch"})
             return systemd
+        if config_present and (type(config_runner_id) is not int or config_runner_id <= 0):
+            systemd.update({"status": "UNKNOWN", "config_present": True,
+                            "config_identity": config_identity,
+                            "config_runner_id": config_runner_id,
+                            "reason": "local_configuration_runner_id_invalid"})
+            return systemd
         if systemd["status"] != "NOT_STARTED":
-            systemd.update({"config_present": config_present, "config_identity": config_identity,
+            systemd.update({"config_present": config_present,
+                            "config_identity": config_identity,
+                            "config_runner_id": config_runner_id,
                             "reason": "exact_systemd_unit_observed"})
             return systemd
         if root.exists():
@@ -323,12 +371,14 @@ class LocalRuntime:
                     "started_at_monotonic": None,
                     "start_observed": start_observed,
                     "config_present": config_present, "config_identity": config_identity,
+                    "config_runner_id": config_runner_id,
                     "reason": "no_process_recorded"}
         return {"status": "ABSENT", "systemd_unit": unit, "active_state": None,
                 "sub_state": None, "service_result": None, "main_pid": None,
                 "started_at_monotonic": None,
                 "start_observed": start_observed,
                 "config_present": False, "config_identity": None,
+                "config_runner_id": None,
                 "reason": "disposable_root_absent"}
 
     def stop(self, action: EphemeralAction, timeout: float = 10.0) -> None:

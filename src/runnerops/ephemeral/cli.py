@@ -47,7 +47,13 @@ def _runtime() -> EphemeralLifecycle:
         command_timeout=float(os.environ.get("RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS", "120")),
     )
     github = GitHubRuntime(timeout=float(os.environ.get("RUNNER_EPHEMERAL_GITHUB_TIMEOUT_SECONDS", "30")))
-    return EphemeralLifecycle(ActionStore(state_root), local, github)
+    return EphemeralLifecycle(
+        ActionStore(state_root),
+        local,
+        github,
+        registration_absence_confirm_seconds=float(os.environ.get(
+            "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS", "3")),
+    )
 
 
 def _emit(action: EphemeralAction, as_json: bool) -> None:

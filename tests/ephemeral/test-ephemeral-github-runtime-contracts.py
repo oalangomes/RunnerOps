@@ -31,7 +31,8 @@ class GitHubRuntimeContracts(unittest.TestCase):
         second_page = {
             "total_count": 101,
             "runners": [
-                {"id": 4242, "name": IDENTITY, "status": "online", "busy": False}
+                {"id": 4242, "name": IDENTITY, "status": "online", "busy": False,
+                 "ephemeral": True}
             ],
         }
         run.side_effect = [
@@ -43,6 +44,7 @@ class GitHubRuntimeContracts(unittest.TestCase):
 
         self.assertEqual(observation["status"], "ONLINE")
         self.assertEqual(observation["runner_id"], 4242)
+        self.assertIs(observation["ephemeral"], True)
         self.assertEqual(run.call_count, 2)
         commands = [call.args[0] for call in run.call_args_list]
         self.assertTrue(all("--method" in command and "GET" in command for command in commands))
@@ -59,6 +61,28 @@ class GitHubRuntimeContracts(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeFailure, "invalid schema"):
             GitHubRuntime().observe_runner("Example/Repo", IDENTITY)
+
+    @patch("runnerops.ephemeral.runtime.subprocess.run")
+    def test_invalid_runner_id_is_unknown(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, stdout=json.dumps({
+            "total_count": 1,
+            "runners": [{"id": None, "name": IDENTITY, "status": "online",
+                         "busy": False, "ephemeral": True}],
+        }), stderr="")
+        observation = GitHubRuntime().observe_runner("Example/Repo", IDENTITY)
+        self.assertEqual(observation["status"], "UNKNOWN")
+        self.assertEqual(observation["reason"], "remote_runner_id_invalid")
+
+    @patch("runnerops.ephemeral.runtime.subprocess.run")
+    def test_non_ephemeral_exact_runner_is_unknown(self, run):
+        run.return_value = subprocess.CompletedProcess([], 0, stdout=json.dumps({
+            "total_count": 1,
+            "runners": [{"id": 42, "name": IDENTITY, "status": "offline",
+                         "busy": False, "ephemeral": False}],
+        }), stderr="")
+        observation = GitHubRuntime().observe_runner("Example/Repo", IDENTITY)
+        self.assertEqual(observation["status"], "UNKNOWN")
+        self.assertEqual(observation["reason"], "remote_runner_not_ephemeral")
 
 
 if __name__ == "__main__":

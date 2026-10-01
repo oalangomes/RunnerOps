@@ -37,8 +37,8 @@ The lifecycle keeps these dimensions separate in `EphemeralAction` v1:
 |---|---|
 | desired | `ONE_JOB_TERMINAL_AND_CLEANED` |
 | action | `REQUESTED`, `REGISTERING`, `REGISTERED`, `ONLINE`, `BUSY`, `TERMINAL`, `CLEANUP_PENDING`, `CLEANED`, or an explicit inconclusive state |
-| local | exact systemd unit, active/sub state, service result, observed main PID, local config identity |
-| GitHub | exact identity, runner id, online/offline/busy/absent/ambiguous |
+| local | exact systemd unit, active/sub state, service result, observed main PID, local config identity and `agentId` |
+| GitHub | exact identity, runner id, optional API `ephemeral`, online/offline/busy/absent/ambiguous |
 | workload | first/last exact `busy=true` observation; conclusion remains `unknown` unless separately proven |
 | terminal | explicit evidence and reason; local exit alone is insufficient |
 | cleanup | attempts and independent remote/local/root results |
@@ -60,8 +60,17 @@ becomes `INCONCLUSIVE_REGISTRATION`. Re-running `create --action-id ...` is refu
 
 `reconcile` looks only for the same exact identity. If it exists and the matching
 local config exists, RunnerOps resumes that registration without requesting new
-material. If it is absent, two consecutive conclusive reconciliation observations
-are required before the same action is authorized to retry registration.
+material. The local `agentName`/`agentId` must correlate exactly with the remote
+name/id; `ephemeral=false`, invalid ids, or any mismatch stays inconclusive.
+If the identity is absent, two conclusive reconciliation observations separated
+by at least `RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS` (default: 3)
+are required before the same action is authorized to retry registration. A
+present, ambiguous, unknown, locally configured, or out-of-order observation
+resets that persisted confirmation sequence.
+
+If configuration succeeded but the local start failed, reconciliation may start
+the same already-configured unit after identity correlation proves it is safe.
+It never requests another registration token in that recovery path.
 
 ## Cleanup safety
 
@@ -73,9 +82,17 @@ $RUNNER_EPHEMERAL_ROOT/<action-id>
 
 Cleanup derives that path again, requires the exact ownership marker, rejects
 symlink/path escape and never reads or writes the persistent runner registry.
-Current exact `BUSY` evidence refuses destructive cleanup. Remote DELETE must be
+Current exact `BUSY` evidence refuses destructive cleanup. Cleanup is destructive
+only when `terminal_evidence.proven` is exactly true. Remote DELETE must be
 followed by observed exact absence; the systemd unit must stop; only then is the
-owned root removed. Repeated cleanup returns the same `CLEANED` result.
+owned root removed. `CLEANED` is convergent: status, reconcile, and repeated
+cleanup return the same state without observing or mutating runtime resources.
+
+Version 1 deliberately remains fail-closed for jobs too short for the bounded
+`busy=true` observation loop. A systemd exit or remote disappearance alone is not
+strong proof that one controlled workload ran. TODO: add a narrowly scoped,
+tamper-resistant workflow/job correlation proof before accepting short jobs;
+that broader GitHub workflow correlation is outside this issue.
 
 ## Explicit real-host qualification
 

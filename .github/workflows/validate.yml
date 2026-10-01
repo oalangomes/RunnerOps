@@ -83,6 +83,7 @@ jobs:
             test "$RUNNER_CACHE_ROOT" = "$HOME/.cache/actions-runners"
             test "$RUNNER_STATE_ROOT" = "$HOME/.local/state/actions-runners"
             test "$RUNNER_EPHEMERAL_ROOT" = "$HOME/.local/share/actions-runners/runners/.ephemeral"
+            test "$RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS" = "3"
           '
 
       - name: Validate runnerctl
@@ -199,6 +200,8 @@ jobs:
         run: |
           [[ "$EXPECTED_RUNNER" =~ ^runnerops-ephemeral-[a-f0-9]{16}$ ]]
           [[ "$EXPECTED_ACTION" =~ ^[a-f0-9]{32}$ ]]
+          expected_suffix="$(printf '%s' "$EXPECTED_ACTION" | sha256sum | cut -c1-16)"
+          test "$EXPECTED_RUNNER" = "runnerops-ephemeral-$expected_suffix"
 
   real-ci-watch-smoke:
     name: Hosted GitHub API smoke
@@ -325,11 +328,6 @@ jobs:
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
           ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
-          
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" status "$local_runner_name"
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" health "$local_runner_name"
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" plan "$local_runner_name"
-          ACTIONS_RUNNERS_HOME="$platform_home" "$current_runnerctl" list
 
           run_readonly_contract() {
             local rc=0
@@ -418,6 +416,8 @@ jobs:
           set -euo pipefail
           [[ "$EXPECTED_RUNNER" =~ ^runnerops-ephemeral-[a-f0-9]{16}$ ]]
           [[ "$EXPECTED_ACTION" =~ ^[a-f0-9]{32}$ ]]
+          expected_suffix="$(printf '%s' "$EXPECTED_ACTION" | sha256sum | cut -c1-16)"
+          test "$EXPECTED_RUNNER" = "runnerops-ephemeral-$expected_suffix"
           test "$RUNNER_NAME" = "$EXPECTED_RUNNER"
           {
             echo "runner=$RUNNER_NAME"

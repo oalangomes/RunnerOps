@@ -90,6 +90,25 @@ class FoundationContracts(unittest.TestCase):
                 with store.lock(ACTION_ID, timeout=0):
                     self.fail("same action lock must not be acquired concurrently")
 
+    def test_additive_v1_fields_are_backfilled_when_loading_old_evidence(self):
+        payload = self.action().to_dict()
+        del payload["registration"]["first_absence_observed_at"]
+        del payload["registration"]["last_absence_observed_at"]
+        del payload["local_observation"]["config_runner_id"]
+        del payload["github_observation"]["ephemeral"]
+        loaded = EphemeralAction.from_dict(payload)
+        self.assertIsNone(loaded.registration["first_absence_observed_at"])
+        self.assertIsNone(loaded.registration["last_absence_observed_at"])
+        self.assertIsNone(loaded.local_observation["config_runner_id"])
+        self.assertIsNone(loaded.github_observation["ephemeral"])
+
+    def test_cleaned_state_cannot_transition_out(self):
+        action = self.action()
+        action.transition(LifecycleState.CLEANED, action.updated_at, "cleaned")
+        action.transition(LifecycleState.CLEANED, action.updated_at, "still_cleaned")
+        with self.assertRaisesRegex(ValueError, "convergent terminal"):
+            action.transition(LifecycleState.ONLINE, action.updated_at, "regression")
+
 
 if __name__ == "__main__":
     unittest.main()

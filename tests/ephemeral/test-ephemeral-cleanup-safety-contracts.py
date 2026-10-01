@@ -112,6 +112,41 @@ class CleanupSafetyContracts(unittest.TestCase):
         self.assertEqual(observation["reason"], "local_configuration_identity_mismatch")
         self.assertEqual(observation["config_identity"], "some-other-runner")
 
+    def test_local_configuration_captures_valid_runner_id(self):
+        fake_systemctl = self.base / "systemctl-configured"
+        fake_systemctl.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' 'LoadState=not-found' 'ActiveState=inactive' 'SubState=dead' "
+            "'Result=success' 'MainPID=0'\n",
+            encoding="utf-8",
+        )
+        fake_systemctl.chmod(0o755)
+        self.runtime.systemctl = str(fake_systemctl)
+        root = self.runtime.allocate_root(self.action)
+        (root / ".runner").write_text(
+            '{{"agentId":42,"agentName":"{}"}}\n'.format(self.action.runner_identity),
+            encoding="utf-8")
+        observation = self.runtime.observe(self.action)
+        self.assertEqual(observation["status"], "CONFIGURED")
+        self.assertEqual(observation["config_runner_id"], 42)
+
+    def test_local_configuration_invalid_runner_id_is_inconclusive(self):
+        fake_systemctl = self.base / "systemctl-invalid-id"
+        fake_systemctl.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' 'LoadState=not-found' 'ActiveState=inactive' 'SubState=dead' "
+            "'Result=success' 'MainPID=0'\n",
+            encoding="utf-8",
+        )
+        fake_systemctl.chmod(0o755)
+        self.runtime.systemctl = str(fake_systemctl)
+        root = self.runtime.allocate_root(self.action)
+        (root / ".runner").write_text(
+            '{{"agentName":"{}"}}\n'.format(self.action.runner_identity), encoding="utf-8")
+        observation = self.runtime.observe(self.action)
+        self.assertEqual(observation["status"], "UNKNOWN")
+        self.assertEqual(observation["reason"], "local_configuration_runner_id_invalid")
+
     def test_cleaned_action_remains_cleaned_when_unit_is_inactive_and_root_absent(self):
         fake_systemctl = self.base / "systemctl-inactive"
         fake_systemctl.write_text(

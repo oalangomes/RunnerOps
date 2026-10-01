@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "kind": "RunnerOpsAdversarialHardeningEvidence",
+  "issue": 120,
+  "result": "PASS",
+  "branch": "feat/issue-120-ephemeral-lifecycle",
+  "starting_sha": "1b7cfce3f297db40c54f17800ae1fa318fac6265",
+  "tested_revision": "commit-containing-this-evidence",
+  "findings": {
+    "cleanup_requires_terminal_proof": "passed",
+    "local_remote_id_correlation": "passed",
+    "configured_start_recovery": "passed",
+    "temporal_absence_confirmation": "passed",
+    "cleaned_convergence": "passed",
+    "short_job_workload_proof": "fail_closed_limitation_documented",
+    "qualification_action_identity_derivation": "passed",
+    "dogfood_duplication_removed": "passed"
+  },
+  "targeted_validation": {
+    "ephemeral_python_tests": 44,
+    "ephemeral_shell_contract_files": 1,
+    "runnerctl_contracts": "passed",
+    "runnerctl_routing_contracts": "passed",
+    "shell_syntax": "passed",
+    "ephemeral_python_compilation": "passed"
+  },
+  "full_static_validation": {
+    "shell_contract_files": 12,
+    "python_contract_files": 21,
+    "python_tests": 272,
+    "release_contract": "passed",
+    "all_python_compilation": "passed",
+    "all_shell_syntax": "passed",
+    "agent_skills": "passed",
+    "site_and_brand": "passed",
+    "tracked_source_portability": "passed",
+    "git_diff_check": "passed"
+  },
+  "real_host_qualification": {
+    "executed_in_this_round": false,
+    "reason": "deliberately excluded from this adversarial hardening round"
+  },
+  "security_invariants": {
+    "registration_material_persisted": false,
+    "registration_material_in_argv": false,
+    "persistent_registry_mutated": false,
+    "destructive_cleanup_without_terminal_proof": false,
+    "delete_on_identity_mismatch": false,
+    "filesystem_guards_preserved": true
+  },
+  "open_findings": {
+    "blockers": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "conclusion": "READY FOR ADVERSARIAL RE-REVIEW"
+}

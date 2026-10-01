@@ -46,6 +46,8 @@ class EphemeralAction:
         "reconcile_required": False,
         "safe_retry_authorized": False,
         "consecutive_absence_observations": 0,
+        "first_absence_observed_at": None,
+        "last_absence_observed_at": None,
     })
     local_observation: Dict[str, Any] = field(default_factory=lambda: {
         "observed_at": None,
@@ -59,12 +61,14 @@ class EphemeralAction:
         "start_observed": False,
         "config_present": False,
         "config_identity": None,
+        "config_runner_id": None,
         "reason": "not_observed",
     })
     github_observation: Dict[str, Any] = field(default_factory=lambda: {
         "observed_at": None,
         "status": "UNKNOWN",
         "runner_id": None,
+        "ephemeral": None,
         "remote_status": None,
         "busy": None,
         "reason": "not_observed",
@@ -96,6 +100,8 @@ class EphemeralAction:
 
     def transition(self, state: LifecycleState, at: str, reason: str) -> None:
         previous = self.action_state
+        if previous == LifecycleState.CLEANED.value and state != LifecycleState.CLEANED:
+            raise ValueError("CLEANED is a convergent terminal lifecycle state")
         self.action_state = state.value
         self.updated_at = at
         self.final_reason = reason
@@ -114,4 +120,12 @@ class EphemeralAction:
         if value.get("schema_version") != SCHEMA_VERSION or value.get("kind") != "EphemeralAction":
             raise ValueError("unsupported ephemeral action contract")
         fields = cls.__dataclass_fields__
-        return cls(**{key: item for key, item in value.items() if key in fields})
+        action = cls(**{key: item for key, item in value.items() if key in fields})
+        for name in (
+            "registration", "local_observation", "github_observation",
+            "workload_evidence", "terminal_evidence", "cleanup",
+        ):
+            defaults = fields[name].default_factory()
+            defaults.update(getattr(action, name))
+            setattr(action, name, defaults)
+        return action

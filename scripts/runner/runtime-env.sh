@@ -76,6 +76,14 @@ RUNNER_EPHEMERAL_ROOT="${RUNNER_EPHEMERAL_ROOT:-$RUNNER_DATA_ROOT/.ephemeral}"
 RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS="${RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS:-3}"
 RUNNER_BOOT_POLICY="${RUNNER_BOOT_POLICY:-on-demand}"
 
+if [[ ! "$RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
+  ! LC_ALL=C awk -v value="$RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS" \
+    'BEGIN { rendered = tolower(sprintf("%g", value + 0)); exit !(value > 0 && rendered !~ /(inf|nan)/) }'
+then
+  echo "ERRO: RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS deve ser uma duração finita e positiva" >&2
+  return 1 2>/dev/null || exit 1
+fi
+
 # Managed autoscale snapshots are written by `runnerctl autoscale enable` and
 # intentionally load after general machine config so scheduled ticks reconstruct
 # the exact normalized policy captured at enable time.

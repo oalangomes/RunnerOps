@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 """Contracts for exact identity and non-secret durable evidence."""
 
+import contextlib
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
+from runnerops.ephemeral.cli import _runtime, build_parser
 from runnerops.ephemeral.contracts import EphemeralAction, LifecycleState
 from runnerops.ephemeral.identity import disposable_root, runner_identity
 from runnerops.ephemeral.store import ActionLocked, ActionStore
 
 
 ACTION_ID = "0123456789abcdef0123456789abcdef"
+INVALID_DURATIONS = ("nan", "NaN", "inf", "+inf", "-inf", "infinity", "0", "-1")
+VALID_DURATIONS = ("0.1", "1", "3", "30.5")
 
 
 class FoundationContracts(unittest.TestCase):
@@ -87,8 +94,16 @@ class FoundationContracts(unittest.TestCase):
         store = ActionStore(self.base / "state")
         with store.lock(ACTION_ID):
             with self.assertRaises(ActionLocked):
-                with store.lock(ACTION_ID, timeout=0):
+                with store.lock(ACTION_ID, timeout=0.01):
                     self.fail("same action lock must not be acquired concurrently")
+
+    def test_action_lock_timeout_requires_finite_positive_duration(self):
+        store = ActionStore(self.base / "state")
+        for value in (float("nan"), float("inf"), float("-inf"), 0, -1):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "finite positive duration"):
+                    with store.lock(ACTION_ID, timeout=value):
+                        self.fail("invalid lock timeout must fail before acquisition")
 
     def test_additive_v1_fields_are_backfilled_when_loading_old_evidence(self):
         payload = self.action().to_dict()
@@ -108,6 +123,48 @@ class FoundationContracts(unittest.TestCase):
         action.transition(LifecycleState.CLEANED, action.updated_at, "still_cleaned")
         with self.assertRaisesRegex(ValueError, "convergent terminal"):
             action.transition(LifecycleState.ONLINE, action.updated_at, "regression")
+
+    def test_public_cli_durations_require_finite_positive_values(self):
+        base = ["create", "Example/Repo", "--profile", "generic", "--labels", "ephemeral"]
+        for option in ("--online-timeout", "--observation-interval"):
+            for value in INVALID_DURATIONS:
+                with self.subTest(option=option, value=value):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        with self.assertRaises(SystemExit) as raised:
+                            build_parser().parse_args(base + [option, value])
+                    self.assertEqual(raised.exception.code, 2)
+            for value in VALID_DURATIONS:
+                with self.subTest(option=option, value=value):
+                    parsed = build_parser().parse_args(base + [option, value])
+                    attribute = option[2:].replace("-", "_")
+                    self.assertEqual(getattr(parsed, attribute), float(value))
+
+    def test_environment_durations_require_finite_positive_values(self):
+        names = (
+            "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS",
+            "RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS",
+            "RUNNER_EPHEMERAL_GITHUB_TIMEOUT_SECONDS",
+        )
+        valid_environment = {name: "1" for name in names}
+        with patch.dict(os.environ, valid_environment, clear=False):
+            for name in names:
+                for value in INVALID_DURATIONS:
+                    with self.subTest(name=name, value=value):
+                        with patch.dict(os.environ, {name: value}, clear=False):
+                            with self.assertRaisesRegex(
+                                    ValueError, "finite positive duration"):
+                                _runtime()
+                for value in VALID_DURATIONS:
+                    with self.subTest(name=name, value=value):
+                        with patch.dict(os.environ, {name: value}, clear=False):
+                            lifecycle = _runtime()
+                        if name == "RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS":
+                            observed = lifecycle.local.command_timeout
+                        elif name == "RUNNER_EPHEMERAL_GITHUB_TIMEOUT_SECONDS":
+                            observed = lifecycle.github.timeout
+                        else:
+                            observed = lifecycle.registration_absence_confirm_seconds
+                        self.assertEqual(observed, float(value))
 
 
 if __name__ == "__main__":

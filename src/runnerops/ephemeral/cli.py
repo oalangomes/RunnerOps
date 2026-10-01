@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from .contracts import EphemeralAction, LifecycleState
+from .duration import finite_positive_duration
 from .identity import new_action_id
 from .lifecycle import CleanupRefused, EphemeralLifecycle, ReconcileRequired
 from .runtime import GitHubRuntime, LocalRuntime
@@ -25,10 +26,14 @@ SUCCESS_STATES = {
 
 
 def _positive_float(value: str) -> float:
-    parsed = float(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
-    return parsed
+    try:
+        return finite_positive_duration(value, "value")
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _environment_duration(name: str, default: str) -> float:
+    return finite_positive_duration(os.environ.get(name, default), name)
 
 
 def _labels(value: str) -> Iterable[str]:
@@ -44,15 +49,17 @@ def _runtime() -> EphemeralLifecycle:
         ephemeral_root,
         scripts_root / "runner" / "package.sh",
         scripts_root / "runner" / "ephemeral.sh",
-        command_timeout=float(os.environ.get("RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS", "120")),
+        command_timeout=_environment_duration(
+            "RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS", "120"),
     )
-    github = GitHubRuntime(timeout=float(os.environ.get("RUNNER_EPHEMERAL_GITHUB_TIMEOUT_SECONDS", "30")))
+    github = GitHubRuntime(timeout=_environment_duration(
+        "RUNNER_EPHEMERAL_GITHUB_TIMEOUT_SECONDS", "30"))
     return EphemeralLifecycle(
         ActionStore(state_root),
         local,
         github,
-        registration_absence_confirm_seconds=float(os.environ.get(
-            "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS", "3")),
+        registration_absence_confirm_seconds=_environment_duration(
+            "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS", "3"),
     )
 
 
@@ -99,9 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
-    lifecycle = _runtime()
     action_id = None
+    lifecycle = None
     try:
+        lifecycle = _runtime()
         if args.command == "create":
             action_id = args.action_id or new_action_id()
             action = lifecycle.create(
@@ -129,7 +137,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         _emit(action, args.json)
         return 0 if action.action_state == LifecycleState.CLEANED.value else 2
     except (CleanupRefused, ReconcileRequired, RuntimeError, ValueError, OSError) as error:
-        if action_id and lifecycle.store.exists(action_id):
+        if action_id and lifecycle is not None and lifecycle.store.exists(action_id):
             _emit(lifecycle.store.load(action_id), getattr(args, "json", False))
         print("ERRO: {}".format(error), file=sys.stderr)
         return 2

@@ -72,6 +72,12 @@ If configuration succeeded but the local start failed, reconciliation may start
 the same already-configured unit after identity correlation proves it is safe.
 It never requests another registration token in that recovery path.
 
+Every lifecycle timing input is a finite, strictly positive duration. This rule
+applies to CLI online/observation bounds, environment-backed registration,
+local-command and GitHub-command timeouts, the per-action lock, and internal
+runtime stop bounds. `NaN`, positive or negative infinity, zero, and negative
+values fail before runtime mutation.
+
 ## Cleanup safety
 
 The disposable root is exactly:
@@ -82,11 +88,19 @@ $RUNNER_EPHEMERAL_ROOT/<action-id>
 
 Cleanup derives that path again, requires the exact ownership marker, rejects
 symlink/path escape and never reads or writes the persistent runner registry.
-Current exact `BUSY` evidence refuses destructive cleanup. Cleanup is destructive
-only when `terminal_evidence.proven` is exactly true. Remote DELETE must be
-followed by observed exact absence; the systemd unit must stop; only then is the
-owned root removed. `CLEANED` is convergent: status, reconcile, and repeated
-cleanup return the same state without observing or mutating runtime resources.
+Durable `terminal_evidence.proven` alone does not authorize destructive cleanup.
+The cleanup-time observation must also show the exact remote identity `ABSENT`
+and the local unit in `EXITED`, `ABSENT`, `ALLOCATED`, or the relevant idempotent
+`CLEANED` state. Fresh `ONLINE`, `OFFLINE`, `BUSY`, `UNKNOWN`, or `AMBIGUOUS`
+remote evidence and fresh `RUNNING`, `STARTING`, `STOPPING`, `UNKNOWN`, or
+`CONFIGURED` local evidence fail closed before DELETE, stop, or root removal.
+Contradictory fresh evidence is recorded explicitly and moves the action to
+reconciliation before later destructive mutation. Once remote absence and local
+terminality are freshly revalidated, the exact systemd unit is confirmed stopped
+and only then is the owned root removed. An interrupted `CLEANUP_PENDING` retry
+can continue from remote absence and a stopped local unit. `CLEANED` is
+convergent: status, reconcile, and repeated cleanup return the same state without
+observing or mutating runtime resources.
 
 Version 1 deliberately remains fail-closed for jobs too short for the bounded
 `busy=true` observation loop. A systemd exit or remote disappearance alone is not

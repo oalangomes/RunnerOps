@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 from .contracts import EphemeralAction
+from .duration import finite_positive_duration
 from .identity import OWNER_MARKER, disposable_root
 
 
@@ -22,7 +23,7 @@ class RuntimeFailure(RuntimeError):
 class GitHubRuntime:
     def __init__(self, gh: str = "gh", timeout: float = 30.0):
         self.gh = gh
-        self.timeout = timeout
+        self.timeout = finite_positive_duration(timeout, "GitHub command timeout")
 
     def _run(self, args: List[str], operation: str) -> str:
         try:
@@ -143,7 +144,8 @@ class LocalRuntime:
         self.package_helper = Path(package_helper)
         self.ephemeral_helper = Path(ephemeral_helper)
         self.systemctl = systemctl
-        self.command_timeout = command_timeout
+        self.command_timeout = finite_positive_duration(
+            command_timeout, "local command timeout")
         self.service_user = pwd.getpwuid(os.getuid()).pw_name
 
     def _run(self, args: List[str], operation: str, input_text: Optional[str] = None) -> str:
@@ -382,6 +384,7 @@ class LocalRuntime:
                 "reason": "disposable_root_absent"}
 
     def stop(self, action: EphemeralAction, timeout: float = 10.0) -> None:
+        timeout = finite_positive_duration(timeout, "local stop timeout")
         observation = self.observe(action)
         if observation["status"] not in ("RUNNING", "STARTING", "STOPPING"):
             return

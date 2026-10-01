@@ -162,9 +162,18 @@ class LifecycleContracts(unittest.TestCase):
         self.local = FakeLocal(base / "data" / ".ephemeral")
         self.github = FakeGitHub()
         self.clock = MutableClock()
+        self.monotonic_value = 0.0
+
+        def monotonic():
+            return self.monotonic_value
+
+        def sleeper(seconds):
+            self.monotonic_value += seconds
+
         self.lifecycle = EphemeralLifecycle(
             self.store, self.local, self.github, clock=self.clock,
-            sleeper=lambda _: None, registration_absence_confirm_seconds=3)
+            monotonic=monotonic, sleeper=sleeper,
+            registration_absence_confirm_seconds=3)
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -173,7 +182,7 @@ class LifecycleContracts(unittest.TestCase):
         self.github.queue("ABSENT", final_remote)
         return self.lifecycle.create(
             "Example/Repo", "generic", ["repo", "local-runner", "ephemeral"],
-            action_id=action_id, online_timeout=0,
+            action_id=action_id, online_timeout=0.1,
         )
 
     def test_registration_is_exact_and_online_is_observed_not_assumed(self):
@@ -184,12 +193,34 @@ class LifecycleContracts(unittest.TestCase):
         self.assertEqual(action.registration["attempts"], 1)
         self.assertFalse(action.workload_evidence["observed"])
 
+    def test_direct_lifecycle_durations_fail_before_runtime_mutation(self):
+        invalid_values = (float("nan"), float("inf"), float("-inf"), 0, -1)
+        for parameter in ("online_timeout", "observation_interval"):
+            for value in invalid_values:
+                with self.subTest(parameter=parameter, value=value):
+                    arguments = {"online_timeout": 1.0, "observation_interval": 1.0}
+                    arguments[parameter] = value
+                    with self.assertRaisesRegex(ValueError, "finite positive duration"):
+                        self.lifecycle.create(
+                            "Example/Repo", "generic", ["ephemeral"],
+                            action_id=ACTION_ID, **arguments)
+                    self.assertFalse(self.store.exists(ACTION_ID))
+                    self.assertEqual(self.github.observe_calls, 0)
+
+    def test_registration_absence_window_requires_finite_positive_duration(self):
+        for value in (float("nan"), float("inf"), float("-inf"), 0, -1):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "finite positive duration"):
+                    EphemeralLifecycle(
+                        self.store, self.local, self.github,
+                        registration_absence_confirm_seconds=value)
+
     def test_requested_crash_before_remote_mutation_resumes_same_action(self):
         initial = self.lifecycle._new_action("Example/Repo", "generic", ["ephemeral"], ACTION_ID)
         self.assertFalse(initial.registration["attempted"])
         self.github.queue("ABSENT", "ONLINE")
         resumed = self.lifecycle.create(
-            "Example/Repo", "generic", ["ephemeral"], action_id=ACTION_ID, online_timeout=0)
+            "Example/Repo", "generic", ["ephemeral"], action_id=ACTION_ID, online_timeout=0.1)
         self.assertEqual(resumed.action_state, LifecycleState.ONLINE.value)
         self.assertEqual(resumed.action_id, ACTION_ID)
         self.assertEqual(resumed.registration["attempts"], 1)
@@ -267,7 +298,7 @@ class LifecycleContracts(unittest.TestCase):
 
         self.github.queue("ABSENT", "ONLINE")
         retried = self.lifecycle.create("Example/Repo", "generic", ["ephemeral"], action_id=ACTION_ID,
-                                        online_timeout=0)
+                                        online_timeout=0.1)
         self.assertEqual(retried.action_state, LifecycleState.ONLINE.value)
         self.assertEqual(self.github.token_calls, 2)
         self.assertEqual(retried.registration["attempts"], 2)
@@ -360,6 +391,58 @@ class LifecycleContracts(unittest.TestCase):
                 self.assertEqual(self.local.stopped, 0)
                 self.assertEqual(self.local.removed, 0)
 
+    def test_proven_terminal_cleanup_refuses_fresh_remote_presence(self):
+        for remote in ("ONLINE", "OFFLINE"):
+            with self.subTest(remote=remote):
+                self.tearDown()
+                self.setUp()
+                self.create("ONLINE")
+                self.local.status = "EXITED"
+                terminal = self.store.load(ACTION_ID)
+                terminal.terminal_evidence.update({"proven": True, "reason": "test_proof"})
+                terminal.transition(LifecycleState.TERMINAL, self.clock(), "test_terminal")
+                self.store.save(terminal)
+                self.github.queue(remote)
+
+                with self.assertRaises(CleanupRefused):
+                    self.lifecycle.cleanup(ACTION_ID)
+
+                refused = self.store.load(ACTION_ID)
+                self.assertEqual(
+                    refused.cleanup["reason"],
+                    "terminal_evidence_contradicted_by_remote_state",
+                )
+                self.assertEqual(refused.action_state, LifecycleState.INCONCLUSIVE_TERMINAL.value)
+                self.assertEqual(self.github.delete_calls, 0)
+                self.assertEqual(self.local.stopped, 0)
+                self.assertEqual(self.local.removed, 0)
+
+    def test_proven_terminal_cleanup_refuses_fresh_active_local_state(self):
+        for local_status in ("RUNNING", "STARTING"):
+            with self.subTest(local_status=local_status):
+                self.tearDown()
+                self.setUp()
+                self.create("ONLINE")
+                terminal = self.store.load(ACTION_ID)
+                terminal.terminal_evidence.update({"proven": True, "reason": "test_proof"})
+                terminal.transition(LifecycleState.TERMINAL, self.clock(), "test_terminal")
+                self.store.save(terminal)
+                self.local.status = local_status
+                self.github.queue("ABSENT")
+
+                with self.assertRaises(CleanupRefused):
+                    self.lifecycle.cleanup(ACTION_ID)
+
+                refused = self.store.load(ACTION_ID)
+                self.assertEqual(
+                    refused.cleanup["reason"],
+                    "terminal_evidence_contradicted_by_local_state",
+                )
+                self.assertEqual(refused.action_state, LifecycleState.INCONCLUSIVE_TERMINAL.value)
+                self.assertEqual(self.github.delete_calls, 0)
+                self.assertEqual(self.local.stopped, 0)
+                self.assertEqual(self.local.removed, 0)
+
     def test_identity_mismatch_is_inconclusive_and_cleanup_never_deletes(self):
         self.create("ONLINE")
         self.local.status = "EXITED"
@@ -410,7 +493,7 @@ class LifecycleContracts(unittest.TestCase):
         terminal.terminal_evidence.update({"proven": True, "reason": "test_proof"})
         terminal.transition(LifecycleState.TERMINAL, self.clock(), "test_terminal")
         self.store.save(terminal)
-        self.github.queue("OFFLINE")
+        self.github.queue("ABSENT")
         first = self.lifecycle.cleanup(ACTION_ID)
         second = self.lifecycle.cleanup(ACTION_ID)
         local_observations = self.local.observe_calls
@@ -422,7 +505,7 @@ class LifecycleContracts(unittest.TestCase):
         self.assertEqual(status.action_state, LifecycleState.CLEANED.value)
         self.assertEqual(reconciled.action_state, LifecycleState.CLEANED.value)
         self.assertEqual(second.cleanup["attempts"], 1)
-        self.assertEqual(self.github.delete_calls, 1)
+        self.assertEqual(self.github.delete_calls, 0)
         self.assertEqual(self.local.removed, 1)
         self.assertEqual(self.local.observe_calls, local_observations)
         self.assertEqual(self.github.observe_calls, remote_observations)
@@ -435,7 +518,7 @@ class LifecycleContracts(unittest.TestCase):
         terminal.terminal_evidence.update({"proven": True, "reason": "test_proof"})
         terminal.transition(LifecycleState.TERMINAL, self.clock(), "test_terminal")
         self.store.save(terminal)
-        self.github.queue("OFFLINE")
+        self.github.queue("ABSENT")
         with self.assertRaises(RuntimeFailure):
             self.lifecycle.cleanup(ACTION_ID)
         self.assertEqual(self.store.load(ACTION_ID).action_state, LifecycleState.CLEANUP_PENDING.value)
@@ -450,7 +533,7 @@ class LifecycleContracts(unittest.TestCase):
         with self.assertRaises(RuntimeFailure):
             self.lifecycle.create(
                 "Example/Repo", "generic", ["ephemeral"],
-                action_id=ACTION_ID, online_timeout=0)
+                action_id=ACTION_ID, online_timeout=0.1)
         failed = self.store.load(ACTION_ID)
         self.assertEqual(failed.action_state, LifecycleState.INCONCLUSIVE_TERMINAL.value)
         self.assertTrue(failed.registration["configured"])
@@ -467,7 +550,7 @@ class LifecycleContracts(unittest.TestCase):
         with self.assertRaises(RuntimeFailure):
             self.lifecycle.create(
                 "Example/Repo", "generic", ["ephemeral"],
-                action_id=ACTION_ID, online_timeout=0)
+                action_id=ACTION_ID, online_timeout=0.1)
         self.github.queue("ONLINE")
         failed_again = self.lifecycle.reconcile(ACTION_ID)
         self.assertEqual(failed_again.action_state, LifecycleState.INCONCLUSIVE_TERMINAL.value)

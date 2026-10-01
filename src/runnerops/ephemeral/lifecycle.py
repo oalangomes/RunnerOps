@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Optional
 
 from .contracts import EphemeralAction, LifecycleState
+from .duration import finite_positive_duration
 from .identity import disposable_root, new_action_id, runner_identity, validate_action_id
 from .store import ActionStore
 
@@ -33,15 +34,16 @@ class EphemeralLifecycle:
         sleeper: Callable[[float], None] = time.sleep,
         registration_absence_confirm_seconds: float = 3.0,
     ):
-        if registration_absence_confirm_seconds <= 0:
-            raise ValueError("registration absence confirmation window must be positive")
         self.store = store
         self.local = local_runtime
         self.github = github_runtime
         self.clock = clock
         self.monotonic = monotonic
         self.sleeper = sleeper
-        self.registration_absence_confirm_seconds = registration_absence_confirm_seconds
+        self.registration_absence_confirm_seconds = finite_positive_duration(
+            registration_absence_confirm_seconds,
+            "registration absence confirmation window",
+        )
 
     @staticmethod
     def _parse_observed_at(value: Any) -> Optional[datetime]:
@@ -107,6 +109,9 @@ class EphemeralLifecycle:
         online_timeout: float = 30.0,
         observation_interval: float = 1.0,
     ) -> EphemeralAction:
+        online_timeout = finite_positive_duration(online_timeout, "online timeout")
+        observation_interval = finite_positive_duration(
+            observation_interval, "observation interval")
         exact_id = validate_action_id(action_id) if action_id else new_action_id()
         with self.store.lock(exact_id):
             return self._create_locked(
@@ -211,7 +216,7 @@ class EphemeralLifecycle:
                                   "registered_but_local_start_failed")
             raise
 
-        deadline = self.monotonic() + max(0.0, online_timeout)
+        deadline = self.monotonic() + online_timeout
         while True:
             self._record_observations(action)
             remote_status = action.github_observation["status"]
@@ -451,18 +456,35 @@ class EphemeralLifecycle:
         self._record_observations(action)
         remote = action.github_observation
         local = action.local_observation
-        if remote["status"] == "BUSY":
-            action.cleanup.update({"result": "REFUSED", "reason": "runner_busy"})
-            self.store.save(action)
-            raise CleanupRefused("destructive cleanup refused while exact runner is busy")
-        if remote["status"] in ("UNKNOWN", "AMBIGUOUS") or local["status"] == "UNKNOWN":
-            action.cleanup.update({"result": "INCONCLUSIVE", "reason": "observation_inconclusive"})
-            self.store.save(action)
-            raise CleanupRefused("cleanup requires conclusive exact local and remote observation")
         if action.terminal_evidence.get("proven") is not True:
             action.cleanup.update({"result": "REFUSED", "reason": "terminal_evidence_not_proven"})
             self.store.save(action)
             raise CleanupRefused("destructive cleanup requires proven terminal evidence")
+        if remote["status"] in ("UNKNOWN", "AMBIGUOUS"):
+            action.cleanup.update({"result": "INCONCLUSIVE", "reason": "observation_inconclusive"})
+            self.store.save(action)
+            raise CleanupRefused("cleanup requires conclusive exact remote observation")
+        if remote["status"] != "ABSENT":
+            reason = "terminal_evidence_contradicted_by_remote_state"
+            action.cleanup.update({"result": "REFUSED", "reason": reason})
+            self._save_transition(action, LifecycleState.INCONCLUSIVE_TERMINAL, reason)
+            raise CleanupRefused(
+                "fresh remote state contradicts previously proven terminal evidence")
+        if local["status"] == "UNKNOWN":
+            action.cleanup.update({"result": "INCONCLUSIVE", "reason": "observation_inconclusive"})
+            self.store.save(action)
+            raise CleanupRefused("cleanup requires conclusive exact local observation")
+        if local["status"] not in ("EXITED", "ABSENT", "ALLOCATED", "CLEANED"):
+            reason = "terminal_evidence_contradicted_by_local_state"
+            action.cleanup.update({"result": "REFUSED", "reason": reason})
+            self._save_transition(action, LifecycleState.INCONCLUSIVE_TERMINAL, reason)
+            raise CleanupRefused(
+                "fresh local state contradicts previously proven terminal evidence")
+        if action.action_state not in (
+                LifecycleState.TERMINAL.value, LifecycleState.CLEANUP_PENDING.value):
+            action.cleanup.update({"result": "REFUSED", "reason": "cleanup_reconcile_required"})
+            self.store.save(action)
+            raise CleanupRefused("cleanup requires reconcile after contradictory terminal evidence")
 
         self.local.validate_owned_root(action, allow_missing=True)
         action.cleanup["attempts"] += 1
@@ -470,30 +492,6 @@ class EphemeralLifecycle:
         action.cleanup.update({"result": "IN_PROGRESS", "reason": "cleanup_started"})
         self._save_transition(action, LifecycleState.CLEANUP_PENDING, "bounded_cleanup_started")
 
-        if remote["status"] in ("ONLINE", "OFFLINE"):
-            runner_id = remote.get("runner_id")
-            if runner_id is None:
-                action.cleanup.update({"result": "INCONCLUSIVE", "reason": "remote_id_missing"})
-                self.store.save(action)
-                raise CleanupRefused("exact remote registration lacks a runner id")
-            self.github.delete_runner(action.repository, runner_id)
-            deadline = self.monotonic() + 10.0
-            while True:
-                after_delete = self._observe_github(action)
-                self.store.save(action)
-                if after_delete["status"] == "ABSENT":
-                    break
-                if after_delete["status"] in ("BUSY", "UNKNOWN", "AMBIGUOUS"):
-                    action.cleanup.update({"result": "INCONCLUSIVE",
-                                           "reason": "remote_delete_not_conclusively_observed"})
-                    self.store.save(action)
-                    raise CleanupRefused("remote deletion did not produce conclusive absence")
-                if self.monotonic() >= deadline:
-                    action.cleanup.update({"result": "INCONCLUSIVE",
-                                           "reason": "remote_delete_observation_timeout"})
-                    self.store.save(action)
-                    raise CleanupRefused("exact remote identity remained after bounded delete observation")
-                self.sleeper(0.5)
         action.cleanup["remote_removed"] = True
 
         self.local.stop(action)

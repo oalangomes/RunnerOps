@@ -18,6 +18,35 @@ assert_contains() {
   [[ "$haystack" == *"$needle"* ]] || fail "$message (missing: $needle)"
 }
 
+for duration in nan NaN inf +inf -inf infinity 0 -1; do
+  runtime_error="$(
+    ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+    RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS="$duration" \
+      bash -c 'source "$1"' _ "$ROOT/scripts/runner/runtime-env.sh" 2>&1
+  )" && fail "runtime-env deve rejeitar duração inválida: $duration"
+  assert_contains "$runtime_error" "duração finita e positiva" \
+    "runtime-env deve explicar duração inválida"
+  [[ "$runtime_error" != *"Traceback"* ]] || fail "configuração inválida não pode vazar traceback"
+done
+
+for duration in 0.1 1 3 30.5; do
+  observed="$(
+    ACTIONS_RUNNERS_ENV="$TMP_ROOT/missing.env" \
+    RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS="$duration" \
+      bash -c 'source "$1"; printf "%s" "$RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS"' \
+      _ "$ROOT/scripts/runner/runtime-env.sh"
+  )"
+  [[ "$observed" == "$duration" ]] || fail "runtime-env deve aceitar duração finita: $duration"
+done
+
+cli_error="$(
+  PYTHONPATH="$ROOT/src" RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS=inf \
+    python3 -B -m runnerops.ephemeral.cli status 33333333333333333333333333333333 2>&1
+)" && fail "CLI ephemeral deve rejeitar timeout infinito"
+assert_contains "$cli_error" "RUNNER_EPHEMERAL_COMMAND_TIMEOUT_SECONDS must be a finite positive duration" \
+  "CLI deve expor erro de configuração estreito"
+[[ "$cli_error" != *"Traceback"* ]] || fail "CLI não pode vazar traceback de float inválido"
+
 action_id="33333333333333333333333333333333"
 identity="runnerops-ephemeral-$(printf '%s' "$action_id" | sha256sum | cut -c1-16)"
 runner_root="$TMP_ROOT/ephemeral/$action_id"

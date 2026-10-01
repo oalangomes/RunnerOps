@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import EphemeralAction
+from .duration import finite_positive_duration
 from .identity import validate_action_id
 
 
@@ -46,6 +47,7 @@ class ActionStore:
     @contextmanager
     def lock(self, action_id: str, timeout: float = 5.0):
         exact_id = validate_action_id(action_id)
+        timeout = finite_positive_duration(timeout, "action lock timeout")
         lock_root = self.root.parent / "locks"
         lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         if lock_root.is_symlink():
@@ -53,7 +55,7 @@ class ActionStore:
         flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(str(lock_root / "{}.lock".format(exact_id)), flags, 0o600)
         os.fchmod(descriptor, 0o600)
-        deadline = time.monotonic() + max(0.0, timeout)
+        deadline = time.monotonic() + timeout
         acquired = False
         try:
             while True:

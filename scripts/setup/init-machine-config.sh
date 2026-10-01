@@ -21,9 +21,10 @@ die() {
 [[ "$BOOT_POLICY" == "on-demand" || "$BOOT_POLICY" == "auto" ]] ||
   die "RUNNER_BOOT_POLICY invalido: $BOOT_POLICY"
 [[ "$EPHEMERAL_ABSENCE_CONFIRM_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] ||
-  die "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS deve ser positivo"
-awk -v value="$EPHEMERAL_ABSENCE_CONFIRM_SECONDS" 'BEGIN { exit !(value > 0) }' ||
-  die "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS deve ser positivo"
+  die "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS deve ser uma duração finita e positiva"
+LC_ALL=C awk -v value="$EPHEMERAL_ABSENCE_CONFIRM_SECONDS" \
+  'BEGIN { rendered = tolower(sprintf("%g", value + 0)); exit !(value > 0 && rendered !~ /(inf|nan)/) }' ||
+  die "RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS deve ser uma duração finita e positiva"
 
 mkdir -p "$CONFIG_HOME" "$(dirname "$TARGET_CONFIG")" "$DATA_ROOT" "$CACHE_ROOT" "$STATE_ROOT" "$EPHEMERAL_ROOT"
 

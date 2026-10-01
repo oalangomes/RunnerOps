@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PRE="$ROOT/skills/runnerops-pr-validation/SKILL.md"
 MANAGE="$ROOT/skills/runnerops-manage-runners/SKILL.md"
+PERF="$ROOT/skills/runnerops-ci-performance/SKILL.md"
 
 fail() {
   printf '[FAIL] %s\n' "$1" >&2
@@ -30,11 +31,16 @@ require_absent_executable_example() {
 
 [[ -f "$PRE" ]] || fail "skill pre-PR ausente"
 [[ -f "$MANAGE" ]] || fail "skill de gestão ausente"
+[[ -f "$PERF" ]] || fail "skill de performance ausente"
 
 require_text "$PRE" "name: runnerops-pr-validation" "skill pre-PR deve usar nome RunnerOps canônico"
 require_text "$MANAGE" "name: runnerops-manage-runners" "skill de gestão deve usar nome RunnerOps canônico"
 
-require_text "$PRE" "runnerctl ensure ." "skill pre-PR deve usar runnerctl ensure ."
+require_text "$PRE" "runnerctl overview ." "skill pre-PR deve inspecionar overview sem mutar"
+require_text "$PRE" "runnerctl capacity . --json" "skill pre-PR deve inspecionar capacidade"
+require_text "$PRE" "runnerctl autoscale status . --json" "skill pre-PR deve inspecionar autoscale"
+require_text "$PRE" 'Do not call `runnerctl ensure .` by default.' "skill pre-PR não deve usar ensure como gate padrão"
+require_text "$PRE" 'allowed only when the user explicitly asks to activate repository-wide capacity' "skill pre-PR deve reservar ensure para override explícito"
 require_text "$PRE" "runnerctl ci watch . --pr <number> --json" "skill pre-PR deve preferir watcher por PR"
 require_text "$PRE" "runnerctl ci watch . --json" "skill pre-PR deve suportar watcher por HEAD"
 require_text "$PRE" '`0`: CI completed successfully.' "skill pre-PR deve documentar exit 0"
@@ -48,6 +54,12 @@ require_text "$MANAGE" "runnerctl ci watch . --pr <number> --json" "skill de ges
 require_text "$MANAGE" "runnerctl ci watch owner/repo --sha <sha> --json" "skill de gestão deve conhecer watcher por SHA"
 require_text "$MANAGE" "Never claim CI success from an inconclusive watcher result." "skill de gestão deve preservar semântica inconclusiva"
 
+require_text "$MANAGE" "runnerctl overview ." "skill de gestão deve começar por evidência do repo"
+require_text "$MANAGE" "runnerctl capacity . --json" "skill de gestão deve inspecionar capacidade"
+require_text "$MANAGE" "runnerctl autoscale status . --json" "skill de gestão deve conhecer autoscale"
+require_text "$MANAGE" 'not the default' "skill de gestão deve tratar ensure como override e não padrão"
+require_text "$MANAGE" "runnerctl ephemeral create ." "skill de gestão deve conhecer lifecycle ephemeral explícito"
+require_text "$MANAGE" 'does not emit `CREATE_EPHEMERAL`' "skill de gestão não deve confundir ephemeral com autoscale automático"
 require_text "$MANAGE" "After every explicit start or restart, verify the result:" "skill de gestão deve validar start/restart"
 require_text "$MANAGE" "runnerctl status <runner>" "skill de gestão deve verificar status após lifecycle"
 require_text "$MANAGE" "runnerctl health <runner>" "skill de gestão deve verificar health após lifecycle"
@@ -57,11 +69,18 @@ require_text "$MANAGE" "[INCONCLUSIVE] ... remote-registration=unknown" "skill d
 require_text "$MANAGE" '**provisioned**, not necessarily **available now**' "skill de gestão deve distinguir provisionado de capacidade imediata"
 require_text "$MANAGE" "state=unknown" "skill de gestão deve tratar lifecycle unknown"
 require_text "$MANAGE" "Do not paraphrase that as full functional integrity" "skill de gestão não deve superestimar doctor"
-require_text "$MANAGE" "Never start a shared group when repository-scoped or exact-runner operation satisfies the request." "skill de gestão deve preferir operação repo-scoped/exata"
+require_text "$MANAGE" "Never start a shared group when governed autoscale or exact-runner operation satisfies the request." "skill de gestão deve preferir autoscale/exato"
+require_text "$MANAGE" 'Never use `runnerctl ensure .` as the default repository operation' "skill de gestão deve proibir ensure como default"
+require_text "$MANAGE" 'Never call `runnerctl ephemeral create` merely because a queue exists' "skill não pode usar ephemeral como decisão LLM de autoscale"
+
+require_text "$PERF" "runnerctl capacity . --json" "skill de performance deve usar evidência de capacidade"
+require_text "$PERF" "runnerctl autoscale status . --json" "skill de performance deve ser autoscale-aware"
+require_text "$PERF" 'Queue pressure does not imply “start all runners”.' "skill de performance não deve recomendar broad start por fila"
+require_text "$PERF" 'CREATE_EPHEMERAL' "skill de performance deve distinguir primitive ephemeral de autoscale automático"
 
 # Executable examples must stay on the public boundary. Prose may explain that
 # internal scripts and systemctl must not be called directly.
-for skill in "$PRE" "$MANAGE"; do
+for skill in "$PRE" "$MANAGE" "$PERF"; do
   require_text "$skill" 'Use `runnerctl` as the public interface' "skills devem apontar runnerctl como interface pública"
   require_absent_executable_example "$skill" '(\./)?scripts/runner/lifecycle\.sh' "skill não pode executar scripts/runner/lifecycle.sh"
   require_absent_executable_example "$skill" '(\./)?scripts/runner/services\.sh' "skill não pode executar scripts/runner/services.sh"

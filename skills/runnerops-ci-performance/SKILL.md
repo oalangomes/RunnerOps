@@ -7,6 +7,8 @@ description: Analyze GitHub Actions workflow architecture and performance withou
 
 Analyze first. Do not rewrite workflow YAML unless the user explicitly asks to apply a recommendation.
 
+Use `runnerctl` as the public interface for RunnerOps capacity/autoscale evidence. Do not call internal RunnerOps scripts, `systemctl`, or runner lifecycle mutations from this read-only skill.
+
 The goal is not to maximize parallelism or minimize one number at any cost. Optimize the workflow while preserving dependency correctness, reliability, debuggability, runner capacity, and maintainability.
 
 ## Evidence contract
@@ -112,6 +114,20 @@ Evaluate at least these questions when relevant:
 - Are self-hosted jobs waiting for compatible capacity?
 - Would changing labels improve routing without weakening isolation?
 - Is a queue problem actually runner capacity rather than workflow structure?
+- Does RunnerOps report matching capacity as `available_now`, `busy_capacity`, `provisioned_idle`, or `inconclusive`?
+- Is continuous autoscale enabled, and is queue pressure already being handled by the governed planner/controller?
+
+When RunnerOps is available, prefer read-only evidence:
+
+```bash
+runnerctl capacity . --json
+runnerctl autoscale status . --json
+runnerctl autoscale plan . --json
+```
+
+Queue pressure does not imply “start all runners”. A `provisioned_idle` runner is installed capacity, not current online capacity; the autoscaler may choose one exact `START_LOCAL` rather than activating a repository or fleet.
+
+The one-job ephemeral lifecycle is a distinct capacity primitive. Do not describe it as automatic ephemeral autoscaling until the planner/controller actually supports a `CREATE_EPHEMERAL` decision.
 
 Do not assume that a self-hosted runner is faster than a GitHub-hosted runner, or vice versa, without evidence.
 

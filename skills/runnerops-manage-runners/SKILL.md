@@ -1,6 +1,6 @@
 ---
 name: runnerops-manage-runners
-description: Manage local GitHub Actions self-hosted runners through runnerctl. Use when the user asks to inspect, start, stop, diagnose, register, create, remove, validate, add immediate CI capacity, or change boot policy for local runners. Prefer repository-scoped or exact-runner operations over shared groups.
+description: Manage RunnerOps capacity through runnerctl using read-first, capacity-first semantics. Use for inventory, exact lifecycle, autoscale, provisioning, ephemeral one-job lifecycle, diagnosis, removal, CI recovery, or boot policy. Prefer governed autoscale or exact-runner operations over broad repository/group/fleet activation.
 ---
 
 # RunnerOps Manage Runners
@@ -63,19 +63,21 @@ Under on-demand policy:
 
 ## Repository scope
 
-For the current repository, prefer:
+For the current repository, inspect before mutating:
 
 ```bash
-runnerctl ensure .
+runnerctl overview .
+runnerctl capacity . --json
+runnerctl autoscale status . --json
 ```
 
-This is repository-scoped.
-
-For a known instance, prefer the exact runner:
+If a manual mutation is actually required, prefer one exact runner:
 
 ```bash
 runnerctl start <runner>
 ```
+
+`runnerctl ensure .` remains available as a broad repository-scoped activation override, but it is not the default. Use it only when the user explicitly intends to activate all enabled runners mapped to the repository.
 
 Groups are operational groupings and are **not guaranteed to be repository-scoped**. A shared group may contain runners mapped to different repositories.
 
@@ -109,7 +111,7 @@ runnerctl health <runner>
 
 Do not declare an activation successful from the start command alone.
 
-For `runnerctl ensure .`, the command already performs repository-scoped start plus status/health validation for the matched runners.
+If the user explicitly requests `runnerctl ensure .`, the command performs repository-scoped start plus status/health validation for the matched runners. Do not reinterpret that convenience boundary as capacity planning.
 
 ## Boot policy
 
@@ -194,6 +196,37 @@ do **not** blindly repeat `runnerctl add`.
 Inspect the local runner with `runnerctl list` / `runnerctl doctor <runner>`. If the remote registration still must be determined, use a read-only GitHub query and verify whether the reported GitHub runner name already exists before attempting any new registration.
 
 Never interpret an inconclusive provisioning phase as either success or absence.
+
+## Governed autoscale and ephemeral capacity
+
+Use the existing public autoscale boundaries instead of manually waking broad capacity:
+
+```bash
+runnerctl autoscale status . --json
+runnerctl autoscale plan . --json
+runnerctl autoscale enable .
+```
+
+When the user explicitly asks for an immediate governed autoscale evaluation, use:
+
+```bash
+RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once . --json
+```
+
+The controller may apply at most the mutations already supported by the product, currently `START_LOCAL` and opt-in bounded `PROVISION_LOCAL`. Do not replace planner/controller decisions with LLM-selected broad starts.
+
+RunnerOps also exposes an explicit one-job ephemeral lifecycle:
+
+```bash
+runnerctl ephemeral create .
+runnerctl ephemeral status <action-id>
+runnerctl ephemeral reconcile <action-id>
+runnerctl ephemeral cleanup <action-id>
+```
+
+Treat this as a lifecycle primitive, not automatic autoscaling. The current planner/controller does not emit `CREATE_EPHEMERAL`. Do not call `ephemeral create` merely because queue pressure exists. Use it when the user explicitly requests an ephemeral runner, during a controlled qualification/experiment, or to continue/reconcile an already-created ephemeral action.
+
+For an existing ephemeral action, preserve the exact `action_id`: never retry by creating a different action after an uncertain registration. Prefer `status` / `reconcile`, and only perform cleanup when the lifecycle has proven terminality.
 
 ## Provisioned versus available capacity
 
@@ -334,8 +367,10 @@ Do not claim remote health from local checks alone.
 - Never invoke `sudo runnerctl`, `sudo systemctl` or interactive privilege escalation to unblock runtime lifecycle; use the one-time human `runnerctl platform-authorize` setup.
 - Never repeat `runnerctl add` merely because a previous add returned PARTIAL or INCONCLUSIVE.
 - Never treat UNKNOWN/query-error lifecycle state as healthy idle capacity.
-- Never start a shared group when repository-scoped or exact-runner operation satisfies the request.
+- Never start a shared group when governed autoscale or exact-runner operation satisfies the request.
+- Never use `runnerctl ensure .` as the default repository operation; it is an explicit broad activation override.
 - Never start all runners unless explicitly requested.
+- Never call `runnerctl ephemeral create` merely because a queue exists; automatic ephemeral scaling belongs to the deterministic planner/controller, not the agent.
 - Never enable the entire fleet at boot by default.
 - Never delete a runner merely because it is idle.
 - Never bypass `runnerctl` with internal scripts unless the task explicitly concerns platform development.

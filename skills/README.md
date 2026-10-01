@@ -18,13 +18,15 @@ ls ~/.agents/skills | grep '^runnerops-'
 
 | Skill | Finalidade |
 |---|---|
-| `runnerops-pr-validation` | Antes da PR, garantir somente os runners do repositório atual; depois da publicação, consumir `runnerctl ci watch` quando a tarefa exigir aguardar o CI. |
-| `runnerops-manage-runners` | Operar runners com escopo seguro: inventário, lifecycle verificado, cadastro/recovery, capacidade idle vs disponível agora, remoção governada e feedback de CI por PR/SHA. |
-| `runnerops-ci-performance` | Analisar DAG, critical path, repetição, cache, artifacts, triggers, fila e capacidade usando evidência STATIC / OBSERVED / ESTIMATED; read-only por padrão. |
+| `runnerops-pr-validation` | Validar PRs sem acordar capacidade repository-wide preventivamente; inspecionar capacity/autoscale e consumir `runnerctl ci watch` após a publicação. |
+| `runnerops-manage-runners` | Operar capacidade com escopo seguro: inventário, lifecycle exato, autoscale governado, cadastro/recovery, ephemeral one-job explícito, remoção e feedback de CI. |
+| `runnerops-ci-performance` | Analisar DAG, critical path, repetição, cache, artifacts, triggers, fila e capacidade/autoscale usando evidência STATIC / OBSERVED / ESTIMATED; read-only por padrão. |
 
 ## Semântica operacional da skill de gestão
 
-A `runnerops-manage-runners` trata grupos como agrupamentos operacionais, não como boundary de repositório. Por padrão, prefere `runnerctl ensure .` ou um runner exato.
+As skills seguem uma política **capacity-first**: primeiro observam `overview`, `capacity` e o estado do autoscale; depois deixam o planner/controller governado agir ou operam um runner exato quando isso é realmente necessário.
+
+A `runnerops-manage-runners` trata grupos como agrupamentos operacionais, não como boundary de repositório. `runnerctl ensure .` é um override manual amplo para ativar todos os runners habilitados daquele repositório e não é a preferência padrão.
 
 Ela também distingue:
 
@@ -33,6 +35,8 @@ Ela também distingue:
 - **inconclusivo** — lifecycle unknown/query-error ou provisioning marcado como `INCONCLUSIVE`.
 
 Após `start` ou `restart` explícito, a skill exige `status` + `health`. Após `PARTIAL` / `INCONCLUSIVE` em cadastro, não repete `runnerctl add` automaticamente.
+
+O autoscale contínuo continua sendo determinístico e governado por RunnerOps; a skill não substitui decisões do planner por “ligar tudo”. O lifecycle ephemeral one-job pode ser operado explicitamente pela skill, mas `ephemeral create` não é tratado como autoscaling automático enquanto o planner/controller não suportar `CREATE_EPHEMERAL`.
 
 ## Instalação
 

@@ -1,13 +1,13 @@
 ---
 name: runnerops-pr-validation
-description: Ensure the local GitHub Actions self-hosted runners mapped to the current repository are active before an agent publishes a pull request, then consume GitHub Actions feedback through runnerctl after the push/PR when validation is part of the task. Use runnerctl as the only runner-management and CI-watch interface.
+description: Validate pull requests without preemptively waking repository-wide self-hosted capacity. Inspect RunnerOps capacity/autoscale state before publishing, then consume GitHub Actions feedback through runnerctl and use only governed or exact-runner recovery when CI evidence proves capacity is needed.
 ---
 
 # RunnerOps PR Validation
 
-Before publishing a pull request, ensure the current repository's configured local runner capacity is active. After publishing, use the public CI watcher when the task requires waiting for GitHub Actions.
+Before publishing a pull request, inspect the current repository's RunnerOps capacity without waking the whole repository. After publishing, use the public CI watcher when the task requires waiting for GitHub Actions.
 
-The user's explicit instruction takes precedence. If the user explicitly asks to skip local runner startup, do not block the PR.
+The default is capacity-first and autoscale-aware. Do not turn idle on-demand capacity into always-active capacity merely because a PR is about to be published. The user's explicit instruction still takes precedence.
 
 ## Preconditions
 
@@ -29,23 +29,29 @@ grep -R -n -E 'self-hosted|local-runner' .github/workflows 2>/dev/null || true
 
 If no workflow references local/self-hosted routing, runner startup is not required.
 
-## Pre-PR gate
+## Capacity-first pre-PR gate
 
-When local routing is present:
+When local routing is present, inspect the public control-plane state without mutating runners:
 
 ```bash
-runnerctl ensure .
+runnerctl overview .
+runnerctl capacity . --json
+runnerctl autoscale status . --json
 ```
 
-`runnerctl ensure .` resolves the current GitHub repository, finds only enabled runners mapped to that repository, starts them, and validates status/health.
+Do not call `runnerctl ensure .` by default. It is a repository-wide manual activation override and can wake every enabled runner mapped to the repository, bypassing the normal capacity-first/autoscale path.
 
-Never replace it with:
+If continuous autoscale is enabled, leave idle runners idle before publication. The scheduler/controller will react to observed queue pressure through the existing governed `START_LOCAL` / `PROVISION_LOCAL` boundaries.
+
+If autoscale is disabled, do not compensate by starting the whole repository. Publish the requested change when the repository itself is ready, then use queue/capacity evidence from the actual CI workload to decide whether one exact runner needs manual activation.
+
+Never replace governed or exact-runner behavior with:
 
 ```bash
 runnerctl start all
 ```
 
-If `runnerctl ensure .` fails, do not silently publish the PR. Report the real failure.
+`runnerctl ensure .` is allowed only when the user explicitly asks to activate repository-wide capacity.
 
 ## Failure diagnosis
 
@@ -62,15 +68,15 @@ If logs indicate that the runner registration was deleted from GitHub, report th
 
 ## Continue the PR
 
-Only after the preflight passes may the agent continue with the requested push / PR creation.
+A repository-wide runner start is not a publication prerequisite. Continue with the requested push / PR creation when repository checks are ready and the capacity inspection is not itself inconclusive.
 
 Keep the pre-publish summary compact:
 
 ```text
 Runner preflight:
 - repo: example/project
-- status: active
-- PR gate: passed
+- capacity: available-now | provisioned-idle | autoscale-managed | inconclusive
+- broad activation: not requested
 ```
 
 ## Post-publish CI feedback
@@ -93,12 +99,21 @@ Interpret the exit code as part of the contract:
 
 - `0`: CI completed successfully. It is safe to report the CI gate as green.
 - `1`: CI/workflow failed. Report the returned workflow/job/step context. Do not blame or restart the runner merely because tests, lint or build failed.
-- `2`: infrastructure/access failure. Use `runnerctl doctor`, `runnerctl health` or `runnerctl logs` for diagnosis when relevant. Do not remove/recreate runners automatically.
+- `2`: infrastructure/access failure. Inspect current `runnerctl capacity . --json` and `runnerctl autoscale status . --json` before deciding whether runner recovery is justified. Do not remove/recreate runners automatically.
 - `3`: timeout, cancellation or inconclusive state. Report that CI is not conclusively green.
 
 The JSON payload may include `pr_number`, `run_id`, `run_attempt`, `workflow`, `job`, `step`, runner metadata and `diagnosis`. Prefer those structured fields over guessing from generic error text.
 
 On a rerun, trust the `run_attempt` returned by `runnerctl`; do not reuse failure details from an older attempt.
+
+When CI reports runner/infrastructure unavailability:
+
+1. inspect `runnerctl capacity . --json` and `runnerctl autoscale status . --json`;
+2. if autoscale is enabled, prefer the governed controller instead of broad activation; when the task explicitly requires immediate reevaluation, `RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once . --json` is the existing governed mutation boundary;
+3. if autoscale is disabled and current queue evidence identifies exactly one healthy matching `provisioned_idle` runner, start only that exact runner, then verify `status` + `health` and rerun the watcher;
+4. if the target is ambiguous or evidence is inconclusive, do not choose or start multiple runners by guess.
+
+Do not call `runnerctl ephemeral create` merely because a job is queued. The one-job ephemeral lifecycle is currently an explicit primitive, not an autoscale planner decision.
 
 A normal post-publish summary can be:
 
@@ -112,7 +127,9 @@ CI feedback:
 
 ## Prohibitions
 
-- Do not start the full fleet unless explicitly requested.
+- Do not start the full fleet or repository-wide capacity unless explicitly requested.
+- Do not use `runnerctl ensure .` as the normal PR preflight.
+- Do not call `runnerctl ephemeral create` as an LLM-selected substitute for autoscale.
 - Do not call internal platform scripts directly.
 - Do not create/reconfigure/remove runners from this pre-PR skill.
 - Do not expose registration tokens.

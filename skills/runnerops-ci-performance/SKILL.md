@@ -7,6 +7,8 @@ description: Analyze GitHub Actions workflow architecture and performance withou
 
 Analyze first. Do not rewrite workflow YAML unless the user explicitly asks to apply a recommendation.
 
+Use `runnerctl` as the public interface for RunnerOps capacity/autoscale evidence. Do not call internal RunnerOps scripts, `systemctl`, or runner lifecycle mutations from this read-only skill.
+
 The goal is not to maximize parallelism or minimize one number at any cost. Optimize the workflow while preserving dependency correctness, reliability, debuggability, runner capacity, and maintainability.
 
 ## Evidence contract

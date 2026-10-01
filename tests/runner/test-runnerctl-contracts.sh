@@ -377,6 +377,10 @@ EOF
   [[ -f "$config/actions-runners/config.env" ]] || fail "config.env XDG não foi criado"
   [[ -f "$config/actions-runners/runners.conf" ]] || fail "runners.conf XDG não foi criado"
   [[ -d "$data/actions-runners/runners" ]] || fail "RUNNER_DATA_ROOT XDG não foi criado"
+  [[ -d "$data/actions-runners/runners/.ephemeral" ]] || fail "RUNNER_EPHEMERAL_ROOT XDG não foi criado"
+  grep -Fx 'RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS="3"' \
+    "$config/actions-runners/config.env" >/dev/null ||
+    fail "janela temporal ephemeral padrão não foi persistida no config.env"
   [[ -d "$cache/actions-runners" ]] || fail "RUNNER_CACHE_ROOT XDG não foi criado"
   [[ -d "$state/actions-runners" ]] || fail "RUNNER_STATE_ROOT XDG não foi criado"
 

@@ -54,6 +54,14 @@ Repository operations:
                  [--runner-version VERSION|latest] [--runner-arch auto|x64|arm64] [--plan]
   runnerctl remove <runner> [--plan] [--yes] [--keep-remote] [--delete-dir]
 
+Ephemeral one-job lifecycle:
+  runnerctl ephemeral create [owner/repo|.] [--profile PROFILE] [--labels CSV]
+                             [--action-id ID] [--runner-version VERSION|latest]
+                             [--runner-arch auto|x64|arm64] [--online-timeout SECONDS] [--json]
+  runnerctl ephemeral status <action-id> [--json]
+  runnerctl ephemeral reconcile <action-id> [--json]
+  runnerctl ephemeral cleanup <action-id> [--json]
+
 Capacity and autoscale:
   runnerctl capacity [owner/repo|.] [--json]
   runnerctl report [owner/repo|.] --since DURATION [--json]
@@ -167,6 +175,24 @@ Exemplos:
   runnerctl remove my-api --plan
   runnerctl remove my-api --yes
   runnerctl remove my-api --yes --keep-remote
+EOF
+      ;;
+    ephemeral)
+      cat <<'EOF'
+Uso:
+  runnerctl ephemeral create [owner/repo|.] [--profile PROFILE] [--labels CSV]
+                             [--action-id ID] [--runner-version VERSION|latest]
+                             [--runner-arch auto|x64|arm64] [--online-timeout SECONDS] [--json]
+  runnerctl ephemeral status <action-id> [--json]
+  runnerctl ephemeral reconcile <action-id> [--json]
+  runnerctl ephemeral cleanup <action-id> [--json]
+
+Cria e controla uma identidade ephemeral exata, one-job e descartável. A action
+mantém evidência non-secret separada de desired/local/GitHub/workload/terminal/
+cleanup. Retry de registro inconclusivo exige reconcile prévio.
+
+`create` registra e inicia capacidade real; não é executado por autoscale.
+`cleanup` recusa remoção destrutiva quando o runner exato está BUSY.
 EOF
       ;;
     start|stop|restart)
@@ -511,7 +537,7 @@ completion_words() {
   printf '%s\n' \
     help init list groups status health doctor logs \
     start stop restart plan migrate on-demand autostart \
-    repo overview ensure add remove capacity report review autoscale \
+    repo overview ensure add remove ephemeral capacity report review autoscale \
     package ci skills platform-home platform-authorize platform-doctor \
     completion --version
 }
@@ -1170,6 +1196,97 @@ validate_runner_delete_path() {
   printf '%s\n' "$safe_path"
 }
 
+ephemeral_command() {
+  local sub="${1:-}"
+  shift || true
+
+  [[ -f "$RUNNEROPS_SRC_ROOT/runnerops/ephemeral/cli.py" ]] ||
+    die "módulo ephemeral ausente em: $PLATFORM_HOME"
+  command -v python3 >/dev/null 2>&1 || die "ephemeral exige python3 3.8+"
+  python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+    die "ephemeral exige python3 3.8+"
+
+  case "$sub" in
+    create)
+      local repo_arg="."
+      local profile="auto"
+      local labels=""
+      local source_dir repo slug current
+      local -a forwarded=()
+
+      if [[ $# -gt 0 && "$1" != --* ]]; then
+        repo_arg="$1"
+        shift
+      fi
+      while (($#)); do
+        case "$1" in
+          --profile)
+            profile="${2:-}"
+            shift 2
+            ;;
+          --labels|--action-id|--runner-version|--runner-arch|--online-timeout|--observation-interval)
+            [[ $# -ge 2 && -n "${2:-}" ]] || die "$1 exige valor"
+            forwarded+=("$1" "$2")
+            if [[ "$1" == "--labels" ]]; then
+              labels="$2"
+            fi
+            shift 2
+            ;;
+          --json)
+            forwarded+=("$1")
+            shift
+            ;;
+          -h|--help|help)
+            command_help ephemeral
+            return 0
+            ;;
+          *)
+            die "opção ephemeral create desconhecida: $1"
+            ;;
+        esac
+      done
+
+      case "$profile" in
+        auto|generic|node|python|flutter|android|java|dotnet|go) ;;
+        *) die "profile inválido: $profile" ;;
+      esac
+      require_github_cli "ephemeral create"
+      source_dir="$(pwd -P)"
+      repo="$(resolve_repo "$repo_arg")"
+      repo="$(canonical_repo "$repo")"
+      slug="$(repo_slug "$repo")"
+      if [[ "$profile" == "auto" ]]; then
+        if [[ "$repo_arg" == "." || -z "$repo_arg" ]]; then
+          profile="$(infer_profile_from_dir "$source_dir")"
+        else
+          current="$(current_repo || true)"
+          if [[ "$(normalize_repo "$current")" == "$(normalize_repo "$repo")" ]]; then
+            profile="$(infer_profile_from_dir "$source_dir")"
+          else
+            profile="generic"
+          fi
+        fi
+      fi
+      if [[ -z "$labels" ]]; then
+        labels="$slug,local-runner,ephemeral"
+        [[ "$profile" == "generic" ]] || labels="$profile,$labels"
+        forwarded+=(--labels "$labels")
+      fi
+      exec python3 -B -m runnerops.ephemeral.cli create "$repo" --profile "$profile" "${forwarded[@]}"
+      ;;
+    status|reconcile|cleanup)
+      [[ $# -ge 1 ]] || die "ephemeral $sub exige action-id"
+      exec python3 -B -m runnerops.ephemeral.cli "$sub" "$@"
+      ;;
+    -h|--help|help)
+      command_help ephemeral
+      ;;
+    *)
+      die "ephemeral aceita create, status, reconcile ou cleanup"
+      ;;
+  esac
+}
+
 remove_runner() {
   local runner=""
   local plan_only=0
@@ -1407,6 +1524,7 @@ platform_doctor() {
   echo "runner_data_root=$RUNNER_DATA_ROOT"
   echo "runner_cache_root=$RUNNER_CACHE_ROOT"
   echo "runner_state_root=$RUNNER_STATE_ROOT"
+  echo "runner_ephemeral_root=$RUNNER_EPHEMERAL_ROOT"
   echo "boot_policy=$RUNNER_BOOT_POLICY"
 
   for cmd in bash git tar sha256sum systemctl; do
@@ -1646,6 +1764,9 @@ case "$cmd" in
     else
       remove_runner "$@"
     fi
+    ;;
+  ephemeral)
+    ephemeral_command "$@"
     ;;
   skills)
     sub="${1:-list}"

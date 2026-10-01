@@ -1,0 +1,172 @@
+# Local ephemeral one-job lifecycle
+
+`runnerctl ephemeral` is an explicit control-plane primitive for one disposable
+GitHub Actions runner on a persistent Linux host. It is not an autoscaler and it
+does not provide container/VM isolation.
+
+## Public boundary
+
+```bash
+runnerctl ephemeral create .
+runnerctl ephemeral status <action-id>
+runnerctl ephemeral reconcile <action-id>
+runnerctl ephemeral cleanup <action-id>
+```
+
+`create` performs real GitHub registration and is never called by the autoscale
+planner/controller in this slice. It reuses the verified official runner package
+cache, registers with `--ephemeral`, and starts one exact systemd template
+instance. Run `runnerctl platform-authorize` after installing/upgrading so the
+root-owned ephemeral unit template is present. If `RUNNER_EPHEMERAL_ROOT` changes,
+repeat authorization so the root-owned template and runtime boundary agree.
+
+## Identity, state and evidence
+
+One 32-hex-character `action_id` deterministically maps to one identity:
+
+```text
+action_id -> runnerops-ephemeral-<16 stable sha256 hex chars>
+```
+
+There is no numeric collision fallback. An existing or ambiguous exact remote
+identity moves the action to reconciliation instead of requesting another token.
+
+The lifecycle keeps these dimensions separate in `EphemeralAction` v1:
+
+| Dimension | Evidence |
+|---|---|
+| desired | `ONE_JOB_TERMINAL_AND_CLEANED` |
+| action | `REQUESTED`, `REGISTERING`, `REGISTERED`, `ONLINE`, `BUSY`, `TERMINAL`, `CLEANUP_PENDING`, `CLEANED`, or an explicit inconclusive state |
+| local | exact systemd unit, active/sub state, service result, observed main PID, local config identity and `agentId` |
+| GitHub | exact identity, runner id, optional API `ephemeral`, online/offline/busy/absent/ambiguous |
+| workload | first/last exact `busy=true` observation; conclusion remains `unknown` unless separately proven |
+| terminal | explicit evidence and reason; local exit alone is insufficient |
+| cleanup | attempts and independent remote/local/root results |
+
+Evidence is written atomically with mode `0600` under:
+
+```text
+$RUNNER_STATE_ROOT/ephemeral/actions/<action-id>.json
+```
+
+Registration material and credentials are never fields in this contract. The
+autoscale SQLite store, `CapacitySnapshot`, `OperationalEvidence v1`, and
+`OperationalReview v1` are not changed.
+
+## Registration uncertainty
+
+If `config.sh` may have reached GitHub but did not return conclusively, the action
+becomes `INCONCLUSIVE_REGISTRATION`. Re-running `create --action-id ...` is refused.
+
+`reconcile` looks only for the same exact identity. If it exists and the matching
+local config exists, RunnerOps resumes that registration without requesting new
+material. The local `agentName`/`agentId` must correlate exactly with the remote
+name/id; `ephemeral=false`, invalid ids, or any mismatch stays inconclusive.
+If the identity is absent, two conclusive reconciliation observations separated
+by at least `RUNNER_EPHEMERAL_REGISTRATION_ABSENCE_CONFIRM_SECONDS` (default: 3)
+are required before the same action is authorized to retry registration. A
+present, ambiguous, unknown, locally configured, or out-of-order observation
+resets that persisted confirmation sequence.
+
+If configuration succeeded but the local start failed, reconciliation may start
+the same already-configured unit after identity correlation proves it is safe.
+It never requests another registration token in that recovery path.
+
+Every lifecycle timing input is a finite, strictly positive duration. This rule
+applies to CLI online/observation bounds, environment-backed registration,
+local-command and GitHub-command timeouts, the per-action lock, and internal
+runtime stop bounds. `NaN`, positive or negative infinity, zero, and negative
+values fail before runtime mutation.
+
+## Cleanup safety
+
+The disposable root is exactly:
+
+```text
+$RUNNER_EPHEMERAL_ROOT/<action-id>
+```
+
+Cleanup derives that path again, requires the exact ownership marker, rejects
+symlink/path escape and never reads or writes the persistent runner registry.
+Durable `terminal_evidence.proven` alone does not authorize destructive cleanup.
+The cleanup-time observation must also show the exact remote identity `ABSENT`
+and the local unit in `EXITED`, `ABSENT`, `ALLOCATED`, or the relevant idempotent
+`CLEANED` state. Fresh `ONLINE`, `OFFLINE`, `BUSY`, `UNKNOWN`, or `AMBIGUOUS`
+remote evidence and fresh `RUNNING`, `STARTING`, `STOPPING`, `UNKNOWN`, or
+`CONFIGURED` local evidence fail closed before DELETE, stop, or root removal.
+Contradictory fresh evidence is recorded explicitly and moves the action to
+reconciliation before later destructive mutation. Once remote absence and local
+terminality are freshly revalidated, the exact systemd unit is confirmed stopped
+and only then is the owned root removed. An interrupted `CLEANUP_PENDING` retry
+can continue from remote absence and a stopped local unit. `CLEANED` is
+convergent: status, reconcile, and repeated cleanup return the same state without
+observing or mutating runtime resources.
+
+Version 1 deliberately remains fail-closed for jobs too short for the bounded
+`busy=true` observation loop. A systemd exit or remote disappearance alone is not
+strong proof that one controlled workload ran. TODO: add a narrowly scoped,
+tamper-resistant workflow/job correlation proof before accepting short jobs;
+that broader GitHub workflow correlation is outside this issue.
+
+## Explicit real-host qualification
+
+This sequence mutates GitHub and must be run deliberately on a trusted RunnerOps
+host. The exact qualification job contains no checkout and executes only the
+repository-owned fixed shell step. `validate.yml` already exists on the default
+branch, so GitHub can dispatch its trusted feature-branch revision before merge.
+
+```bash
+# 1. Preserve before evidence for the persistent pool.
+runnerctl list
+runnerctl health all
+runnerctl capacity . --json > /tmp/runnerops-capacity-before.json
+
+# 2. Create one exact ephemeral runner and capture its durable identifiers.
+create_json="$(runnerctl ephemeral create . \
+  --profile generic \
+  --labels runnerops-ephemeral-qualification \
+  --json)"
+action_id="$(printf '%s' "$create_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["action_id"])')"
+runner_identity="$(printf '%s' "$create_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["runner_identity"])')"
+
+# 3. Dispatch the controlled exact-label job from the published trusted branch.
+qualification_ref="$(git branch --show-current)"
+gh workflow run validate.yml \
+  --repo "$(runnerctl repo .)" \
+  --ref "$qualification_ref" \
+  -f ephemeral_runner_label="$runner_identity" \
+  -f ephemeral_action_id="$action_id"
+
+# 4. During the fixed 20-second workload, observe exact ONLINE -> BUSY evidence.
+runnerctl ephemeral status "$action_id" --json
+runnerctl ephemeral reconcile "$action_id" --json
+
+# 5. Watch the controlled run, then reconcile until TERMINAL is evidenced.
+run_id="$(gh run list --workflow validate.yml --branch "$qualification_ref" \
+  --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
+gh run watch "$run_id" --exit-status
+runnerctl ephemeral reconcile "$action_id" --json
+
+# 6. Perform bounded cleanup and prove the persistent pool remained healthy.
+runnerctl ephemeral cleanup "$action_id" --json
+runnerctl ephemeral status "$action_id" --json
+runnerctl list
+runnerctl health all
+runnerctl capacity . --json > /tmp/runnerops-capacity-after.json
+```
+
+If the first post-job reconciliation is still eventual/inconclusive, repeat only
+`status`/`reconcile`; do not repeat `create`. Save the action JSON, workflow run URL,
+and before/after capacity artifacts as the qualification transcript.
+
+Until that transcript exists on a real host, the implementation status is:
+
+```text
+CODE COMPLETE / CONTRACTS GREEN
+REAL-HOST QUALIFICATION PENDING
+```
+
+The first completed qualification transcript is published in
+[`issue-120-real-host-qualification.md`](issue-120-real-host-qualification.md),
+with sanitized structured evidence in
+[`evidence/issue-120-real-host-qualification.json`](evidence/issue-120-real-host-qualification.json).

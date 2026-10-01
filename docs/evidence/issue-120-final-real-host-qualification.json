@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "kind": "RunnerOpsRealHostQualification",
+  "issue": 120,
+  "pr": 133,
+  "result": "PASS",
+  "branch": "feat/issue-120-ephemeral-lifecycle",
+  "qualified_sha": "417bfb3bb5261a48f1cb0108c931e5e3e0398626",
+  "workflow": {
+    "run_id": 36912469392,
+    "url": "https://github.com/oalangomes/RunnerOps/actions/runs/36912469392",
+    "conclusion": "success",
+    "exact_job": {
+      "name": "One controlled ephemeral job",
+      "conclusion": "success",
+      "runner_name": "runnerops-ephemeral-89eb52df32c4f0f9"
+    }
+  },
+  "action": {
+    "action_id": "01779d911f444762b3ff7208b2fe642e",
+    "runner_identity": "runnerops-ephemeral-89eb52df32c4f0f9",
+    "registration_attempts": 1,
+    "workload_observed": true,
+    "terminal_proven": true,
+    "final_state": "CLEANED",
+    "cleanup": {
+      "result": "SUCCEEDED",
+      "attempts": 1,
+      "remote_removed": true,
+      "local_stopped": true,
+      "root_removed": true,
+      "idempotent_repeat_confirmed": true
+    }
+  },
+  "persistent_pool": {
+    "before": {
+      "persistent_list_count": 25,
+      "health_ok": true,
+      "ephemeral_identity_present": false,
+      "regression_observed": false
+    },
+    "after": {
+      "persistent_list_count": 25,
+      "health_ok": true,
+      "ephemeral_identity_present": false,
+      "regression_observed": false
+    },
+    "regression_observed": false
+  },
+  "safety": {
+    "create_calls": 1,
+    "blind_registration_retry": false,
+    "registration_material_persisted": false,
+    "persistent_registry_mutated": false
+  }
+}

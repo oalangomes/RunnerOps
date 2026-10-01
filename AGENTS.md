@@ -8,6 +8,7 @@ RunnerOps é o produto deste repositório. `runnerctl` é sua interface pública
 - Configuração, dados, cache e estado específicos da máquina pertencem a `RUNNERS_CONFIG`, `RUNNER_DATA_ROOT`, `RUNNER_CACHE_ROOT` e `RUNNER_STATE_ROOT`; a operação normal não deve gravar no checkout Git.
 - Nunca faça commit de registration tokens, conteúdo do registry local da máquina ou credenciais de runners.
 - systemd é a autoridade de ciclo de vida para runners migrados.
+- systemd também é a autoridade local do lifecycle ephemeral; PID observado nunca é autoridade de mutação.
 - `RUNNER_BOOT_POLICY=on-demand` é o padrão, e um runner inativo/com boot desabilitado pode representar capacidade ociosa saudável.
 - `runnerctl` é a CLI pública e estável; scripts internos são detalhes de implementação.
 - Planejamento de autoscale permanece separado de mutação: `autoscale plan` é read-only; controller/provisioning precisam de slices explícitas.
@@ -49,6 +50,14 @@ python3 -B tests/autoscale/test-autoscale-audit-contracts.py
 python3 -B tests/autoscale/test-autoscale-planner-contracts.py
 python3 -B tests/autoscale/test-autoscale-controller-contracts.py
 python3 -B tests/autoscale/test-autoscale-scheduler-contracts.py
+```
+
+Para mudanças de lifecycle ephemeral:
+
+```bash
+python3 -B -m py_compile $(find src/runnerops/ephemeral -type f -name '*.py' -print)
+for test_file in tests/ephemeral/*.py; do python3 -B "$test_file"; done
+for test_file in tests/ephemeral/*.sh; do bash "$test_file"; done
 ```
 
 Para Agent Skills:

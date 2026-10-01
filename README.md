@@ -48,6 +48,7 @@ O control plane também preserva uma fronteira importante: decisões de autoscal
 - health, doctor, logs e planejamento de migração;
 - observabilidade read-only de fila/capacidade e planejamento determinístico de autoscale;
 - ativação e provisionamento local governados e opt-in, com crescimento limitado do pool;
+- primitive explícito para um runner ephemeral one-job com reconciliation e cleanup idempotente;
 - audit store local opcional para continuidade de fila e decisões/ações persistidas internamente;
 - Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
@@ -62,6 +63,7 @@ runnerops/
 ├── install.sh                   # bootstrap do checkout
 ├── src/runnerops/               # runtime Python
 │   ├── autoscale/
+│   ├── ephemeral/
 │   └── operational/
 ├── scripts/                     # implementação shell por domínio
 │   ├── runner/
@@ -105,6 +107,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Visão do repositório | `runnerctl overview .` |
 | Registrar runner | `runnerctl add .`, `runnerctl add . --plan` |
 | Remover runner | `runnerctl remove <runner> --plan/--yes` |
+| Runner ephemeral one-job | `runnerctl ephemeral create/status/reconcile/cleanup` |
 | Pacote oficial do runner | `runnerctl package detect/ensure` |
 | Aguardar resultado do CI | `runnerctl ci watch .` |
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
@@ -826,6 +829,8 @@ O workflow de `master` também dogfooda o produto em um runner dedicado gerencia
 - [Planner determinístico de autoscale](docs/autoscale-planner.md)
 - [Controller governado de autoscale](docs/autoscale-controller.md)
 - [Audit store de autoscale](docs/autoscale-audit-store.md)
+- [Lifecycle local ephemeral one-job](docs/ephemeral-lifecycle.md)
+- [Qualificação real do lifecycle ephemeral da Issue #120](docs/issue-120-real-host-qualification.md)
 - [Processo de release](docs/releasing.md)
 - [Agent Skills](skills/README.md)
 - [systemd + Cockpit](docs/systemd-cockpit-migration.md)

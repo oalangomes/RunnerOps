@@ -187,6 +187,13 @@ def decision_from_plan(plan):
                 "queue": evidence["queue"],
                 "capacity": evidence["capacity"],
                 "active_burst_capacity": evidence["active_burst_capacity"],
+                "ephemeral": {
+                    "status": evidence["ephemeral"]["status"],
+                    "selected_scope_labels": evidence["ephemeral"]["selected_scope_labels"],
+                    "active_count": evidence["ephemeral"]["active_count"],
+                    "profile": evidence["ephemeral"]["profile"],
+                    "template_labels": evidence["ephemeral"]["template_labels"],
+                },
             },
         }
     )

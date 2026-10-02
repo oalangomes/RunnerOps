@@ -15,6 +15,7 @@ from runnerops import capacity
 
 from .contracts import AuditError, canonical_repo, label_list, timestamp
 from .runtime import read_planner_evidence
+from .ephemeral import exact_ephemeral_id, load_ephemeral_policy, read_ephemeral_evidence
 from .provision import (
     ProvisionPolicyError,
     load_provision_policy,
@@ -27,12 +28,13 @@ DECISIONS = {
     "WAIT",
     "START_LOCAL",
     "PROVISION_LOCAL",
+    "CREATE_EPHEMERAL",
     "BURST_CLOUD",
     "HOLD",
     "BLOCKED",
     "INCONCLUSIVE",
 }
-ACTION_DECISIONS = {"START_LOCAL", "PROVISION_LOCAL", "BURST_CLOUD"}
+ACTION_DECISIONS = {"START_LOCAL", "PROVISION_LOCAL", "CREATE_EPHEMERAL", "BURST_CLOUD"}
 KNOWN_CAPACITY_STATUSES = {
     "available_now",
     "busy_capacity",
@@ -100,7 +102,8 @@ def load_policy():
     """Load and normalize the intentionally small policy surface."""
     try:
         local_provision = load_provision_policy()
-    except ProvisionPolicyError:
+        local_ephemeral = load_ephemeral_policy()
+    except (ProvisionPolicyError, ValueError):
         raise PolicyError() from None
     return {
         "queue_threshold_seconds": _integer_env(
@@ -125,6 +128,7 @@ def load_policy():
         "burst_enabled": _boolean_env("RUNNER_AUTOSCALE_BURST_ENABLED", False),
         "label_scope": _label_scope(),
         "local_provision": local_provision,
+        "local_ephemeral": local_ephemeral,
     }
 
 
@@ -209,7 +213,9 @@ def load_audit_evidence(repository):
         from .store import AuditStore
 
         with AuditStore() as store:
-            return read_planner_evidence(store, repository)
+            result = read_planner_evidence(store, repository)
+            result["ephemeral"] = read_ephemeral_evidence(repository)
+            return result
     except ImportError:
         return _empty_audit("inconclusive", "sqlite_capability_unavailable")
     except AuditError as exc:
@@ -773,6 +779,14 @@ def _base_evidence(observed_at, snapshot, policy, host, audit):
             ),
             "last_scaling_action_kind": audit.get("last_scaling_action_kind"),
         },
+        "ephemeral": {
+            "status": (audit.get("ephemeral") or {}).get("status", "inconclusive"),
+            "actions": (audit.get("ephemeral") or {}).get("actions", []),
+            "selected_scope_labels": [],
+            "active_count": None,
+            "profile": (policy.get("local_ephemeral") or {}).get("profile"),
+            "template_labels": (policy.get("local_ephemeral") or {}).get("labels", []),
+        },
     }
 
 
@@ -959,6 +973,9 @@ def plan(snapshot, policy, host, audit):
         latest_kind = audit.get("last_scaling_action_kind")
         local_scale_candidate = capacity_deficit > 0
         cooldown = (
+            policy["local_ephemeral"]["cooldown_seconds"]
+            if latest_kind == "CREATE_EPHEMERAL" and policy.get("local_ephemeral")
+            else
             policy["local_scale_out_cooldown_seconds"]
             if latest_kind in ("START_LOCAL", "PROVISION_LOCAL") and local_scale_candidate
             else policy["cooldown_seconds"]
@@ -1044,6 +1061,43 @@ def plan(snapshot, policy, host, audit):
             # bound and named that state LOCAL_POOL_AT_MAX. Keep that frozen
             # internal contract without leaking the old meaning into production.
             reasons.append("LOCAL_POOL_AT_MAX")
+
+    ephemeral_policy = policy.get("local_ephemeral")
+    if ephemeral_policy and ephemeral_policy["enabled"]:
+        ephemeral = evidence["ephemeral"]
+        if ephemeral["status"] != "complete" or not isinstance(ephemeral["actions"], list):
+            return decide("INCONCLUSIVE", "EPHEMERAL_EVIDENCE_INCONCLUSIVE")
+        active = ephemeral["actions"]
+        ephemeral["active_count"] = len(active)
+        eligible = [row for row in qualified_scopes
+                    if _label_set(row["required_labels"]) <= _label_set(ephemeral_policy["labels"])]
+        if eligible:
+            selected = eligible[0]["required_labels"]
+            ephemeral["selected_scope_labels"] = selected
+            matching = [row for row in active
+                        if _label_set(selected) <= _label_set(row["labels"])]
+            if any(row["state"].startswith("INCONCLUSIVE") for row in matching):
+                return decide("HOLD", *(reasons + ["EPHEMERAL_RECONCILIATION_REQUIRED"]))
+            if len(active) >= ephemeral_policy["max_active"]:
+                return decide("HOLD", *(reasons + ["EPHEMERAL_CAPACITY_AT_LIMIT"]))
+            waiting = sum(1 for job in qualified_pressure_jobs
+                          if _normalized_label_scope(job["required_labels"]) ==
+                          _normalized_label_scope(selected))
+            covering = sum(row["state"] in ("REQUESTED", "REGISTERING", "REGISTERED",
+                                                   "ONLINE", "INCONCLUSIVE_ONLINE")
+                           for row in matching)
+            if covering >= waiting:
+                return decide("HOLD", *(reasons + ["EPHEMERAL_ACTION_IN_PROGRESS"]))
+            provisional_id = _plan_id(repository, policy, evidence)
+            return decide(
+                "CREATE_EPHEMERAL",
+                *(reasons + ["LOCAL_REUSABLE_CAPACITY_EXHAUSTED",
+                             "EPHEMERAL_CAPACITY_ENABLED", "EPHEMERAL_CAPACITY_LIMIT_AVAILABLE"]),
+                action={"kind": "CREATE_EPHEMERAL",
+                        "target": exact_ephemeral_id(provisional_id)},
+                requested_capacity_delta=max(1, waiting - covering),
+            )
+        reasons.append("EPHEMERAL_LABELS_INCOMPATIBLE")
 
     if not policy["burst_enabled"]:
         return decide("BLOCKED", *(reasons + ["BURST_DISABLED"]))

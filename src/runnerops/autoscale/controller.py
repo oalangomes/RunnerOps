@@ -24,6 +24,12 @@ from runnerops import capacity
 from .contracts import AuditError, action_record, timestamp, utcnow
 from .planner import PolicyError, collect_host_facts, load_policy, plan, policy_fingerprint
 from .provision import provision_exact
+from .ephemeral import read_ephemeral_evidence
+from .ephemeral_controller import (
+    governed_actions,
+    planned_action as planned_ephemeral_action,
+    reconcile_or_apply as reconcile_or_apply_ephemeral,
+)
 from .provision_controller import (
     pending_provision_actions,
     planned_action as planned_provision_action,
@@ -491,18 +497,35 @@ def _provision_enabled(policy):
     return isinstance(fragment, dict) and fragment.get("enabled") is True
 
 
-def _pending_actions(store, repository):
+def _pending_actions(store, repository, ephemeral_evidence):
     starts = pending_start_actions(store, repository)
     provisions = pending_provision_actions(store, repository)
-    return starts + provisions, starts, provisions
+    ephemerals = [row for row in governed_actions(store, repository)
+                  if row["action"]["state"] in ("planned", "started")]
+    observed = {row["action_id"]: row["state"] for row in
+                (ephemeral_evidence or {}).get("actions", [])}
+    blocking = [row for row in ephemerals
+                if row["action"]["state"] == "planned"
+                or (ephemeral_evidence or {}).get("status") != "complete"
+                or observed.get(row["action"]["target"]) not in ("ONLINE", "BUSY")]
+    return starts + provisions + blocking, starts, provisions, ephemerals
 
 
-def _pending_error(starts, provisions):
+def _pending_error(starts, provisions, ephemerals):
     if len(starts) > 1 and not provisions:
         return "MULTIPLE_PENDING_START_ACTIONS"
     if len(provisions) > 1 and not starts:
         return "MULTIPLE_PENDING_PROVISION_ACTIONS"
+    if len(ephemerals) > 1 and not starts and not provisions:
+        return "MULTIPLE_PENDING_EPHEMERAL_ACTIONS"
     return "MULTIPLE_PENDING_AUTOSCALE_ACTIONS"
+
+
+def _planner_evidence(store, repository, policy, ephemeral_evidence_fn):
+    evidence = read_planner_evidence(store, repository)
+    if (policy.get("local_ephemeral") or {}).get("enabled") or governed_actions(store, repository):
+        evidence["ephemeral"] = ephemeral_evidence_fn(repository)
+    return evidence
 
 
 def _observe_snapshot(snapshot_fn, store, repository):
@@ -523,6 +546,8 @@ def run_once(
     start_fn=start_exact_runner,
     verify_fn=None,
     provision_fn=provision_exact,
+    ephemeral_lifecycle_factory=None,
+    ephemeral_evidence_fn=read_ephemeral_evidence,
     clock=utcnow,
 ):
     """Run one governed controller iteration and apply at most one local mutation."""
@@ -556,31 +581,30 @@ def run_once(
     # Observe and decide before entering the mutating critical section.
     with store_factory() as store:
         store.observe(initial_snapshot)
-        audit = read_planner_evidence(store, canonical)
+        audit = _planner_evidence(store, canonical, initial_policy, ephemeral_evidence_fn)
         initial_plan = plan(
             initial_snapshot,
             initial_policy,
             host_collector(initial_policy),
             audit,
         )
-        initial_pending, initial_starts, initial_provisions = _pending_actions(
-            store, canonical
+        initial_pending, initial_starts, initial_provisions, initial_ephemerals = _pending_actions(
+            store, canonical, audit.get("ephemeral")
         )
 
-        if len(initial_pending) > 1:
+        if len(initial_pending) > 1 and (initial_starts or initial_provisions):
             return _controller_result(
                 initial_plan,
                 status="inconclusive",
-                diagnostic=_pending_error(initial_starts, initial_provisions),
+                diagnostic=_pending_error(initial_starts, initial_provisions, initial_ephemerals),
             ), 3
 
         if not initial_pending:
             if initial_plan["decision"] == "INCONCLUSIVE":
-                return _controller_result(
-                    initial_plan,
-                    status="inconclusive",
-                    diagnostic="EVIDENCE_INCONCLUSIVE",
-                ), 3
+                if not governed_actions(store, canonical):
+                    return _controller_result(
+                        initial_plan, status="inconclusive", diagnostic="EVIDENCE_INCONCLUSIVE"
+                    ), 3
 
             if initial_plan["decision"] == "START_LOCAL":
                 target = initial_plan.get("action", {}).get("target")
@@ -608,12 +632,15 @@ def run_once(
                     ), 3
                 initial_decision = decision_from_plan(initial_plan)
                 store.record_decision(initial_decision)
+            elif initial_plan["decision"] == "CREATE_EPHEMERAL" and (
+                initial_policy.get("local_ephemeral") or {}).get("enabled"):
+                initial_decision = decision_from_plan(initial_plan)
+                store.record_decision(initial_decision)
             else:
-                return _controller_result(
-                    initial_plan,
-                    status="noop",
-                    diagnostic="DECISION_NOT_APPLIED_IN_SLICE",
-                ), 0
+                if not initial_ephemerals:
+                    return _controller_result(
+                        initial_plan, status="noop", diagnostic="DECISION_NOT_APPLIED_IN_SLICE"
+                    ), 0
 
     lock_decision = (
         initial_pending[0]["decision"] if initial_pending else initial_decision
@@ -637,19 +664,21 @@ def run_once(
                     ), 3
 
                 store.observe(fresh_snapshot)
-                fresh_audit = read_planner_evidence(store, canonical)
+                fresh_audit = _planner_evidence(store, canonical, fresh_policy, ephemeral_evidence_fn)
                 fresh_plan = plan(
                     fresh_snapshot,
                     fresh_policy,
                     host_collector(fresh_policy),
                     fresh_audit,
                 )
-                pending, starts, provisions = _pending_actions(store, canonical)
-                if len(pending) > 1:
+                pending, starts, provisions, ephemerals = _pending_actions(
+                    store, canonical, fresh_audit.get("ephemeral")
+                )
+                if len(pending) > 1 and (starts or provisions):
                     return _controller_result(
                         decision=lock_decision,
                         status="inconclusive",
-                        diagnostic=_pending_error(starts, provisions),
+                        diagnostic=_pending_error(starts, provisions, ephemerals),
                     ), 3
 
                 active_verify = verify_fn or (
@@ -676,6 +705,15 @@ def run_once(
                             verify_fn=active_verify,
                             clock=clock,
                         )
+                    if current["action"]["kind"] == "CREATE_EPHEMERAL":
+                        if ephemeral_lifecycle_factory is None:
+                            from runnerops.ephemeral.cli import _runtime
+                            ephemeral_lifecycle_factory = _runtime
+                        ephemeral_result, code = reconcile_or_apply_ephemeral(
+                            store, current, fresh_plan, fresh_policy,
+                            ephemeral_lifecycle_factory(), clock=clock,
+                        )
+                        return _provision_result_envelope(ephemeral_result), code
                     provision_result, code = reconcile_or_apply_provision(
                         store,
                         current,
@@ -692,6 +730,20 @@ def run_once(
                     return _provision_result_envelope(provision_result), code
 
                 if initial_decision is None:
+                    observed = {item["action_id"]: item for item in
+                                (fresh_audit.get("ephemeral") or {}).get("actions", [])}
+                    healthy = [row for row in ephemerals
+                               if row["action"]["target"] in observed]
+                    healthy.sort(key=lambda row: observed[row["action"]["target"]].get("updated_at", ""))
+                    if healthy:
+                        if ephemeral_lifecycle_factory is None:
+                            from runnerops.ephemeral.cli import _runtime
+                            ephemeral_lifecycle_factory = _runtime
+                        ephemeral_result, code = reconcile_or_apply_ephemeral(
+                            store, healthy[0], fresh_plan, fresh_policy,
+                            ephemeral_lifecycle_factory(), clock=clock,
+                        )
+                        return _provision_result_envelope(ephemeral_result), code
                     return _controller_result(
                         fresh_plan,
                         status="inconclusive",
@@ -720,7 +772,10 @@ def run_once(
                 same_plan = (
                     fresh_plan["decision"] == expected_kind
                     and fresh_plan.get("action", {}).get("kind") == expected_kind
-                    and fresh_plan.get("action", {}).get("target") == expected_target
+                    and (fresh_plan.get("action", {}).get("target") == expected_target
+                         if expected_kind != "CREATE_EPHEMERAL" else
+                         fresh_plan.get("evidence", {}).get("ephemeral", {}).get("selected_scope_labels")
+                         == initial_plan.get("evidence", {}).get("ephemeral", {}).get("selected_scope_labels"))
                 )
                 if not same_plan:
                     return _controller_result(
@@ -794,6 +849,25 @@ def run_once(
                         clock=clock,
                     )
                     return _provision_result_envelope(provision_result), code
+
+                if expected_kind == "CREATE_EPHEMERAL":
+                    if not (fresh_policy.get("local_ephemeral") or {}).get("enabled"):
+                        return _controller_result(
+                            decision=initial_decision, status="noop",
+                            diagnostic="LOCAL_EPHEMERAL_DISABLED",
+                        ), 0
+                    planned = planned_ephemeral_action(
+                        initial_plan, timestamp(clock().isoformat())
+                    )
+                    store.record_action(planned)
+                    if ephemeral_lifecycle_factory is None:
+                        from runnerops.ephemeral.cli import _runtime
+                        ephemeral_lifecycle_factory = _runtime
+                    ephemeral_result, code = reconcile_or_apply_ephemeral(
+                        store, {"decision": initial_decision, "action": planned},
+                        fresh_plan, fresh_policy, ephemeral_lifecycle_factory(), clock=clock,
+                    )
+                    return _provision_result_envelope(ephemeral_result), code
 
                 return _controller_result(
                     decision=initial_decision,

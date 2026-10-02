@@ -48,7 +48,7 @@ O control plane também preserva uma fronteira importante: decisões de autoscal
 - health, doctor, logs e planejamento de migração;
 - observabilidade read-only de fila/capacidade e planejamento determinístico de autoscale;
 - ativação e provisionamento local governados e opt-in, com crescimento limitado do pool;
-- primitive explícito para um runner ephemeral one-job com reconciliation e cleanup idempotente;
+- primitive explícito e autoscale governado opt-in para runner ephemeral one-job, com reconciliation e cleanup idempotente;
 - audit store local opcional para continuidade de fila e decisões/ações persistidas internamente;
 - Cockpit opcional para interface administrativa do host;
 - Agent Skills portáveis para Codex, GitHub Copilot CLI, Claude Code e clientes compatíveis.
@@ -114,7 +114,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Relatório operacional bounded | `runnerctl report . --since 24h`, `runnerctl report . --since 24h --json` |
 | Review AI read-only e grounded | `runnerctl review . --since 24h --provider ollama --model <model>` |
 | Planejar autoscale (read-only) | `runnerctl autoscale plan .` |
-| Aplicar `START_LOCAL` / `PROVISION_LOCAL` governados | `runnerctl autoscale run-once .` |
+| Aplicar `START_LOCAL` / `PROVISION_LOCAL` / `CREATE_EPHEMERAL` governados | `runnerctl autoscale run-once .` |
 | Agendar autoscale contínuo | `runnerctl autoscale enable .` |
 | Histórico/auditoria de autoscale | `runnerctl autoscale history`, `runnerctl autoscale explain` |
 | Agent Skills | `runnerctl skills list/install` |
@@ -465,7 +465,7 @@ falha: `report` retorna 0 quando toda evidência disponível foi coletada e 3
 quando há falha/inconclusão de coleta ou histórico truncado.
 Consulte o [contrato de CapacitySnapshot](docs/capacity-snapshot.md) para campos,
 permissões de leitura, limites e interpretação. `autoscale` oferece observabilidade,
-planejamento read-only e leitura do histórico. As mutações locais governadas são executadas por `autoscale run-once`: `START_LOCAL` para capacidade já provisionada e, desde a v0.4.0, `PROVISION_LOCAL` para crescimento limitado do pool quando o provisioning local estiver explicitamente habilitado. `BURST_CLOUD` continua somente planejável e sem execução.
+planejamento read-only e leitura do histórico. As mutações locais governadas são executadas por `autoscale run-once`: `START_LOCAL` para capacidade já provisionada, `PROVISION_LOCAL` para crescimento limitado do pool persistente e `CREATE_EPHEMERAL` para capacidade local descartável one-job quando habilitada explicitamente. `BURST_CLOUD` continua somente planejável e sem execução.
 
 `review` trata o modelo como analista read-only: consome somente
 `OperationalEvidence v1`, cita caminhos JSON Pointer existentes e nunca executa
@@ -493,7 +493,7 @@ runnerctl autoscale plan example/my-api --json
 
 O planner combina `CapacitySnapshot`, headroom do host, policy local e evidência
 durável do audit store quando necessária. A saída `AutoscalePlan` v1 pode decidir
-`WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED` ou
+`WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `CREATE_EPHEMERAL`, `BURST_CLOUD`, `HOLD`, `BLOCKED` ou
 `INCONCLUSIVE`, sempre com reason codes e `policy_fingerprint` explícitos.
 
 A decisão continua **somente um plano**. `autoscale plan` não executa
@@ -513,6 +513,11 @@ RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS=0
 RUNNER_AUTOSCALE_LOCAL_PROVISION_PROFILE=
 RUNNER_AUTOSCALE_LOCAL_PROVISION_GROUP=
 RUNNER_AUTOSCALE_LOCAL_PROVISION_LABELS=
+RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED=false
+RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_EPHEMERALS=1
+RUNNER_AUTOSCALE_EPHEMERAL_SCALE_OUT_COOLDOWN_SECONDS=30
+RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_PROFILE=
+RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_LABELS=
 RUNNER_AUTOSCALE_MIN_MEMORY_AVAILABLE_MIB=1024
 RUNNER_AUTOSCALE_MAX_CPU_PERCENT=
 RUNNER_AUTOSCALE_MAX_BURST_RUNNERS=0
@@ -543,10 +548,11 @@ RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once example/my-api --json
 ```
 
-O controller executa o mesmo planner determinístico e pode aplicar duas mutações locais governadas:
+O controller executa o mesmo planner determinístico e pode aplicar três mutações locais governadas:
 
 - `START_LOCAL` — ativa um runner local exato, já provisionado, saudável e on-demand;
 - `PROVISION_LOCAL` — cria no máximo um runner local exato por execução, somente quando provisioning local está explicitamente habilitado, o template é compatível e o pool permanece abaixo de `RUNNER_AUTOSCALE_MAX_LOCAL_RUNNERS`.
+- `CREATE_EPHEMERAL` — solicita no máximo um runner local one-job por execução, somente com policy ephemeral habilitada, labels compatíveis e espaço no limite ativo. O lifecycle ephemeral existente mantém cadastro, terminalidade e cleanup.
 
 `BURST_CLOUD` continua sem execução.
 
@@ -560,6 +566,8 @@ start existente daquele runner. O sucesso é provado por evidência estruturada 
 o exit code de `start` isoladamente não prova sucesso.
 
 Em `PROVISION_LOCAL`, a identidade alvo é determinística e persistida antes da mutação. Se a verificação pós-cadastro ficar parcial ou inconclusiva, uma execução posterior reconcilia **o mesmo target** contra evidência local + GitHub em vez de repetir `runnerctl add` às cegas. Capacidade `provisioned_idle` compatível continua tendo preferência por `START_LOCAL` antes de criar outro registro.
+
+Em `CREATE_EPHEMERAL`, decisão e ação de autoscale referenciam o `action_id` exato do lifecycle ephemeral. Ticks repetidos reconciliam a mesma identidade e só concluem a ação de autoscale após `CLEANED`. O limite ativo conta também runners ephemeral solicitados, online, ocupados, terminais e inconclusivos. **Ephemeral runner não significa host ephemeral**: o host persiste; registration, runtime e workdir do runner são descartáveis.
 
 `RUNNER_AUTOSCALE_ENABLED` é `false` por padrão. Desabilitado, `run-once` não
 coleta snapshot, não cria SQLite/lock e não toca no lifecycle.
@@ -576,7 +584,7 @@ runnerctl autoscale disable .
 canônico. O timer roda a cada 60 segundos por padrão e só agenda o controller
 governado já existente como `RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale
 run-once owner/repo --json`. Ele não inicia runners durante o enable, não chama
-`ensure .` e não executa scale-in. Cada tick delega a decisão ao mesmo planner/controller governado: pode ativar um runner exato com `START_LOCAL`, provisionar no máximo um runner exato com `PROVISION_LOCAL` quando a policy explícita permitir, ou permanecer sem mutação em `WAIT`, `HOLD`, `BLOCKED` e `INCONCLUSIVE`. `BURST_CLOUD` continua sem execução.
+`ensure .` e não executa scale-in. Cada tick delega a decisão ao mesmo planner/controller governado: pode ativar um runner exato com `START_LOCAL`, provisionar um runner persistente exato com `PROVISION_LOCAL`, solicitar um ephemeral com `CREATE_EPHEMERAL` quando a policy explícita permitir, ou permanecer sem nova capacidade em `WAIT`, `HOLD`, `BLOCKED` e `INCONCLUSIVE`. Ticks posteriores reconciliam ações ephemeral existentes até cleanup. `BURST_CLOUD` continua sem execução.
 
 Defina `RUNNER_AUTOSCALE_INTERVAL_SECONDS` no `config.env` para ajustar a
 cadência. O valor deve ser positivo e estritamente menor que

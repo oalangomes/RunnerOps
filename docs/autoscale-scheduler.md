@@ -18,8 +18,15 @@ Depending on explicit policy and fresh evidence, one scheduled invocation may:
 
 - activate one exact existing runner with `START_LOCAL`;
 - provision one exact bounded local runner with `PROVISION_LOCAL`;
+- request one exact one-job local runner with opt-in `CREATE_EPHEMERAL`;
 - make no mutation for `WAIT`, `HOLD`, `BLOCKED` or `INCONCLUSIVE`;
 - plan `BURST_CLOUD` without executing it.
+
+The timer also reconciles existing governed ephemeral actions. A terminal
+lifecycle proceeds through the existing bounded cleanup to `CLEANED`; repeated
+ticks preserve the same action ID and never infer job completion solely from a
+process exit or remote disappearance. The scheduler policy file captures the
+ephemeral opt-in, limit, cooldown, profile and labels at enable time.
 
 ## Operator flow
 

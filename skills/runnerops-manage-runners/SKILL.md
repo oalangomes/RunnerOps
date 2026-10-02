@@ -213,7 +213,7 @@ When the user explicitly asks for an immediate governed autoscale evaluation, us
 RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once . --json
 ```
 
-The controller may apply at most the mutations already supported by the product, currently `START_LOCAL` and opt-in bounded `PROVISION_LOCAL`. Do not replace planner/controller decisions with LLM-selected broad starts.
+The deterministic planner may select `START_LOCAL`, opt-in bounded `PROVISION_LOCAL`, or opt-in bounded `CREATE_EPHEMERAL`. The controller applies at most one new local mutation per iteration and reconciles the exact persisted ephemeral lifecycle on later ticks. Inspect `runnerctl autoscale plan . --json` and `runnerctl autoscale explain --decision <decision-id> --json` when tracing a decision. Do not select an ephemeral runner from queue evidence yourself.
 
 RunnerOps also exposes an explicit one-job ephemeral lifecycle:
 
@@ -224,7 +224,7 @@ runnerctl ephemeral reconcile <action-id>
 runnerctl ephemeral cleanup <action-id>
 ```
 
-Treat this as a lifecycle primitive, not automatic autoscaling. The current planner/controller does not emit `CREATE_EPHEMERAL`. Do not call `ephemeral create` merely because queue pressure exists. Use it when the user explicitly requests an ephemeral runner, during a controlled qualification/experiment, or to continue/reconcile an already-created ephemeral action.
+`ephemeral create` remains an explicit primitive for a direct user request or controlled qualification. Automatic ephemeral capacity requires `RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED=true`, a positive active limit, an explicit profile and compatible labels. Only the planner selects `CREATE_EPHEMERAL`; use `autoscale run-once` under explicit intent or the enabled scheduler to invoke that governed boundary. Never call `ephemeral create` merely because queue pressure exists.
 
 For an existing ephemeral action, preserve the exact `action_id`: never retry by creating a different action after an uncertain registration. Prefer `status` / `reconcile`, and only perform cleanup when the lifecycle has proven terminality.
 

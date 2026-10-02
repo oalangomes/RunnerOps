@@ -41,7 +41,7 @@ runnerctl autoscale status . --json
 
 Do not call `runnerctl ensure .` by default. It is a repository-wide manual activation override and can wake every enabled runner mapped to the repository, bypassing the normal capacity-first/autoscale path.
 
-If continuous autoscale is enabled, leave idle runners idle before publication. The scheduler/controller will react to observed queue pressure through the existing governed `START_LOCAL` / `PROVISION_LOCAL` boundaries.
+If continuous autoscale is enabled, leave idle runners idle before publication. The scheduler/controller will react to observed queue pressure through the governed `START_LOCAL`, `PROVISION_LOCAL`, and opt-in `CREATE_EPHEMERAL` boundaries.
 
 If autoscale is disabled, do not compensate by starting the whole repository. Publish the requested change when the repository itself is ready, then use queue/capacity evidence from the actual CI workload to decide whether one exact runner needs manual activation.
 
@@ -113,7 +113,7 @@ When CI reports runner/infrastructure unavailability:
 3. if autoscale is disabled and current queue evidence identifies exactly one healthy matching `provisioned_idle` runner, start only that exact runner, then verify `status` + `health` and rerun the watcher;
 4. if the target is ambiguous or evidence is inconclusive, do not choose or start multiple runners by guess.
 
-Do not call `runnerctl ephemeral create` merely because a job is queued. The one-job ephemeral lifecycle is currently an explicit primitive, not an autoscale planner decision.
+Do not call `runnerctl ephemeral create` merely because a job is queued. The deterministic autoscale planner may select opt-in `CREATE_EPHEMERAL`; the agent must use the governed controller boundary when explicitly asked to act immediately.
 
 A normal post-publish summary can be:
 

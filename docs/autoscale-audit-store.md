@@ -251,6 +251,7 @@ Supported decisions are:
 WAIT
 START_LOCAL
 PROVISION_LOCAL
+CREATE_EPHEMERAL
 BURST_CLOUD
 HOLD
 BLOCKED
@@ -258,6 +259,12 @@ INCONCLUSIVE
 ```
 
 Decision replay is idempotent. A conflicting payload under the same decision ID fails with `idempotency_conflict`.
+
+For `CREATE_EPHEMERAL`, the bounded decision projection includes the selected
+label scope, explicit profile/template labels, active lifecycle count and
+ephemeral evidence status. Its action target is the exact 32-hex lifecycle
+action ID. The autoscale action stays `started` until that lifecycle reaches
+`CLEANED`, so retention preserves the recovery link while cleanup is pending.
 
 The richer planner scope object is not copied wholesale into the closed Decision v1 evidence payload. Schema v2 makes aggregate qualification independently durable in dedicated pressure tables instead of adding an arbitrary metadata escape hatch to stored decisions.
 
@@ -268,6 +275,7 @@ Actions support:
 ```text
 START_LOCAL
 PROVISION_LOCAL
+CREATE_EPHEMERAL
 BURST_CLOUD
 ```
 

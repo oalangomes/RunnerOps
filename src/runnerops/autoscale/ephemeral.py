@@ -9,7 +9,7 @@ from runnerops.ephemeral.contracts import LifecycleState
 from runnerops.ephemeral.identity import runner_identity, validate_action_id
 from runnerops.ephemeral.store import ActionStore
 
-from .contracts import AuditError, canonical_repo, label_list
+from .contracts import AuditError, canonical_repo, label_list, timestamp
 from .provision import PROFILES
 
 
@@ -83,7 +83,7 @@ def read_ephemeral_evidence(repository, *, action_store=None):
                 continue
             actions.append({"action_id": action.action_id, "state": action.action_state,
                             "labels": label_list(action.labels),
-                            "updated_at": action.updated_at,
+                            "updated_at": timestamp(action.updated_at),
                             "workload_observed": action.workload_evidence.get("observed") is True,
                             "terminal_proven": action.terminal_evidence.get("proven") is True})
     except (OSError, ValueError, AuditError, KeyError, TypeError):

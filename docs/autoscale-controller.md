@@ -31,6 +31,10 @@ the same ID. If a lifecycle record already exists, subsequent ticks call
 identity. The autoscale action remains `started` until `CLEANED`, preventing
 audit retention from dropping the recovery link. Inconclusive registration,
 online or terminal evidence blocks another creation in the same scope.
+After a crash before remote registration, a `REQUESTED` lifecycle can resume
+the same ID only when its own registration evidence proves no attempt occurred
+or explicitly authorizes a safe retry. Stale `BUSY` evidence first requires
+reconciliation before the planner can request another unit.
 
 `runnerctl autoscale explain --decision <id> --json` links the decision and
 autoscale action to current lifecycle evidence, including workload observation,

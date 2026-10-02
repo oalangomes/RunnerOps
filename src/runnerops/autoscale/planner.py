@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from runnerops import capacity
+from runnerops.ephemeral.contracts import LifecycleState
 
 from .contracts import AuditError, canonical_repo, label_list, timestamp
 from .runtime import read_planner_evidence
@@ -41,6 +42,7 @@ KNOWN_CAPACITY_STATUSES = {
     "provisioned_idle",
     "no_matching_capacity",
 }
+ACTIVE_EPHEMERAL_STATES = {state.value for state in LifecycleState} - {LifecycleState.CLEANED.value}
 
 
 class PolicyError(Exception):
@@ -1068,6 +1070,13 @@ def plan(snapshot, policy, host, audit):
         if ephemeral["status"] != "complete" or not isinstance(ephemeral["actions"], list):
             return decide("INCONCLUSIVE", "EPHEMERAL_EVIDENCE_INCONCLUSIVE")
         active = ephemeral["actions"]
+        if any(not isinstance(row, dict)
+               or not isinstance(row.get("state"), str)
+               or row["state"] not in ACTIVE_EPHEMERAL_STATES
+               or not isinstance(row.get("labels"), list)
+               or any(not isinstance(label, str) for label in row["labels"])
+               for row in active):
+            return decide("INCONCLUSIVE", "EPHEMERAL_EVIDENCE_INCONCLUSIVE")
         ephemeral["active_count"] = len(active)
         eligible = [row for row in qualified_scopes
                     if _label_set(row["required_labels"]) <= _label_set(ephemeral_policy["labels"])]
@@ -1077,6 +1086,16 @@ def plan(snapshot, policy, host, audit):
             matching = [row for row in active
                         if _label_set(selected) <= _label_set(row["labels"])]
             if any(row["state"].startswith("INCONCLUSIVE") for row in matching):
+                return decide("HOLD", *(reasons + ["EPHEMERAL_RECONCILIATION_REQUIRED"]))
+            try:
+                busy_ages = [
+                    (datetime.fromisoformat(observed_at)
+                     - datetime.fromisoformat(timestamp(row["updated_at"]))).total_seconds()
+                    for row in matching if row["state"] == "BUSY"
+                ]
+            except (AuditError, KeyError, TypeError, ValueError):
+                return decide("INCONCLUSIVE", "EPHEMERAL_EVIDENCE_INCONCLUSIVE")
+            if any(age < 0 or age > 300 for age in busy_ages):
                 return decide("HOLD", *(reasons + ["EPHEMERAL_RECONCILIATION_REQUIRED"]))
             if len(active) >= ephemeral_policy["max_active"]:
                 return decide("HOLD", *(reasons + ["EPHEMERAL_CAPACITY_AT_LIMIT"]))

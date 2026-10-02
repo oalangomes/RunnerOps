@@ -75,7 +75,10 @@ def _matches_exact_spec(existing, exact_id, decision):
     template = ephemeral.get("template_labels", [])
     profile = ephemeral.get("profile")
     return (
-        existing.action_id == exact_id
+        profile is not None
+        and bool(template)
+        and bool(selected)
+        and existing.action_id == exact_id
         and existing.runner_identity == runner_identity(exact_id)
         and existing.repository.casefold() == decision["repository"].casefold()
         and (profile is None or existing.profile == profile)
@@ -148,6 +151,20 @@ def reconcile_or_apply(store, pending, fresh_plan, fresh_policy, lifecycle, *, c
 
     if observed.repository.casefold() != decision["repository"].casefold():
         return _result(decision, action, "inconclusive", "EPHEMERAL_IDENTITY_MISMATCH", observed), 3
+    if observed.action_state == LifecycleState.REQUESTED.value:
+        registration = getattr(observed, "registration", {})
+        retry_proven_safe = (registration.get("attempted") is False
+                             or registration.get("safe_retry_authorized") is True)
+        if retry_proven_safe and policy_fingerprint(fresh_policy) == decision["policy_fingerprint"]:
+            ephemeral = decision["evidence"].get("ephemeral", {})
+            try:
+                observed = lifecycle.create(decision["repository"], ephemeral["profile"],
+                                            ephemeral["template_labels"], action_id=exact_id)
+            except (OSError, RuntimeError, ValueError, KeyError):
+                return _result(decision, action, "inconclusive", "EPHEMERAL_RECONCILIATION_REQUIRED"), 3
+        else:
+            return _result(decision, action, "inconclusive", "EPHEMERAL_RECONCILIATION_REQUIRED",
+                           observed), 3
     if observed.action_state in (LifecycleState.TERMINAL.value,
                                  LifecycleState.CLEANUP_PENDING.value):
         try:

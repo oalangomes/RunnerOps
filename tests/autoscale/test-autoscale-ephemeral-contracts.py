@@ -6,6 +6,7 @@ import unittest
 import importlib.util
 from unittest.mock import patch
 from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,7 +79,8 @@ class PlannerContracts(unittest.TestCase):
     def test_disabled_limit_inconclusive_and_labels_fail_closed(self):
         self.assertNotEqual(self.case(ephemeral=ephemeral_policy(enabled=False))["decision"],
                             "CREATE_EPHEMERAL")
-        rows = [{"action_id": "a" * 32, "state": "ONLINE", "labels": LABELS}]
+        rows = [{"action_id": "a" * 32, "state": "ONLINE", "labels": LABELS,
+                 "updated_at": self.fixture.observed_at}]
         self.assertEqual(self.case(ephemeral=ephemeral_policy(max_active=1), actions=rows)["decision"],
                          "HOLD")
         self.assertEqual(self.case(actions=[{**rows[0], "state": "INCONCLUSIVE_TERMINAL"}])["decision"],
@@ -101,9 +103,12 @@ class PlannerContracts(unittest.TestCase):
         self.assertNotEqual(policy_fingerprint(first), policy_fingerprint(second))
 
     def test_busy_ephemeral_allows_one_more_with_headroom_but_online_covers_queue(self):
-        row = {"action_id": "a" * 32, "state": "BUSY", "labels": LABELS}
+        row = {"action_id": "a" * 32, "state": "BUSY", "labels": LABELS,
+               "updated_at": self.fixture.observed_at}
         self.assertEqual(self.case(actions=[row])["decision"], "CREATE_EPHEMERAL")
         self.assertEqual(self.case(actions=[{**row, "state": "ONLINE"}])["decision"], "HOLD")
+        self.assertEqual(self.case(actions=[{**row, "updated_at": "2026-09-17T12:00:00+00:00"}])[
+            "decision"], "HOLD")
 
     def test_invalid_policy_fails_early(self):
         with patch.dict("os.environ", {"RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED": "true",
@@ -122,6 +127,8 @@ class FakeAction:
         self.profile = profile
         self.labels = labels + [self.runner_identity]
         self.action_state = state
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+        self.registration = {"attempted": state != "REQUESTED", "safe_retry_authorized": False}
 
 
 class FakeLifecycle:
@@ -140,7 +147,11 @@ class FakeLifecycle:
 
     def create(self, repository, profile, labels, *, action_id):
         self.creates += 1
-        assert action_id not in self.actions
+        if action_id in self.actions:
+            action = self.actions[action_id]
+            assert action.action_state == "REQUESTED" and not action.registration["attempted"]
+            action.action_state = "ONLINE"
+            return action
         action = FakeAction(action_id, repository, profile, labels)
         self.actions[action_id] = action
         return action
@@ -156,7 +167,8 @@ class FakeLifecycle:
 
     def evidence(self, repository):
         return {"status": "complete", "actions": [
-            {"action_id": row.action_id, "state": row.action_state, "labels": row.labels}
+            {"action_id": row.action_id, "state": row.action_state,
+             "labels": row.labels, "updated_at": row.updated_at}
             for row in self.actions.values()
             if row.repository.casefold() == repository.casefold() and row.action_state != "CLEANED"
         ]}
@@ -263,6 +275,28 @@ class ControllerContracts(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertEqual(self.lifecycle.creates, 0)
         self.assertEqual(result["ephemeral_action_id"], exact_id)
+
+    def test_crash_before_registration_resumes_only_exact_requested_identity(self):
+        snapshot = self.fixture.snapshot(category="busy_capacity", names=("busy",),
+                                         active_local=1, observed_at=self.fixture.now)
+        with self.fixture.store_factory() as store:
+            store.observe(snapshot)
+            audit = read_planner_evidence(store, "Example/RunnerOps")
+            audit["ephemeral"] = self.lifecycle.evidence("Example/RunnerOps")
+            planned = plan(snapshot, self.policy,
+                           {"status": "complete", "memory_available_mib": 8192,
+                            "cpu_percent": None}, audit)
+            store.record_decision(decision_from_plan(planned))
+            action = planned_action(planned, self.fixture.now.isoformat())
+            store.record_action(action)
+        exact_id = action["target"]
+        self.lifecycle.actions[exact_id] = FakeAction(exact_id, "Example/RunnerOps",
+                                                       "generic", LABELS, "REQUESTED")
+        result, code = self.run_tick()
+        self.assertEqual(code, 0)
+        self.assertEqual(result["target"], exact_id)
+        self.assertEqual(self.lifecycle.creates, 1)
+        self.assertEqual(len(self.lifecycle.actions), 1)
 
 
 if __name__ == "__main__":

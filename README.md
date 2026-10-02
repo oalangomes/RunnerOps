@@ -838,6 +838,7 @@ O workflow de `master` também dogfooda o produto em um runner dedicado gerencia
 - [Controller governado de autoscale](docs/autoscale-controller.md)
 - [Audit store de autoscale](docs/autoscale-audit-store.md)
 - [Lifecycle local ephemeral one-job](docs/ephemeral-lifecycle.md)
+- [Qualificação real do autoscale ephemeral](docs/issue-138-real-host-qualification.md)
 - [Qualificação real do lifecycle ephemeral da Issue #120](docs/issue-120-real-host-qualification.md)
 - [Processo de release](docs/releasing.md)
 - [Agent Skills](skills/README.md)

@@ -6,9 +6,40 @@ apply **at most one governed local mutation per invocation**:
 
 - `START_LOCAL` — activate one exact already-provisioned local runner;
 - `PROVISION_LOCAL` — create one exact bounded local runner through the existing
-  `runnerctl add` provisioning path.
+  `runnerctl add` provisioning path;
+- `CREATE_EPHEMERAL` — request one exact local one-job runner through the existing
+  ephemeral lifecycle.
 
 `BURST_CLOUD` remains planning-only. Automatic scale-in/removal is not implemented.
+An ephemeral runner does not imply an ephemeral host: only its registration,
+runtime and workdir are disposable.
+
+`CREATE_EPHEMERAL` is disabled by default. It requires
+`RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED=true`, positive
+`RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_EPHEMERALS`, positive bounded
+`RUNNER_AUTOSCALE_EPHEMERAL_SCALE_OUT_COOLDOWN_SECONDS`, and explicit
+`RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_PROFILE` and
+`RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_LABELS`. The labels must cover a qualified
+job scope and include `self-hosted`. The persistent pool and active local limits
+remain separate from the ephemeral active limit.
+
+The planner derives a 32-hex ephemeral lifecycle action ID from the durable
+decision. The autoscale action target stores that exact ID. The controller
+persists the autoscale action before invoking `EphemeralLifecycle.create` with
+the same ID. If a lifecycle record already exists, subsequent ticks call
+`reconcile` and, after proven terminality, `cleanup`; they do not create a new
+identity. The autoscale action remains `started` until `CLEANED`, preventing
+audit retention from dropping the recovery link. Inconclusive registration,
+online or terminal evidence blocks another creation in the same scope.
+After a crash before remote registration, a `REQUESTED` lifecycle can resume
+the same ID only when its own registration evidence proves no attempt occurred
+or explicitly authorizes a safe retry. Stale `BUSY` evidence first requires
+reconciliation before the planner can request another unit.
+
+`runnerctl autoscale explain --decision <id> --json` links the decision and
+autoscale action to current lifecycle evidence, including workload observation,
+terminal proof and cleanup result. `runnerctl autoscale history` exposes the
+action target; `runnerctl report` aggregates the decision and action kinds.
 
 ```text
 CapacitySnapshot
@@ -27,13 +58,14 @@ fresh policy + CapacitySnapshot + audit evidence
       ↓
 re-run deterministic planner
       ↓
-same policy + same decision + same exact target?
+same policy + same decision + validated target/scope?
       ↓
-persist planned → started
+persist exact action
       ↓
-START_LOCAL       or       PROVISION_LOCAL
-exact lifecycle            exact runnerctl add
-      ↓                           ↓
+START_LOCAL / PROVISION_LOCAL / CREATE_EPHEMERAL
+      ↓             ↓                  ↓
+exact start    exact runnerctl add   existing ephemeral lifecycle
+      ↓             ↓                  ↓
 structured verification / reconciliation
       ↓
 succeeded / failed / bounded inconclusive recovery

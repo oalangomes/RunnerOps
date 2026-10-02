@@ -127,7 +127,7 @@ runnerctl autoscale plan . --json
 
 Queue pressure does not imply “start all runners”. A `provisioned_idle` runner is installed capacity, not current online capacity; the autoscaler may choose one exact `START_LOCAL` rather than activating a repository or fleet.
 
-The one-job ephemeral lifecycle is a distinct capacity primitive. Do not describe it as automatic ephemeral autoscaling until the planner/controller actually supports a `CREATE_EPHEMERAL` decision.
+The one-job ephemeral lifecycle is distinct from persistent capacity. `CREATE_EPHEMERAL` is an opt-in, bounded deterministic autoscale decision; inspect planner and audit evidence before attributing a queue change to it. Do not recommend direct `ephemeral create` as an agent-selected response to queue pressure.
 
 Do not assume that a self-hosted runner is faster than a GitHub-hosted runner, or vice versa, without evidence.
 

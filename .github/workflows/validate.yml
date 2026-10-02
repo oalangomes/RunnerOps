@@ -17,6 +17,11 @@ on:
         required: false
         default: ""
         type: string
+      autoscale_ephemeral_qualification:
+        description: Queue one controlled job for governed local ephemeral autoscale
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -258,7 +263,8 @@ jobs:
     name: RunnerOps self-hosted dogfood
     if: >-
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      inputs.ephemeral_runner_label == ''
+      inputs.ephemeral_runner_label == '' &&
+      inputs.autoscale_ephemeral_qualification != true
     needs: static-validation
     runs-on: [self-hosted, Linux, X64, runnerops, local-runner]
     timeout-minutes: 10
@@ -426,3 +432,24 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           # Keep BUSY observable long enough for the explicit qualification loop.
           sleep 20
+
+  autoscale-ephemeral-qualification:
+    name: Governed ephemeral autoscale job
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.autoscale_ephemeral_qualification == true
+    needs: static-validation
+    runs-on:
+      - self-hosted
+      - Linux
+      - X64
+      - runnerops-autoscale-ephemeral-qualification
+    timeout-minutes: 5
+    steps:
+      - name: Prove ephemeral runner consumed one real job
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUNNER_NAME" =~ ^runnerops-ephemeral-[a-f0-9]{16}$ ]]
+          printf 'runner=%s\n' "$RUNNER_NAME" | tee -a "$GITHUB_STEP_SUMMARY"
+          sleep 60

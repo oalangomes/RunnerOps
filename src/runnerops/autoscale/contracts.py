@@ -9,6 +9,7 @@ DECISIONS = (
     "WAIT",
     "START_LOCAL",
     "PROVISION_LOCAL",
+    "CREATE_EPHEMERAL",
     "BURST_CLOUD",
     "HOLD",
     "BLOCKED",
@@ -162,6 +163,7 @@ def decision_record(value):
             "capacity",
             "active_burst_capacity",
         ),
+        ("ephemeral",),
     )
     if evidence["queue_status"] not in ("complete", "inconclusive"):
         raise AuditError("invalid_queue_status")
@@ -192,6 +194,23 @@ def decision_record(value):
             "active_burst_capacity": nullable_count(evidence["active_burst_capacity"]),
         },
     }
+    if "ephemeral" in evidence:
+        ephemeral = evidence["ephemeral"]
+        fields(ephemeral, ("status", "selected_scope_labels", "active_count"),
+               ("profile", "template_labels"))
+        if ephemeral["status"] not in ("complete", "inconclusive"):
+            raise AuditError("invalid_ephemeral_evidence")
+        result["evidence"]["ephemeral"] = {
+            "status": ephemeral["status"],
+            "selected_scope_labels": label_list(ephemeral["selected_scope_labels"]),
+            "active_count": nullable_count(ephemeral["active_count"]),
+        }
+        if "profile" in ephemeral:
+            result["evidence"]["ephemeral"]["profile"] = (
+                text(ephemeral["profile"]) if ephemeral["profile"] is not None else None)
+        if "template_labels" in ephemeral:
+            result["evidence"]["ephemeral"]["template_labels"] = label_list(
+                ephemeral["template_labels"])
     if result["evidence"]["observed_at"] > result["timestamp"] or any(
         item["last_seen_queued_at"] > result["evidence"]["observed_at"]
         for item in result["evidence"]["queue"]
@@ -218,7 +237,7 @@ def action_record(value):
         ),
     )
     if (
-        value["kind"] not in ("START_LOCAL", "PROVISION_LOCAL", "BURST_CLOUD")
+        value["kind"] not in ("START_LOCAL", "PROVISION_LOCAL", "CREATE_EPHEMERAL", "BURST_CLOUD")
         or value["state"] not in ACTION_STATES
     ):
         raise AuditError("invalid_action")

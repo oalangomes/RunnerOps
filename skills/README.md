@@ -36,7 +36,7 @@ Ela também distingue:
 
 Após `start` ou `restart` explícito, a skill exige `status` + `health`. Após `PARTIAL` / `INCONCLUSIVE` em cadastro, não repete `runnerctl add` automaticamente.
 
-O autoscale contínuo continua sendo determinístico e governado por RunnerOps; a skill não substitui decisões do planner por “ligar tudo”. O lifecycle ephemeral one-job pode ser operado explicitamente pela skill, mas `ephemeral create` não é tratado como autoscaling automático enquanto o planner/controller não suportar `CREATE_EPHEMERAL`.
+O autoscale contínuo continua sendo determinístico e governado por RunnerOps; a skill não substitui decisões do planner por “ligar tudo”. Com policy explícita e limites, o planner pode escolher `CREATE_EPHEMERAL` e o controller reconcilia a identidade exata pelo lifecycle one-job existente. `ephemeral create` continua disponível como primitive explícito, mas a skill não o escolhe por conta própria diante de fila.
 
 ## Instalação
 

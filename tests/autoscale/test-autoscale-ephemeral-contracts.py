@@ -6,7 +6,7 @@ import unittest
 import importlib.util
 from unittest.mock import patch
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,7 +22,9 @@ def fixture_module(name):
 controller_fixture = fixture_module("test-autoscale-controller-contracts.py")
 planner_fixture = fixture_module("test-autoscale-provision-planner-contracts.py")
 from runnerops.autoscale.ephemeral import exact_ephemeral_id, load_ephemeral_policy  # noqa: E402
-from runnerops.autoscale.ephemeral_controller import planned_action, reconcile_or_apply  # noqa: E402
+from runnerops.autoscale.ephemeral_controller import (  # noqa: E402
+    pending_ephemeral_actions, planned_action, reconcile_or_apply,
+)
 from runnerops.autoscale.planner import plan, policy_fingerprint  # noqa: E402
 from runnerops.autoscale.runtime import decision_from_plan, read_planner_evidence  # noqa: E402
 from runnerops.ephemeral.identity import runner_identity  # noqa: E402
@@ -137,6 +139,7 @@ class FakeLifecycle:
         self.store = self
         self.creates = 0
         self.reconciles = 0
+        self.reconciled_ids = []
         self.cleanups = 0
 
     def exists(self, action_id):
@@ -158,6 +161,7 @@ class FakeLifecycle:
 
     def reconcile(self, action_id):
         self.reconciles += 1
+        self.reconciled_ids.append(action_id)
         return self.actions[action_id]
 
     def cleanup(self, action_id):
@@ -190,10 +194,10 @@ class ControllerContracts(unittest.TestCase):
         )
         self.fixture.seed_queue(category="busy_capacity", names=("busy",), active_local=1)
 
-    def run_tick(self):
+    def run_tick(self, snapshot=None):
         return self.fixture.run_controller(
-            [self.fixture.snapshot(category="busy_capacity", names=("busy",), active_local=1,
-                                   observed_at=self.fixture.now)],
+            [snapshot or self.fixture.snapshot(category="busy_capacity", names=("busy",),
+                                               active_local=1, observed_at=self.fixture.now)],
             policy_loader=lambda: self.policy,
             ephemeral_lifecycle_factory=lambda: self.lifecycle,
             ephemeral_evidence_fn=self.lifecycle.evidence,
@@ -226,6 +230,70 @@ class ControllerContracts(unittest.TestCase):
         with self.fixture.store_factory() as store:
             action = store.explain(result["decision_id"])["actions"][0]
         self.assertEqual(action["state"], "succeeded")
+
+    def test_cleaned_historical_action_does_not_block_next_pressure(self):
+        first, code = self.run_tick()
+        self.assertEqual(code, 0)
+        first_id = first["ephemeral_action_id"]
+        first_decision = first["decision_id"]
+        self.lifecycle.actions[first_id].action_state = "BUSY"
+        self.fixture.now += timedelta(seconds=1)
+        self.assertEqual(self.run_tick()[0]["ephemeral_action_id"], first_id)
+        self.lifecycle.actions[first_id].action_state = "TERMINAL"
+        self.fixture.now += timedelta(seconds=1)
+        self.assertEqual(self.run_tick()[0]["action_state"], "succeeded")
+        self.assertEqual(self.lifecycle.actions[first_id].action_state, "CLEANED")
+        reconciles_after_cleanup = self.lifecycle.reconciled_ids.count(first_id)
+        with self.fixture.store_factory() as store:
+            self.assertEqual(pending_ephemeral_actions(store, "Example/RunnerOps"), [])
+            self.assertEqual(store.explain(first_decision)["actions"][0]["state"], "succeeded")
+
+        # A new queue episode starts after A was cleaned. Its source identity changes.
+        self.fixture.now += timedelta(seconds=301)
+        second = self.fixture.snapshot(category="busy_capacity", names=("busy",),
+                                       active_local=1, observed_at=self.fixture.now)
+        second["queue"]["jobs"][0]["job_id"] = 102
+        second["queue"]["jobs"][0]["run_id"] = 202
+        second["queue"]["oldest_queued_job_id"] = 102
+        second["queue"]["oldest_matching_queued_job_id"] = 102
+        earlier = deepcopy(second)
+        earlier["observed_at"] = (self.fixture.now - timedelta(seconds=300)).isoformat()
+        with self.fixture.store_factory() as store:
+            store.observe(earlier)
+        next_result, code = self.run_tick(second)
+        self.assertEqual(code, 0)
+        self.assertEqual(next_result["decision"], "CREATE_EPHEMERAL")
+        self.assertNotEqual(next_result["decision_id"], first_decision)
+        self.assertNotEqual(next_result["action_id"], first["action_id"])
+        second_id = next_result["ephemeral_action_id"]
+        self.assertNotEqual(second_id, first_id)
+        self.assertEqual(self.lifecycle.creates, 2)
+        self.assertEqual(self.lifecycle.reconciled_ids.count(first_id), reconciles_after_cleanup)
+        self.assertEqual(self.lifecycle.actions[first_id].action_state, "CLEANED")
+
+        self.fixture.now += timedelta(seconds=1)
+        replay, code = self.run_tick(second)
+        self.assertEqual(code, 0)
+        self.assertEqual(replay["ephemeral_action_id"], second_id)
+        self.assertEqual(self.lifecycle.creates, 2)
+        self.assertEqual(len(self.lifecycle.actions), 2)
+        self.assertEqual(self.lifecycle.reconciled_ids.count(first_id), reconciles_after_cleanup)
+        with self.fixture.store_factory() as store:
+            self.assertEqual(store.explain(first_decision)["actions"][0]["state"], "succeeded")
+            self.assertEqual([row["action"]["target"] for row in
+                              pending_ephemeral_actions(store, "Example/RunnerOps")], [second_id])
+
+    def test_missing_started_lifecycle_is_inconclusive_without_new_identity(self):
+        first, code = self.run_tick()
+        self.assertEqual(code, 0)
+        first_id = first["ephemeral_action_id"]
+        del self.lifecycle.actions[first_id]
+        self.fixture.now += timedelta(seconds=1)
+        result, code = self.run_tick()
+        self.assertEqual(code, 3)
+        self.assertEqual(result["diagnostic"], "EPHEMERAL_ACTION_MISSING")
+        self.assertEqual(result["ephemeral_action_id"], first_id)
+        self.assertEqual(self.lifecycle.creates, 1)
 
     def test_inconclusive_registration_never_creates_another(self):
         result, _ = self.run_tick()

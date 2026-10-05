@@ -29,13 +29,14 @@ def planned_action(plan, at):
     })
 
 
-def governed_actions(store, repository):
+def pending_ephemeral_actions(store, repository):
+    """Return only actions that can still be applied or reconciled."""
     repository = canonical_repo(repository)
     with store._read_transaction():
         rows = store.connection.execute(
             """SELECT d.payload AS decision_payload, a.payload AS action_payload
             FROM actions a JOIN decisions d USING(decision_id)
-            WHERE lower(d.repository)=lower(?) AND a.state IN ('planned','started','succeeded')
+            WHERE lower(d.repository)=lower(?) AND a.state IN ('planned','started')
               AND a.payload LIKE '%CREATE_EPHEMERAL%'
             ORDER BY a.updated_at, a.action_id LIMIT 1001""", (repository,)
         ).fetchall()

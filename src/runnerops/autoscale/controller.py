@@ -26,7 +26,7 @@ from .planner import PolicyError, collect_host_facts, load_policy, plan, policy_
 from .provision import provision_exact
 from .ephemeral import read_ephemeral_evidence
 from .ephemeral_controller import (
-    governed_actions,
+    pending_ephemeral_actions,
     planned_action as planned_ephemeral_action,
     reconcile_or_apply as reconcile_or_apply_ephemeral,
 )
@@ -500,8 +500,7 @@ def _provision_enabled(policy):
 def _pending_actions(store, repository, ephemeral_evidence):
     starts = pending_start_actions(store, repository)
     provisions = pending_provision_actions(store, repository)
-    ephemerals = [row for row in governed_actions(store, repository)
-                  if row["action"]["state"] in ("planned", "started")]
+    ephemerals = pending_ephemeral_actions(store, repository)
     observed = {row["action_id"]: row["state"] for row in
                 (ephemeral_evidence or {}).get("actions", [])}
     blocking = [row for row in ephemerals
@@ -523,7 +522,7 @@ def _pending_error(starts, provisions, ephemerals):
 
 def _planner_evidence(store, repository, policy, ephemeral_evidence_fn):
     evidence = read_planner_evidence(store, repository)
-    if (policy.get("local_ephemeral") or {}).get("enabled") or governed_actions(store, repository):
+    if (policy.get("local_ephemeral") or {}).get("enabled") or pending_ephemeral_actions(store, repository):
         evidence["ephemeral"] = ephemeral_evidence_fn(repository)
     return evidence
 
@@ -601,7 +600,7 @@ def run_once(
 
         if not initial_pending:
             if initial_plan["decision"] == "INCONCLUSIVE":
-                if not governed_actions(store, canonical):
+                if not pending_ephemeral_actions(store, canonical):
                     return _controller_result(
                         initial_plan, status="inconclusive", diagnostic="EVIDENCE_INCONCLUSIVE"
                     ), 3

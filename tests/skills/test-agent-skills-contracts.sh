@@ -121,7 +121,26 @@ plain_home="$(mktemp -d)"
 invalid_home="$(mktemp -d)"
 tmp_home="$(mktemp -d)"
 trap 'rm -rf "$skill_home" "$operator_home" "$plain_home" "$invalid_home" "$tmp_home"' EXIT
-mkdir -p "$skill_home/.codex/agents" "$operator_home/.codex/agents" "$plain_home/.codex/agents" "$invalid_home/.codex/agents" "$tmp_home/.agents/skills/manage-local-github-runners"
+mkdir -p "$skill_home/.codex/agents" "$operator_home/.codex/agents" "$plain_home/.codex/agents" "$tmp_home/.agents/skills/manage-local-github-runners"
+
+# A copied installer must discover a new canonical skill without a code change.
+fixture_root="$tmp_home/fixture-repo"
+mkdir -p "$fixture_root/scripts/setup" "$fixture_root/skills/runnerops-extra-contract" "$fixture_root/agents/runnerops-operator"
+cp "$ROOT/scripts/setup/install-agent-skills.sh" "$fixture_root/scripts/setup/"
+cp "$OPERATOR" "$fixture_root/agents/runnerops-operator/AGENT.md"
+cat > "$fixture_root/skills/runnerops-extra-contract/SKILL.md" <<'EOF'
+---
+name: runnerops-extra-contract
+description: RunnerOps discovery contract fixture.
+---
+Use runnerctl.
+EOF
+fixture_list="$("$fixture_root/scripts/setup/install-agent-skills.sh" --list)"
+grep -Fxq runnerops-extra-contract <<< "$fixture_list" || fail "installer deve descobrir skill canônica adicional"
+HOME="$tmp_home/discovery-home" "$fixture_root/scripts/setup/install-agent-skills.sh" --tool codex --skill runnerops-extra-contract >/dev/null
+cmp -s "$fixture_root/skills/runnerops-extra-contract/SKILL.md" "$tmp_home/discovery-home/.codex/skills/runnerops-extra-contract/SKILL.md" || fail "--skill deve aceitar nova skill canônica sem lista hardcoded"
+[[ ! -e "$tmp_home/discovery-home/.codex/agents" ]] || fail "nova skill não deve instalar o operator"
+pass "Nova skill canônica descoberta e aceita por --skill sem cadastro manual"
 
 HOME="$skill_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex --skill runnerops-manage-runners >/dev/null
 [[ -d "$skill_home/.codex/skills/runnerops-manage-runners" ]] || fail "--skill runnerops-manage-runners deve instalar somente a skill selecionada"
@@ -135,10 +154,12 @@ HOME="$plain_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex >/
 [[ -d "$plain_home/.codex/skills/runnerops-manage-runners" ]] || fail "instalação sem --skill deve reinstalar skills e operador"
 [[ -f "$plain_home/.codex/agents/runnerops-operator.toml" ]] || fail "instalação sem --skill deve incluir o operador"
 
-if HOME="$invalid_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex --skill nome-inexistente >/tmp/runnerops-invalid.out 2>&1; then
+if HOME="$invalid_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool all --skill nome-inexistente >"$tmp_home/invalid.out" 2>&1; then
   fail "--skill nome-inexistente deve falhar"
 fi
-[[ ! -e "$invalid_home/.codex/agents/runnerops-operator.toml" ]] || fail "--skill nome-inexistente não deve causar side effect no operator"
+require_text "$tmp_home/invalid.out" "skill/agent invalido: nome-inexistente" "target inválido deve falhar na validação"
+[[ -z "$(find "$invalid_home" -mindepth 1 -print -quit)" ]] || fail "--skill inválida não deve criar nenhum arquivo ou diretório"
+pass "Target inválido rejeitado antes de qualquer side effect"
 
 printf '%s\n' legacy > "$tmp_home/.agents/skills/manage-local-github-runners/marker"
 HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool agents --skill runnerops-manage-runners >/dev/null
@@ -162,11 +183,56 @@ for tool in codex copilot claude agents; do
   [[ -f "$installed_path" ]] || fail "installer deve ser idempotente para $tool"
 done
 
-python3 - "$tmp_home/.codex/agents/runnerops-operator.toml" <<'PY'
-import sys, tomllib
-path = sys.argv[1]
-with open(path, 'rb') as fh:
-    data = tomllib.load(fh)
+# Exercise escapes through the real renderer, changing only a temporary source.
+python3 - "$fixture_root/agents/runnerops-operator/AGENT.md" <<'PY'
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+with source.open('a', encoding='utf-8') as fh:
+    fh.write('\nEscapes: "quoted", backslash \\, tab\t, newline\n, return\r, backspace\b, formfeed\f, control\x01, unicode ç.\n')
+PY
+HOME="$tmp_home/escaped-home" "$fixture_root/scripts/setup/install-agent-skills.sh" --tool codex --skill runnerops-operator >/dev/null
+
+python3 - "$tmp_home/.codex/agents/runnerops-operator.toml" "$tmp_home/escaped-home/.codex/agents/runnerops-operator.toml" "$fixture_root/agents/runnerops-operator/AGENT.md" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+# This is only the renderer's single-line basic-string subset, not a TOML parser.
+# Check TOML-compatible escapes before decoding the shared JSON string syntax.
+# All modules and APIs used here are available in Python 3.8.
+basic_string = re.compile(
+    r'"(?:[^"\\\x00-\x1f\x7f]|\\["\\bfnrt]|'
+    r'\\u(?:[0-9a-cA-Ce-fE-F][0-9a-fA-F]{3}|[dD][0-7][0-9a-fA-F]{2}))*"'
+)
+
+
+def decode_string(value):
+    assert basic_string.fullmatch(value), value
+    return json.loads(value)
+
+
+def read_projection(path):
+    data = {}
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        key, separator, value = line.partition(' = ')
+        assert separator and key not in data, line
+        data[key] = decode_string(value)
+    assert set(data) == {'name', 'description', 'developer_instructions'}, data
+    return data
+
+
+for invalid in ('"bad\\/escape"', '"bad\\x01"', '"bad\\uD800"', '"bad\\uD83D\\uDE00"', '"raw\tcontrol"', '"raw\x7fcontrol"', '"unescaped"quote"'):
+    try:
+        decode_string(invalid)
+    except (AssertionError, ValueError):
+        pass
+    else:
+        raise AssertionError('Accepted invalid basic string: ' + repr(invalid))
+
+data = read_projection(sys.argv[1])
 assert data['name'] == 'runnerops-operator', data
 assert 'RunnerOps' in data['description'], data['description']
 body = data['developer_instructions']
@@ -174,7 +240,19 @@ assert 'runnerctl' in body, body
 assert 'runnerops-manage-runners' in body, body
 assert 'multi-repo' in body.lower() or 'multi repository' in body.lower(), body
 assert 'planner' in body.lower() and 'controller' in body.lower(), body
+assert 'Repository iteration is an agent-side orchestration pattern, not a RunnerOps core runtime feature.' in body
+assert 'Never replace planner/controller decisions with ad-hoc heuristics.' in body
+
+escaped = read_projection(sys.argv[2])
+source = Path(sys.argv[3]).read_text(encoding='utf-8')
+expected_body = re.match(r'^---\n.*?\n---\n(.*)$', source, re.S).group(1).strip()
+assert escaped['name'] == data['name']
+assert escaped['description'] == data['description']
+assert escaped['developer_instructions'] == expected_body
+for escape in ('\\"', '\\\\', '\\t', '\\n', '\\b', '\\f', '\\u0001', '\\u00e7'):
+    assert escape in Path(sys.argv[2]).read_text(encoding='utf-8'), escape
 PY
+pass "Projeção Codex e escapes validados com stdlib compatível com Python 3.8"
 
 for tool in copilot claude agents; do
   case "$tool" in
@@ -186,7 +264,7 @@ for tool in copilot claude agents; do
   grep -Eq '^description: .*RunnerOps.*' "$installed_path" || fail "projeção de $tool deve conter description canônica"
 done
 
-[[ "$(find "$tmp_home" -type f \( -name 'runnerops-operator.toml' -o -name 'runnerops-operator.agent.md' -o -name 'runnerops-operator.md' \) | wc -l)" -eq 4 ]] || fail "installer deve manter uma projeção ativa por provider suportado"
+[[ "$(find "$tmp_home/.codex" "$tmp_home/.copilot" "$tmp_home/.claude" "$tmp_home/.agents" -type f \( -name 'runnerops-operator.toml' -o -name 'runnerops-operator.agent.md' -o -name 'runnerops-operator.md' \) | wc -l)" -eq 4 ]] || fail "installer deve manter uma projeção ativa por provider suportado"
 
 skills_list="$("$ROOT/scripts/setup/install-agent-skills.sh" --list)"
 for skill in runnerops-ci-performance runnerops-manage-runners runnerops-pr-validation; do

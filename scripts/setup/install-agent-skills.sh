@@ -299,10 +299,11 @@ valid_selected_skill() {
   local candidate="$1"
 
   case "$candidate" in
-    "") return 0 ;;
-    runnerops-operator|runnerops-ci-performance|runnerops-manage-runners|runnerops-pr-validation) return 0 ;;
-    *) die "skill/agent invalido: $candidate" ;;
+    ""|runnerops-operator) return 0 ;;
+    */*) die "skill/agent invalido: $candidate" ;;
   esac
+
+  [[ -f "$SKILLS_DIR/$candidate/SKILL.md" ]] || die "skill/agent invalido: $candidate"
 }
 
 install_for_tool() {

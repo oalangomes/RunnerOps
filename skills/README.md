@@ -59,6 +59,8 @@ A instalação global é separada do install por repositório: o operador canôn
 
 Instale somente uma skill:
 
+O installer descobre automaticamente cada `skills/<name>/SKILL.md`: o mesmo nome listado por `--list` é aceito por `--skill <name>`, sem cadastro manual. Targets inexistentes falham antes de qualquer escrita. `runnerops-operator` é a exceção explícita de Agent, não uma Skill.
+
 ```bash
 ./scripts/setup/install-agent-skills.sh \
   --tool claude \

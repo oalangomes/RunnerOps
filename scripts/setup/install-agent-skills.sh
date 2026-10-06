@@ -295,11 +295,27 @@ install_one_skill() {
   echo "[OK] $tool: $skill -> $target"
 }
 
+valid_selected_skill() {
+  local candidate="$1"
+
+  case "$candidate" in
+    "") return 0 ;;
+    runnerops-operator|runnerops-ci-performance|runnerops-manage-runners|runnerops-pr-validation) return 0 ;;
+    *) die "skill/agent invalido: $candidate" ;;
+  esac
+}
+
 install_for_tool() {
   local tool="$1"
   local destination source_dir installed=0
 
+  valid_selected_skill "$SELECTED_SKILL"
   destination="$(destination_for "$tool" "$SCOPE")"
+
+  if [[ -n "$SELECTED_SKILL" && "$SELECTED_SKILL" == "runnerops-operator" ]]; then
+    install_operator_projection "$tool" "$SCOPE"
+    return 0
+  fi
 
   for source_dir in "$SKILLS_DIR"/*; do
     [[ -d "$source_dir" && -f "$source_dir/SKILL.md" ]] || continue
@@ -314,10 +330,8 @@ install_for_tool() {
   done
 
   if [[ -n "$SELECTED_SKILL" ]]; then
-    if [[ "$SELECTED_SKILL" == "runnerops-operator" ]]; then
-      install_operator_projection "$tool" "$SCOPE"
-      return 0
-    fi
+    [[ "$installed" -gt 0 ]] || die "nenhuma skill encontrada para instalar: $SELECTED_SKILL"
+    return 0
   fi
 
   install_operator_projection "$tool" "$SCOPE"

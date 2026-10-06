@@ -35,13 +35,13 @@ require_absent_executable_example() {
 [[ -f "$PRE" ]] || fail "skill pre-PR ausente"
 [[ -f "$MANAGE" ]] || fail "skill de gestão ausente"
 [[ -f "$PERF" ]] || fail "skill de performance ausente"
-[[ -f "$OPERATOR" ]] || fail "skill de operador ausente"
+[[ -f "$OPERATOR" ]] || fail "agent runnerops-operator ausente"
 [[ -f "$AGENTS" ]] || fail "AGENTS.md ausente"
 [[ -f "$COPILOT" ]] || fail "copilot instructions ausente"
 
 require_text "$PRE" "name: runnerops-pr-validation" "skill pre-PR deve usar nome RunnerOps canônico"
 require_text "$MANAGE" "name: runnerops-manage-runners" "skill de gestão deve usar nome RunnerOps canônico"
-require_text "$OPERATOR" "name: runnerops-operator" "skill de operador deve usar nome RunnerOps canônico"
+require_text "$OPERATOR" "name: runnerops-operator" "agent deve usar nome RunnerOps canônico"
 
 require_text "$PRE" "runnerctl overview ." "skill pre-PR deve inspecionar overview sem mutar"
 require_text "$PRE" "runnerctl capacity . --json" "skill pre-PR deve inspecionar capacidade"
@@ -89,12 +89,12 @@ require_text "$PERF" "runnerctl capacity . --json" "skill de performance deve us
 require_text "$PERF" "runnerctl autoscale status . --json" "skill de performance deve ser autoscale-aware"
 require_text "$PERF" 'Queue pressure does not imply “start all runners”.' "skill de performance não deve recomendar broad start por fila"
 require_text "$PERF" 'CREATE_EPHEMERAL' "skill de performance deve distinguir primitive ephemeral de autoscale automático"
-require_text "$OPERATOR" 'runnerops-operator' "skill de operador deve definir a identidade canônica do agent"
-require_text "$OPERATOR" 'runnerctl autoscale enable owner/repo' "skill de operador deve preservar o contrato repository-scoped do core"
-require_text "$OPERATOR" 'enable-all' "skill de operador deve rejeitar a abstração multi-repo no core"
-require_text "$OPERATOR" 'runnerops-manage-runners' "skill de operador deve compor a skill de gestão"
-require_text "$OPERATOR" 'runnerops-pr-validation' "skill de operador deve compor a skill de PR validation"
-require_text "$OPERATOR" 'runnerops-ci-performance' "skill de operador deve compor a skill de performance"
+require_text "$OPERATOR" 'runnerops-operator' "agent deve definir a identidade canônica do operador"
+require_text "$OPERATOR" 'runnerctl autoscale enable owner/repo' "agent deve preservar o contrato repository-scoped do core"
+require_text "$OPERATOR" 'enable-all' "agent deve rejeitar a abstração multi-repo no core"
+require_text "$OPERATOR" 'runnerops-manage-runners' "agent deve compor a skill de gestão"
+require_text "$OPERATOR" 'runnerops-pr-validation' "agent deve compor a skill de PR validation"
+require_text "$OPERATOR" 'runnerops-ci-performance' "agent deve compor a skill de performance"
 require_text "$PRE" 'opt-in `CREATE_EPHEMERAL`' "skill pre-PR deve conhecer boundary ephemeral governada"
 
 require_text "$AGENTS" "Sincronização obrigatória das Agent Skills" "AGENTS deve exigir sincronização das skills"
@@ -114,9 +114,32 @@ for skill in "$PRE" "$MANAGE" "$PERF" "$OPERATOR"; do
   require_absent_executable_example "$skill" 'systemctl' "skill não pode executar systemctl diretamente"
 done
 
+# --skill selects exactly one target; each scenario must run in a fresh HOME to avoid cross-contamination.
+skill_home="$(mktemp -d)"
+operator_home="$(mktemp -d)"
+plain_home="$(mktemp -d)"
+invalid_home="$(mktemp -d)"
 tmp_home="$(mktemp -d)"
-trap 'rm -rf "$tmp_home"' EXIT
-mkdir -p "$tmp_home/.agents/skills/manage-local-github-runners"
+trap 'rm -rf "$skill_home" "$operator_home" "$plain_home" "$invalid_home" "$tmp_home"' EXIT
+mkdir -p "$skill_home/.codex/agents" "$operator_home/.codex/agents" "$plain_home/.codex/agents" "$invalid_home/.codex/agents" "$tmp_home/.agents/skills/manage-local-github-runners"
+
+HOME="$skill_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex --skill runnerops-manage-runners >/dev/null
+[[ -d "$skill_home/.codex/skills/runnerops-manage-runners" ]] || fail "--skill runnerops-manage-runners deve instalar somente a skill selecionada"
+[[ ! -e "$skill_home/.codex/agents/runnerops-operator.toml" ]] || fail "--skill runnerops-manage-runners não deve instalar o operator"
+
+HOME="$operator_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex --skill runnerops-operator >/dev/null
+[[ ! -d "$operator_home/.codex/skills/runnerops-manage-runners" ]] || fail "--skill runnerops-operator deve instalar apenas o operador"
+[[ -f "$operator_home/.codex/agents/runnerops-operator.toml" ]] || fail "--skill runnerops-operator deve instalar a projeção do operator"
+
+HOME="$plain_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex >/dev/null
+[[ -d "$plain_home/.codex/skills/runnerops-manage-runners" ]] || fail "instalação sem --skill deve reinstalar skills e operador"
+[[ -f "$plain_home/.codex/agents/runnerops-operator.toml" ]] || fail "instalação sem --skill deve incluir o operador"
+
+if HOME="$invalid_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool codex --skill nome-inexistente >/tmp/runnerops-invalid.out 2>&1; then
+  fail "--skill nome-inexistente deve falhar"
+fi
+[[ ! -e "$invalid_home/.codex/agents/runnerops-operator.toml" ]] || fail "--skill nome-inexistente não deve causar side effect no operator"
+
 printf '%s\n' legacy > "$tmp_home/.agents/skills/manage-local-github-runners/marker"
 HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool agents --skill runnerops-manage-runners >/dev/null
 [[ ! -e "$tmp_home/.agents/skills/manage-local-github-runners" ]] || fail "installer deve remover nome legado correspondente"

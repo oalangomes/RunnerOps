@@ -48,6 +48,20 @@ runnerctl autoscale run-once owner/repo
 
 When the work spans multiple repositories, compose the same repository-scoped contract per repo instead of inventing `enable-all`, `fleet apply`, `MultiRepoAutoscaleController`, or equivalent abstractions.
 
+Repository iteration is an agent-side orchestration pattern, not a RunnerOps core runtime feature. Preserve independent outcomes:
+
+```text
+repo A -> success
+repo B -> inconclusive
+repo C -> success
+```
+
+The aggregate summary must list each repository result explicitly and never collapse the set into a single success state when any repository remains inconclusive or failed.
+
+## Capability grounding
+
+This operator is the orchestrator; it does not copy or maintain a second capability inventory. When the canonical RunnerOps capability matrix is available, ground capability and maturity decisions against that source of truth. Keep this AGENT.md as an orchestration persona contract and not a duplicate capability manifest.
+
 ## Skill selection
 
 Compose the existing specialized skills rather than copying their procedures into a new procedural layer.

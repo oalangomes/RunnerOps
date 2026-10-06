@@ -40,7 +40,7 @@ O autoscale contínuo continua sendo determinístico e governado por RunnerOps; 
 
 ## Instalação
 
-Instale as skills nos principais destinos de usuário (Codex, Copilot e Claude):
+Instale as skills canônicas e a projeção global do operador nos destinos de usuário suportados (Codex, Copilot, Claude e agentes genéricos):
 
 ```bash
 runnerctl skills install all
@@ -55,12 +55,20 @@ runnerctl skills install claude
 runnerctl skills install agents
 ```
 
+A instalação global é separada do install por repositório: o operador canônico continua em `agents/runnerops-operator/AGENT.md`, enquanto cada provider recebe apenas uma projeção fina compatível do mesmo conteúdo.
+
 Instale somente uma skill:
 
 ```bash
 ./scripts/setup/install-agent-skills.sh \
   --tool claude \
   --skill runnerops-manage-runners
+```
+
+Instale o operador canônico em um provider específico:
+
+```bash
+./scripts/setup/install-agent-skills.sh --tool codex --skill runnerops-operator
 ```
 
 Visualize o que seria feito sem gravar:

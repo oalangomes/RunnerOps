@@ -68,6 +68,10 @@ require_text "$MANAGE" 'not the default' "skill de gestão deve tratar ensure co
 require_text "$MANAGE" "runnerctl ephemeral create ." "skill de gestão deve conhecer lifecycle ephemeral explícito"
 require_text "$MANAGE" 'Only the planner selects `CREATE_EPHEMERAL`' "skill de gestão deve preservar autoridade do planner"
 require_text "$MANAGE" 'RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED=true' "skill de gestão deve documentar opt-in ephemeral"
+require_text "$MANAGE" "runnerctl platform-authorize" "skill de gestão deve exigir gate humano para autorizar runtime"
+require_text "$MANAGE" "runnerctl init" "skill de gestão deve documentar bootstrap do host"
+require_text "$MANAGE" "runnerctl platform-doctor" "skill de gestão deve validar doctor do host"
+require_text "$MANAGE" "gh auth status" "skill de gestão deve validar auth do GitHub"
 require_text "$MANAGE" "After every explicit start or restart, verify the result:" "skill de gestão deve validar start/restart"
 require_text "$MANAGE" "runnerctl status <runner>" "skill de gestão deve verificar status após lifecycle"
 require_text "$MANAGE" "runnerctl health <runner>" "skill de gestão deve verificar health após lifecycle"
@@ -118,11 +122,27 @@ HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool agents --s
 [[ ! -e "$tmp_home/.agents/skills/manage-local-github-runners" ]] || fail "installer deve remover nome legado correspondente"
 [[ -f "$tmp_home/.agents/skills/runnerops-manage-runners/SKILL.md" ]] || fail "installer deve instalar nome canônico novo"
 
+for tool in codex copilot claude agents; do
+  case "$tool" in
+    codex) installed_path="$tmp_home/.codex/agents/runnerops-operator/AGENT.md" ;;
+    copilot) installed_path="$tmp_home/.copilot/agents/runnerops-operator/AGENT.md" ;;
+    claude) installed_path="$tmp_home/.claude/agents/runnerops-operator/AGENT.md" ;;
+    agents) installed_path="$tmp_home/.agents/agents/runnerops-operator/AGENT.md" ;;
+  esac
+
+  HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool "$tool" >/dev/null
+  [[ -f "$installed_path" ]] || fail "installer deve projetar o operador global em $tool"
+  [[ "$(find "$(dirname "$installed_path")" -type f -name 'AGENT.md' | wc -l)" -eq 1 ]] || fail "installer não deve duplicar a projeção do operador dentro do provider $tool"
+  HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool "$tool" >/dev/null
+  [[ -f "$installed_path" ]] || fail "installer deve ser idempotente para $tool"
+done
+
+[[ "$(find "$tmp_home" -type f -path '*/runnerops-operator/AGENT.md' | wc -l)" -eq 4 ]] || fail "installer deve manter uma projeção do operador por provider suportado"
+
 skills_list="$("$ROOT/scripts/setup/install-agent-skills.sh" --list)"
 for skill in runnerops-ci-performance runnerops-manage-runners runnerops-pr-validation; do
   grep -Fxq "$skill" <<< "$skills_list" || fail "installer deve listar $skill"
 done
-
 
 if grep -Eq '^(start-project-runners-before-pr|manage-local-github-runners|analyze-ci-workflow-performance)$' <<< "$skills_list"; then
   fail "installer não deve listar nomes legados"

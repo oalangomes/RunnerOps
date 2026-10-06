@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNEROPS_PLATFORM_HOME="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SKILLS_DIR="$RUNNEROPS_PLATFORM_HOME/skills"
+OPERATOR_FILE="$RUNNEROPS_PLATFORM_HOME/agents/runnerops-operator/AGENT.md"
 
 TOOL="all"
 SCOPE="user"
@@ -57,6 +58,52 @@ list_skills() {
     [[ -d "$dir" && -f "$dir/SKILL.md" ]] || continue
     basename "$dir"
   done
+}
+
+provider_agent_dir() {
+  local tool="$1" scope="$2"
+
+  if [[ "$scope" == "user" ]]; then
+    case "$tool" in
+      codex) printf '%s\n' "$HOME/.codex/agents" ;;
+      copilot) printf '%s\n' "$HOME/.copilot/agents" ;;
+      claude) printf '%s\n' "$HOME/.claude/agents" ;;
+      agents) printf '%s\n' "$HOME/.agents/agents" ;;
+      *) die "tool invalida: $tool" ;;
+    esac
+  else
+    case "$tool" in
+      codex) printf '%s\n' "$PROJECT_DIR/.codex/agents" ;;
+      copilot) printf '%s\n' "$PROJECT_DIR/.github/agents" ;;
+      claude) printf '%s\n' "$PROJECT_DIR/.claude/agents" ;;
+      agents) printf '%s\n' "$PROJECT_DIR/.agents/agents" ;;
+      *) die "tool invalida: $tool" ;;
+    esac
+  fi
+}
+
+projected_operator_path() {
+  local tool="$1" scope="$2"
+  local base
+  base="$(provider_agent_dir "$tool" "$scope")"
+  printf '%s\n' "$base/runnerops-operator/AGENT.md"
+}
+
+install_operator_projection() {
+  local tool="$1" scope="$2"
+  local target_dir target_file
+
+  target_dir="$(dirname "$(projected_operator_path "$tool" "$scope")")"
+  target_file="$(projected_operator_path "$tool" "$scope")"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY] $tool: operator -> $target_file"
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+  cp -a "$OPERATOR_FILE" "$target_file"
+  echo "[OK] $tool: operator -> $target_file"
 }
 
 validate_skill() {
@@ -164,6 +211,14 @@ install_for_tool() {
     installed=$((installed + 1))
   done
 
+  if [[ -n "$SELECTED_SKILL" ]]; then
+    if [[ "$SELECTED_SKILL" == "runnerops-operator" ]]; then
+      install_operator_projection "$tool" "$SCOPE"
+      return 0
+    fi
+  fi
+
+  install_operator_projection "$tool" "$SCOPE"
   [[ "$installed" -gt 0 ]] || die "nenhuma skill encontrada para instalar"
 }
 

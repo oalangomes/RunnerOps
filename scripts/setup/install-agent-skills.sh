@@ -86,7 +86,86 @@ projected_operator_path() {
   local tool="$1" scope="$2"
   local base
   base="$(provider_agent_dir "$tool" "$scope")"
-  printf '%s\n' "$base/runnerops-operator/AGENT.md"
+
+  case "$tool" in
+    codex)
+      printf '%s\n' "$base/runnerops-operator.toml"
+      ;;
+    copilot)
+      printf '%s\n' "$base/runnerops-operator.agent.md"
+      ;;
+    claude)
+      printf '%s\n' "$base/runnerops-operator.md"
+      ;;
+    agents)
+      printf '%s\n' "$base/runnerops-operator.md"
+      ;;
+    *) die "tool invalida: $tool" ;;
+  esac
+}
+
+render_markdown_projection() {
+  local source_file="$1" target_file="$2"
+  python3 - "$source_file" "$target_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+text = source.read_text(encoding='utf-8')
+header = {}
+body = text
+match = re.match(r'^---\n(.*?)\n---\n(.*)$', text, re.S)
+if match:
+    frontmatter, body = match.groups()
+    for line in frontmatter.splitlines():
+        if ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        header[key.strip()] = value.strip().strip('"\'')
+    body = body.strip()
+else:
+    body = text.strip()
+name = header.get('name', 'runnerops-operator')
+description = header.get('description', 'RunnerOps orchestration persona')
+frontmatter_lines = ['---', f'name: {name}', f'description: {description}', '---', '']
+content = '\n'.join(frontmatter_lines) + body + '\n'
+target.write_text(content, encoding='utf-8')
+PY
+}
+
+render_codex_projection() {
+  local source_file="$1" target_file="$2"
+  python3 - "$source_file" "$target_file" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+text = source.read_text(encoding='utf-8')
+header = {}
+body = text
+match = re.match(r'^---\n(.*?)\n---\n(.*)$', text, re.S)
+if match:
+    frontmatter, body = match.groups()
+    for line in frontmatter.splitlines():
+        if ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        header[key.strip()] = value.strip().strip('"\'')
+    body = body.strip()
+else:
+    body = text.strip()
+name = header.get('name', 'runnerops-operator')
+description = header.get('description', 'RunnerOps orchestration persona')
+with target.open('w', encoding='utf-8') as fh:
+    fh.write(f'name = {json.dumps(name)}\n')
+    fh.write(f'description = {json.dumps(description)}\n')
+    fh.write(f'developer_instructions = {json.dumps(body)}\n')
+PY
 }
 
 install_operator_projection() {
@@ -102,7 +181,30 @@ install_operator_projection() {
   fi
 
   mkdir -p "$target_dir"
-  cp -a "$OPERATOR_FILE" "$target_file"
+
+  case "$tool" in
+    codex)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator/AGENT.md"
+      render_codex_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+    copilot)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator.md"
+      render_markdown_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+    claude)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator.agent.md"
+      render_markdown_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+    agents)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator.toml"
+      render_markdown_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+  esac
+
   echo "[OK] $tool: operator -> $target_file"
 }
 

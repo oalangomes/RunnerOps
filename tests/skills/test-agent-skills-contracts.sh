@@ -124,20 +124,46 @@ HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool agents --s
 
 for tool in codex copilot claude agents; do
   case "$tool" in
-    codex) installed_path="$tmp_home/.codex/agents/runnerops-operator/AGENT.md" ;;
-    copilot) installed_path="$tmp_home/.copilot/agents/runnerops-operator/AGENT.md" ;;
-    claude) installed_path="$tmp_home/.claude/agents/runnerops-operator/AGENT.md" ;;
-    agents) installed_path="$tmp_home/.agents/agents/runnerops-operator/AGENT.md" ;;
+    codex) installed_path="$tmp_home/.codex/agents/runnerops-operator.toml" ;;
+    copilot) installed_path="$tmp_home/.copilot/agents/runnerops-operator.agent.md" ;;
+    claude) installed_path="$tmp_home/.claude/agents/runnerops-operator.md" ;;
+    agents) installed_path="$tmp_home/.agents/agents/runnerops-operator.md" ;;
   esac
 
   HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool "$tool" >/dev/null
   [[ -f "$installed_path" ]] || fail "installer deve projetar o operador global em $tool"
-  [[ "$(find "$(dirname "$installed_path")" -type f -name 'AGENT.md' | wc -l)" -eq 1 ]] || fail "installer não deve duplicar a projeção do operador dentro do provider $tool"
+  [[ ! -e "$tmp_home/.codex/agents/runnerops-operator/AGENT.md" ]] || fail "installer não deve manter projeção legacy do operador no Codex"
+  [[ ! -e "$tmp_home/.copilot/agents/runnerops-operator/AGENT.md" ]] || fail "installer não deve manter projeção legacy do operador no Copilot"
+  [[ ! -e "$tmp_home/.claude/agents/runnerops-operator/AGENT.md" ]] || fail "installer não deve manter projeção legacy do operador no Claude"
   HOME="$tmp_home" "$ROOT/scripts/setup/install-agent-skills.sh" --tool "$tool" >/dev/null
   [[ -f "$installed_path" ]] || fail "installer deve ser idempotente para $tool"
 done
 
-[[ "$(find "$tmp_home" -type f -path '*/runnerops-operator/AGENT.md' | wc -l)" -eq 4 ]] || fail "installer deve manter uma projeção do operador por provider suportado"
+python3 - "$tmp_home/.codex/agents/runnerops-operator.toml" <<'PY'
+import sys, tomllib
+path = sys.argv[1]
+with open(path, 'rb') as fh:
+    data = tomllib.load(fh)
+assert data['name'] == 'runnerops-operator', data
+assert 'RunnerOps' in data['description'], data['description']
+body = data['developer_instructions']
+assert 'runnerctl' in body, body
+assert 'runnerops-manage-runners' in body, body
+assert 'multi-repo' in body.lower() or 'multi repository' in body.lower(), body
+assert 'planner' in body.lower() and 'controller' in body.lower(), body
+PY
+
+for tool in copilot claude agents; do
+  case "$tool" in
+    copilot) installed_path="$tmp_home/.copilot/agents/runnerops-operator.agent.md" ;;
+    claude) installed_path="$tmp_home/.claude/agents/runnerops-operator.md" ;;
+    agents) installed_path="$tmp_home/.agents/agents/runnerops-operator.md" ;;
+  esac
+  grep -Eq '^name: runnerops-operator$' "$installed_path" || fail "projeção de $tool deve conter name canônico"
+  grep -Eq '^description: .*RunnerOps.*' "$installed_path" || fail "projeção de $tool deve conter description canônica"
+done
+
+[[ "$(find "$tmp_home" -type f \( -name 'runnerops-operator.toml' -o -name 'runnerops-operator.agent.md' -o -name 'runnerops-operator.md' \) | wc -l)" -eq 4 ]] || fail "installer deve manter uma projeção ativa por provider suportado"
 
 skills_list="$("$ROOT/scripts/setup/install-agent-skills.sh" --list)"
 for skill in runnerops-ci-performance runnerops-manage-runners runnerops-pr-validation; do

@@ -17,6 +17,10 @@ decisions use their existing `updated_at` history timestamp, queue observations
 use `last_seen_queued_at`, and actions use their own `updated_at`. The report
 uses the inclusive `period.from` and exclusive `period.to` bounds for all three.
 Actions are included only for decisions returned within that window and limit.
+`CREATE_EPHEMERAL` appears as a distinct decision/action kind. Its action
+`target` is the exact ephemeral lifecycle action ID; use `runnerctl autoscale
+explain --decision <id> --json` for the current workload, terminality and cleanup
+projection linked by that ID.
 If the history limit is reached, `audit_history_truncated` explicitly marks
 the aggregates incomplete.
 

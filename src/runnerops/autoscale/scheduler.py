@@ -124,6 +124,7 @@ def _policy_environment(repository, interval):
     except (ImportError, PolicyError, AuditError):
         raise SchedulerError("INVALID_AUTOSCALE_POLICY") from None
     provision = policy["local_provision"]
+    ephemeral = policy["local_ephemeral"]
     template = provision["template"]
     cpu = policy["max_cpu_percent"]
     return {
@@ -155,6 +156,11 @@ def _policy_environment(repository, interval):
         "RUNNER_AUTOSCALE_LOCAL_PROVISION_NAME_PREFIX": template["name_prefix"] or "",
         "RUNNER_AUTOSCALE_LOCAL_PROVISION_RUNNER_VERSION": template["runner_version"],
         "RUNNER_AUTOSCALE_LOCAL_PROVISION_RUNNER_ARCH": template["runner_arch"],
+        "RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED": "true" if ephemeral["enabled"] else "false",
+        "RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_EPHEMERALS": str(ephemeral["max_active"]),
+        "RUNNER_AUTOSCALE_EPHEMERAL_SCALE_OUT_COOLDOWN_SECONDS": str(ephemeral["cooldown_seconds"]),
+        "RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_PROFILE": ephemeral["profile"] or "",
+        "RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_LABELS": ",".join(ephemeral["labels"]),
     }
 
 
@@ -186,6 +192,7 @@ def _environment():
         "ACTIONS_RUNNERS_ENV": os.environ.get("ACTIONS_RUNNERS_ENV", ""),
         "RUNNERS_CONFIG": os.environ.get("RUNNERS_CONFIG", ""),
         "RUNNER_DATA_ROOT": os.environ.get("RUNNER_DATA_ROOT", ""),
+        "RUNNER_EPHEMERAL_ROOT": os.environ.get("RUNNER_EPHEMERAL_ROOT", ""),
         "RUNNER_CACHE_ROOT": os.environ.get("RUNNER_CACHE_ROOT", ""),
         "RUNNER_STATE_ROOT": str(_state_root()),
         "RUNNER_BOOT_POLICY": os.environ.get("RUNNER_BOOT_POLICY", "on-demand"),

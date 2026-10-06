@@ -63,7 +63,8 @@ require_text "$MANAGE" "runnerctl capacity . --json" "skill de gestão deve insp
 require_text "$MANAGE" "runnerctl autoscale status . --json" "skill de gestão deve conhecer autoscale"
 require_text "$MANAGE" 'not the default' "skill de gestão deve tratar ensure como override e não padrão"
 require_text "$MANAGE" "runnerctl ephemeral create ." "skill de gestão deve conhecer lifecycle ephemeral explícito"
-require_text "$MANAGE" 'does not emit `CREATE_EPHEMERAL`' "skill de gestão não deve confundir ephemeral com autoscale automático"
+require_text "$MANAGE" 'Only the planner selects `CREATE_EPHEMERAL`' "skill de gestão deve preservar autoridade do planner"
+require_text "$MANAGE" 'RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED=true' "skill de gestão deve documentar opt-in ephemeral"
 require_text "$MANAGE" "After every explicit start or restart, verify the result:" "skill de gestão deve validar start/restart"
 require_text "$MANAGE" "runnerctl status <runner>" "skill de gestão deve verificar status após lifecycle"
 require_text "$MANAGE" "runnerctl health <runner>" "skill de gestão deve verificar health após lifecycle"
@@ -81,6 +82,7 @@ require_text "$PERF" "runnerctl capacity . --json" "skill de performance deve us
 require_text "$PERF" "runnerctl autoscale status . --json" "skill de performance deve ser autoscale-aware"
 require_text "$PERF" 'Queue pressure does not imply “start all runners”.' "skill de performance não deve recomendar broad start por fila"
 require_text "$PERF" 'CREATE_EPHEMERAL' "skill de performance deve distinguir primitive ephemeral de autoscale automático"
+require_text "$PRE" 'opt-in `CREATE_EPHEMERAL`' "skill pre-PR deve conhecer boundary ephemeral governada"
 
 require_text "$AGENTS" "Sincronização obrigatória das Agent Skills" "AGENTS deve exigir sincronização das skills"
 require_text "$AGENTS" 'Nenhuma mudança funcional está completa até que o impacto em `skills/` tenha sido revisado.' "AGENTS deve tratar skill review como gate funcional"

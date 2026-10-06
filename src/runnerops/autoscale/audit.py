@@ -8,6 +8,7 @@ import sys
 from datetime import timedelta
 
 from .contracts import AuditError, utcnow
+from .ephemeral import lifecycle_reference
 
 
 def duration(value):
@@ -28,6 +29,8 @@ def render(result):
                 f"  {decision['timestamp']} {decision['decision_id']} {decision['repository']}:"
                 f" {decision['decision']} reasons={','.join(decision['reason_codes'])}"
             )
+        for action in result.get("actions", []):
+            print(f"  Action {action['action_id']}: {action['kind']} target={action['target']} state={action['state']}")
         for observation in result["queue_observations"]:
             print(
                 f"  {observation['repository']} job={observation['job_id']} run={observation['run_id']}"
@@ -58,6 +61,8 @@ def render(result):
                 print(
                     f"    {event['timestamp']} {event['state']} diagnostic={json.dumps(event['diagnostic'])}"
                 )
+            if action.get("ephemeral_lifecycle"):
+                print(f"    Ephemeral lifecycle: {json.dumps(action['ephemeral_lifecycle'], sort_keys=True)}")
 
 
 def main():
@@ -82,9 +87,14 @@ def main():
                 since = (
                     (utcnow() - timedelta(seconds=args.since)).isoformat() if args.since else None
                 )
-                result = store.history(since)
+                result = store.history(since, include_actions=True)
             else:
                 result = store.explain(args.decision)
+        if args.command == "explain":
+            for action in result["actions"]:
+                reference = lifecycle_reference(action, repository=result["decision"]["repository"])
+                if reference is not None:
+                    action["ephemeral_lifecycle"] = reference
     except AuditError as exc:
         if args.json:
             print(

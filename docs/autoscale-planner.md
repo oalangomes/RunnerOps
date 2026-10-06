@@ -27,7 +27,7 @@ runnerctl autoscale plan owner/repo --json
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | deterministic `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `BURST_CLOUD`, `HOLD` or `BLOCKED` |
+| `0` | deterministic `WAIT`, `START_LOCAL`, `PROVISION_LOCAL`, `CREATE_EPHEMERAL`, `BURST_CLOUD`, `HOLD` or `BLOCKED` |
 | `2` | invalid CLI/policy |
 | `3` | required evidence unavailable, stale, contradictory or incomplete (`INCONCLUSIVE`) |
 
@@ -65,6 +65,23 @@ Local provisioning is a separate explicit policy fragment:
 When local provisioning is enabled, max pool/profile/group/labels/prefix must all be
 valid and explicit. The normalized fragment participates in the SHA-256 policy
 fingerprint.
+
+Local ephemeral capacity is a separate opt-in fragment:
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_ENABLED` | `false` | permits governed one-job local capacity |
+| `RUNNER_AUTOSCALE_MAX_ACTIVE_LOCAL_EPHEMERALS` | `1` | positive active lifecycle limit, including uncertain and terminal pending cleanup |
+| `RUNNER_AUTOSCALE_EPHEMERAL_SCALE_OUT_COOLDOWN_SECONDS` | `30` | positive bounded stabilization interval |
+| `RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_PROFILE` | unset | explicit runner profile |
+| `RUNNER_AUTOSCALE_LOCAL_EPHEMERAL_LABELS` | unset | offered labels, including `self-hosted` |
+
+The normalized fragment participates in the policy fingerprint. Enabling it
+does not enable cloud burst. Local action records are read as auxiliary capacity
+evidence without changing `CapacitySnapshot` v1. Requested, registering,
+registered and online actions cover queued demand; busy actions count against
+the limit but can justify another unit if queued demand remains. Inconclusive
+actions block another creation for a compatible scope.
 
 ## Queue time is observed, not inferred
 
@@ -160,16 +177,20 @@ matching healthy provisioned-idle runner exists?
   no
    ↓
 active capacity deficit > 0?
-  no  → local active target reached → burst policy
+  no  → local active target reached → ephemeral policy
   yes
    ↓
 local provisioning explicitly enabled?
-  no  → local path blocked → burst policy
+  no  → local path blocked → ephemeral policy
   yes
    ↓
 actual local pool below max + template matches qualified scope?
   yes → PROVISION_LOCAL exact deterministic slot
-  no  → local path blocked → burst policy
+  no  → local path blocked → ephemeral policy
+   ↓
+ephemeral enabled + compatible qualified scope + limit available?
+  yes → CREATE_EPHEMERAL one exact action ID
+  no  → burst policy, or HOLD / INCONCLUSIVE when evidence requires
    ↓
 burst disabled? → BLOCKED
 burst limit reached? → HOLD

@@ -10,7 +10,7 @@ RunnerOps is the product in this repository. `runnerctl` is the stable public in
 - Do not replace planner/controller decisions with LLM heuristics.
 - Prefer governed autoscale or one exact runner over broad group/fleet activation.
 - Treat `runnerctl ensure .` as an explicit repository-wide activation override, not the default capacity-management path.
-- Treat the one-job ephemeral lifecycle according to the capability actually shipped; do not describe an explicit primitive as automatic ephemeral autoscaling before the planner/controller supports it.
+- Treat direct `runnerctl ephemeral create` as an explicit primitive. Governed automatic `CREATE_EPHEMERAL` requires opt-in policy and remains a deterministic planner/controller decision, never an LLM choice.
 - Never expose registration tokens, machine-local registry contents, credentials, personal hostnames, or maintainer-specific paths in committed examples.
 
 ## Mandatory Agent Skills synchronization

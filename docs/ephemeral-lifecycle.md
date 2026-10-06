@@ -1,5 +1,12 @@
 # Local ephemeral one-job lifecycle
 
+The deterministic autoscale planner can now choose opt-in `CREATE_EPHEMERAL`.
+Its controller passes one exact persisted action ID into this existing lifecycle,
+then uses `reconcile` and `cleanup` on later ticks. Direct `runnerctl ephemeral
+create` remains an explicit operator primitive. An ephemeral runner does not
+mean an ephemeral host: the host remains persistent while registration, runtime
+and workdir are disposable.
+
 `runnerctl ephemeral` is an explicit control-plane primitive for one disposable
 GitHub Actions runner on a persistent Linux host. It is not an autoscaler and it
 does not provide container/VM isolation.

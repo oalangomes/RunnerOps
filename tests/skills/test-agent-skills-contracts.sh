@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PRE="$ROOT/skills/runnerops-pr-validation/SKILL.md"
 MANAGE="$ROOT/skills/runnerops-manage-runners/SKILL.md"
 PERF="$ROOT/skills/runnerops-ci-performance/SKILL.md"
+OPERATOR="$ROOT/agents/runnerops-operator/AGENT.md"
 AGENTS="$ROOT/AGENTS.md"
 COPILOT="$ROOT/.github/copilot-instructions.md"
 
@@ -34,11 +35,13 @@ require_absent_executable_example() {
 [[ -f "$PRE" ]] || fail "skill pre-PR ausente"
 [[ -f "$MANAGE" ]] || fail "skill de gestão ausente"
 [[ -f "$PERF" ]] || fail "skill de performance ausente"
+[[ -f "$OPERATOR" ]] || fail "skill de operador ausente"
 [[ -f "$AGENTS" ]] || fail "AGENTS.md ausente"
 [[ -f "$COPILOT" ]] || fail "copilot instructions ausente"
 
 require_text "$PRE" "name: runnerops-pr-validation" "skill pre-PR deve usar nome RunnerOps canônico"
 require_text "$MANAGE" "name: runnerops-manage-runners" "skill de gestão deve usar nome RunnerOps canônico"
+require_text "$OPERATOR" "name: runnerops-operator" "skill de operador deve usar nome RunnerOps canônico"
 
 require_text "$PRE" "runnerctl overview ." "skill pre-PR deve inspecionar overview sem mutar"
 require_text "$PRE" "runnerctl capacity . --json" "skill pre-PR deve inspecionar capacidade"
@@ -82,6 +85,12 @@ require_text "$PERF" "runnerctl capacity . --json" "skill de performance deve us
 require_text "$PERF" "runnerctl autoscale status . --json" "skill de performance deve ser autoscale-aware"
 require_text "$PERF" 'Queue pressure does not imply “start all runners”.' "skill de performance não deve recomendar broad start por fila"
 require_text "$PERF" 'CREATE_EPHEMERAL' "skill de performance deve distinguir primitive ephemeral de autoscale automático"
+require_text "$OPERATOR" 'runnerops-operator' "skill de operador deve definir a identidade canônica do agent"
+require_text "$OPERATOR" 'runnerctl autoscale enable owner/repo' "skill de operador deve preservar o contrato repository-scoped do core"
+require_text "$OPERATOR" 'enable-all' "skill de operador deve rejeitar a abstração multi-repo no core"
+require_text "$OPERATOR" 'runnerops-manage-runners' "skill de operador deve compor a skill de gestão"
+require_text "$OPERATOR" 'runnerops-pr-validation' "skill de operador deve compor a skill de PR validation"
+require_text "$OPERATOR" 'runnerops-ci-performance' "skill de operador deve compor a skill de performance"
 require_text "$PRE" 'opt-in `CREATE_EPHEMERAL`' "skill pre-PR deve conhecer boundary ephemeral governada"
 
 require_text "$AGENTS" "Sincronização obrigatória das Agent Skills" "AGENTS deve exigir sincronização das skills"
@@ -93,7 +102,7 @@ require_text "$COPILOT" "Agent Skills impact: none" "Copilot deve exigir justifi
 
 # Executable examples must stay on the public boundary. Prose may explain that
 # internal scripts and systemctl must not be called directly.
-for skill in "$PRE" "$MANAGE" "$PERF"; do
+for skill in "$PRE" "$MANAGE" "$PERF" "$OPERATOR"; do
   require_text "$skill" 'Use `runnerctl` as the public interface' "skills devem apontar runnerctl como interface pública"
   require_absent_executable_example "$skill" '(\./)?scripts/runner/lifecycle\.sh' "skill não pode executar scripts/runner/lifecycle.sh"
   require_absent_executable_example "$skill" '(\./)?scripts/runner/services\.sh' "skill não pode executar scripts/runner/services.sh"
@@ -113,6 +122,7 @@ skills_list="$("$ROOT/scripts/setup/install-agent-skills.sh" --list)"
 for skill in runnerops-ci-performance runnerops-manage-runners runnerops-pr-validation; do
   grep -Fxq "$skill" <<< "$skills_list" || fail "installer deve listar $skill"
 done
+
 
 if grep -Eq '^(start-project-runners-before-pr|manage-local-github-runners|analyze-ci-workflow-performance)$' <<< "$skills_list"; then
   fail "installer não deve listar nomes legados"

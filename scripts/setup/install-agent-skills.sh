@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNNEROPS_PLATFORM_HOME="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SKILLS_DIR="$RUNNEROPS_PLATFORM_HOME/skills"
+OPERATOR_FILE="$RUNNEROPS_PLATFORM_HOME/agents/runnerops-operator/AGENT.md"
 
 TOOL="all"
 SCOPE="user"
@@ -57,6 +58,154 @@ list_skills() {
     [[ -d "$dir" && -f "$dir/SKILL.md" ]] || continue
     basename "$dir"
   done
+}
+
+provider_agent_dir() {
+  local tool="$1" scope="$2"
+
+  if [[ "$scope" == "user" ]]; then
+    case "$tool" in
+      codex) printf '%s\n' "$HOME/.codex/agents" ;;
+      copilot) printf '%s\n' "$HOME/.copilot/agents" ;;
+      claude) printf '%s\n' "$HOME/.claude/agents" ;;
+      agents) printf '%s\n' "$HOME/.agents/agents" ;;
+      *) die "tool invalida: $tool" ;;
+    esac
+  else
+    case "$tool" in
+      codex) printf '%s\n' "$PROJECT_DIR/.codex/agents" ;;
+      copilot) printf '%s\n' "$PROJECT_DIR/.github/agents" ;;
+      claude) printf '%s\n' "$PROJECT_DIR/.claude/agents" ;;
+      agents) printf '%s\n' "$PROJECT_DIR/.agents/agents" ;;
+      *) die "tool invalida: $tool" ;;
+    esac
+  fi
+}
+
+projected_operator_path() {
+  local tool="$1" scope="$2"
+  local base
+  base="$(provider_agent_dir "$tool" "$scope")"
+
+  case "$tool" in
+    codex)
+      printf '%s\n' "$base/runnerops-operator.toml"
+      ;;
+    copilot)
+      printf '%s\n' "$base/runnerops-operator.agent.md"
+      ;;
+    claude)
+      printf '%s\n' "$base/runnerops-operator.md"
+      ;;
+    agents)
+      printf '%s\n' "$base/runnerops-operator.md"
+      ;;
+    *) die "tool invalida: $tool" ;;
+  esac
+}
+
+render_markdown_projection() {
+  local source_file="$1" target_file="$2"
+  python3 - "$source_file" "$target_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+text = source.read_text(encoding='utf-8')
+header = {}
+body = text
+match = re.match(r'^---\n(.*?)\n---\n(.*)$', text, re.S)
+if match:
+    frontmatter, body = match.groups()
+    for line in frontmatter.splitlines():
+        if ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        header[key.strip()] = value.strip().strip('"\'')
+    body = body.strip()
+else:
+    body = text.strip()
+name = header.get('name', 'runnerops-operator')
+description = header.get('description', 'RunnerOps orchestration persona')
+frontmatter_lines = ['---', f'name: {name}', f'description: {description}', '---', '']
+content = '\n'.join(frontmatter_lines) + body + '\n'
+target.write_text(content, encoding='utf-8')
+PY
+}
+
+render_codex_projection() {
+  local source_file="$1" target_file="$2"
+  python3 - "$source_file" "$target_file" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+text = source.read_text(encoding='utf-8')
+header = {}
+body = text
+match = re.match(r'^---\n(.*?)\n---\n(.*)$', text, re.S)
+if match:
+    frontmatter, body = match.groups()
+    for line in frontmatter.splitlines():
+        if ':' not in line:
+            continue
+        key, value = line.split(':', 1)
+        header[key.strip()] = value.strip().strip('"\'')
+    body = body.strip()
+else:
+    body = text.strip()
+name = header.get('name', 'runnerops-operator')
+description = header.get('description', 'RunnerOps orchestration persona')
+with target.open('w', encoding='utf-8') as fh:
+    fh.write(f'name = {json.dumps(name)}\n')
+    fh.write(f'description = {json.dumps(description)}\n')
+    fh.write(f'developer_instructions = {json.dumps(body)}\n')
+PY
+}
+
+install_operator_projection() {
+  local tool="$1" scope="$2"
+  local target_dir target_file
+
+  target_dir="$(dirname "$(projected_operator_path "$tool" "$scope")")"
+  target_file="$(projected_operator_path "$tool" "$scope")"
+
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY] $tool: operator -> $target_file"
+    return 0
+  fi
+
+  mkdir -p "$target_dir"
+
+  case "$tool" in
+    codex)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator/AGENT.md"
+      render_codex_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+    copilot)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator.md"
+      render_markdown_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+    claude)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator.agent.md"
+      render_markdown_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+    agents)
+      rm -rf "$target_dir/runnerops-operator"
+      rm -f "$target_dir/runnerops-operator.toml"
+      render_markdown_projection "$OPERATOR_FILE" "$target_file"
+      ;;
+  esac
+
+  echo "[OK] $tool: operator -> $target_file"
 }
 
 validate_skill() {
@@ -146,11 +295,28 @@ install_one_skill() {
   echo "[OK] $tool: $skill -> $target"
 }
 
+valid_selected_skill() {
+  local candidate="$1"
+
+  case "$candidate" in
+    ""|runnerops-operator) return 0 ;;
+    */*) die "skill/agent invalido: $candidate" ;;
+  esac
+
+  [[ -f "$SKILLS_DIR/$candidate/SKILL.md" ]] || die "skill/agent invalido: $candidate"
+}
+
 install_for_tool() {
   local tool="$1"
   local destination source_dir installed=0
 
+  valid_selected_skill "$SELECTED_SKILL"
   destination="$(destination_for "$tool" "$SCOPE")"
+
+  if [[ -n "$SELECTED_SKILL" && "$SELECTED_SKILL" == "runnerops-operator" ]]; then
+    install_operator_projection "$tool" "$SCOPE"
+    return 0
+  fi
 
   for source_dir in "$SKILLS_DIR"/*; do
     [[ -d "$source_dir" && -f "$source_dir/SKILL.md" ]] || continue
@@ -164,6 +330,12 @@ install_for_tool() {
     installed=$((installed + 1))
   done
 
+  if [[ -n "$SELECTED_SKILL" ]]; then
+    [[ "$installed" -gt 0 ]] || die "nenhuma skill encontrada para instalar: $SELECTED_SKILL"
+    return 0
+  fi
+
+  install_operator_projection "$tool" "$SCOPE"
   [[ "$installed" -gt 0 ]] || die "nenhuma skill encontrada para instalar"
 }
 

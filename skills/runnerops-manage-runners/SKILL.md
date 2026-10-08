@@ -11,14 +11,29 @@ Do not discover or call RunnerOps internal scripts under `scripts/` directly. Us
 
 Read-only GitHub CLI/API calls are allowed only when remote runner registration/status must be verified and RunnerOps reports the remote state as inconclusive. Never use them to bypass `runnerctl add` or manually obtain a registration token.
 
-## Platform check
+## Platform check and host bootstrap
+
+A new RunnerOps machine must be bootstrapped explicitly and safely before repository operations.
 
 ```bash
 command -v runnerctl
+runnerctl init
 runnerctl platform-doctor
 ```
 
-If `runnerctl` is missing, report that the platform CLI must be installed from the RunnerOps checkout with `./install.sh`.
+If `runnerctl` is missing, report that the platform CLI must be installed from the RunnerOps checkout with `./install.sh` and then re-run initialization.
+
+For a fresh host, confirm the local runtime configuration explicitly before mutating anything:
+
+```bash
+RUNNERS_CONFIG=~/.config/actions-runners/runners.conf
+RUNNER_DATA_ROOT=~/.local/share/actions-runners/runners
+RUNNER_CACHE_ROOT=~/.cache/actions-runners
+RUNNER_STATE_ROOT=~/.local/state/actions-runners
+RUNNER_BOOT_POLICY=on-demand
+```
+
+Treat this as configuration evidence, not a silent rewrite. Never edit policy silently and never assume a machine is ready just because the repo has been cloned.
 
 For runtime lifecycle, RunnerOps is intentionally non-interactive. If `platform-doctor` reports:
 
@@ -32,7 +47,20 @@ do **not** invoke `sudo runnerctl ...`, `sudo systemctl ...`, or attempt to obta
 runnerctl platform-authorize
 ```
 
-Once authorized, `ensure/start/stop/restart` may run without password prompts.
+This human gate is required before lifecycle operations that need systemd authority. Never automate `sudo`.
+
+After explicit authorization, validate access and repository readiness:
+
+```bash
+gh auth status
+gh repo view owner/repo --json nameWithOwner
+runnerctl overview .
+runnerctl capacity . --json
+runnerctl autoscale status . --json
+runnerctl autoscale plan . --json
+```
+
+If GitHub access is unavailable or the repository is not reachable, the host is not ready; do not proceed to broad activation. Never expose or paste registration tokens. If the user asks for host bootstrap, keep the config local and explicit rather than copying a machine-specific registry into the repository.
 
 ## Inventory and health
 

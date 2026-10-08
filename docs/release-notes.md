@@ -1,124 +1,163 @@
-## RunnerOps v0.5.0 — Operational Evidence & Review
+## RunnerOps v0.6.0 — Governed Ephemeral Capacity & Agent-Native Operations
 
-RunnerOps v0.5.0 adds a bounded operational evidence layer and a grounded, read-only AI review path without handing control-plane authority to a model.
+RunnerOps v0.6.0 turns the local ephemeral runner experiment from v0.5.0's next study into a governed capacity path, while also tightening the agent-facing operating model around the deterministic RunnerOps control plane.
 
-The new analysis flow is:
-
-```text
-runtime + GitHub evidence
-        ↓
-OperationalEvidence v1
-        ↓
-canonical safe serialization + digest
-        ↓
-Ollama or LiteLLM
-        ↓
-strict grounded validation
-        ↓
-OperationalReview v1
-```
-
-### OperationalEvidence v1
-
-`runnerctl report` turns the evidence RunnerOps already has into a bounded operational artifact:
-
-```bash
-runnerctl report . --since 24h
-runnerctl report . --since 24h --json
-```
-
-The report keeps current capacity, available autoscale/audit history, collector metadata and known evidence gaps separate.
-
-Historical information that RunnerOps does not persist is not fabricated. Missing capabilities, truncation and runtime collection problems remain explicit.
-
-### Evidence-grounded AI review
-
-`runnerctl review` analyzes OperationalEvidence without becoming part of runner lifecycle or autoscale control:
-
-```bash
-runnerctl review . --since 24h --provider ollama --model <model>
-runnerctl review --evidence evidence.json --provider ollama --model <model>
-runnerctl review . --since 24h --provider litellm --model <model> --allow-remote
-```
-
-The review contract includes:
-
-- explicit provider and model selection;
-- frozen-evidence replay;
-- canonical evidence hashing;
-- bounded findings and unknowns;
-- exact RFC 6901 JSON Pointer evidence references;
-- strict fail-closed validation;
-- explicit remote acknowledgement before evidence leaves the local boundary.
-
-RunnerOps owns the trusted metadata and rendering. Model output cannot invoke lifecycle, planner, controller, provisioning, shell/tools or audit-store writes.
-
-### Fresh evidence over unsafe cache reuse
-
-During the #105 collector work, RunnerOps experimented with persistent jobs-list reuse.
-
-Adversarial review found the assumption unsafe: unchanged workflow-run metadata does not prove that the jobs collection is unchanged. A stale empty jobs response could therefore suppress newly queued work.
-
-v0.5.0 keeps the safe performance improvements while restoring the stronger evidence contract:
-
-- fresh jobs requests for every discovered active workflow run;
-- process-local repository canonicalization cache only;
-- bounded parallel jobs requests;
-- one bounded retry;
-- GitHub-call and wall-time instrumentation;
-- scheduler headroom / overrun visibility.
-
-The persistent jobs cache is gone.
-
-### Repository architecture
-
-The repository has also been reorganized around explicit domains:
+The new local ephemeral autoscale path is:
 
 ```text
-runnerctl / install.sh        public boundary
-src/runnerops/                Python runtime
-scripts/                      internal shell implementation
-tests/                        subsystem contracts
-docs/                         architecture / operations
-skills/                       agent-facing operational contracts
+queue + capacity evidence
+        ↓
+deterministic planner
+        ↓
+CREATE_EPHEMERAL
+        ↓
+persist exact autoscale action
+        ↓
+exact ephemeral lifecycle
+        ↓
+REGISTERED → ONLINE → BUSY
+        ↓
+TERMINAL → CLEANUP_PENDING → CLEANED
+        ↓
+durable evidence
 ```
 
-The migration does not move user state or change runner registrations, autoscale semantics, CapacitySnapshot, OperationalEvidence or OperationalReview schemas.
+### One-job local ephemeral lifecycle
 
-The runtime now uses normal `runnerops.*` package modules, with `<platform>/src` preserved in `PYTHONPATH` even when machine configuration defines its own Python path.
+RunnerOps now exposes an explicit one-job lifecycle primitive:
+
+```bash
+runnerctl ephemeral create .
+runnerctl ephemeral status <action-id>
+runnerctl ephemeral reconcile <action-id>
+runnerctl ephemeral cleanup <action-id>
+```
+
+The lifecycle keeps desired, local and GitHub-observed state separate and preserves uncertainty instead of turning missing evidence into success.
+
+Key contracts include:
+
+- deterministic action-to-runner identity;
+- one disposable root per lifecycle;
+- no silent name auto-increment after collisions;
+- no blind second registration after an uncertain mutation;
+- explicit inconclusive registration/online/terminal states;
+- local process exit alone does not prove workload completion;
+- remote deregistration alone does not prove local cleanup;
+- cleanup requires terminal evidence, stays bounded and is idempotent;
+- persistent runner registrations and state remain outside the ephemeral cleanup boundary;
+- registration material is never persisted.
+
+### Governed `CREATE_EPHEMERAL`
+
+The deterministic autoscale planner/controller can now choose `CREATE_EPHEMERAL` when reusable persistent capacity cannot satisfy qualified demand and local ephemeral policy explicitly permits it.
+
+The path is opt-in and bounded by:
+
+- repository/capability label scope;
+- finite active ephemeral limits;
+- scale-out cooldown;
+- configured profile/labels;
+- existing host and autoscale safety evidence.
+
+RunnerOps persists the exact autoscale action → ephemeral lifecycle link and reconciles the same lifecycle through completion rather than creating another runner when state is uncertain.
+
+Persistent capacity remains preferred when it can safely satisfy demand.
 
 ### Real-host qualification
 
-The new surfaces were exercised beyond fixtures:
+The final implementation was exercised through two consecutive controlled real-host cycles on Linux/systemd.
 
-- OperationalReview was dogfooded with configured local Ollama using both frozen and live OperationalEvidence;
-- repository-layout qualification used the exact workflow checkout on a real self-hosted RunnerOps host;
-- read-only dogfood exercised runner inventory, capacity, autoscale status/plan and operational report without mutating the persistent runner pool.
+For both cycles RunnerOps observed:
 
-### Automated release cadence
+```text
+CREATE_EPHEMERAL
+→ exact registration
+→ ONLINE
+→ real GitHub Actions workload
+→ BUSY
+→ TERMINAL
+→ CLEANUP_PENDING
+→ CLEANED
+```
 
-Starting with this baseline, RunnerOps can publish a SemVer release for every merged pull request after master CI is green.
+Both jobs succeeded.
 
-The default is PATCH. A PR may opt into MINOR or MAJOR through an explicit release label, and the same three bump modes are available through manual workflow dispatch.
+Each lifecycle recorded one registration attempt, workload observation, proven terminality and successful cleanup. Both autoscale actions ended with `EPHEMERAL_CLEANED`.
 
-The generated release commit is validated again before its tag and GitHub Release are published, so release identity is never tagged before the exact commit passes CI.
+After the first lifecycle was fully cleaned, a distinct second ephemeral runner was created and completed the same path.
+
+No duplicate ephemeral runners/actions were produced, and the same five persistent runners remained healthy and on-demand idle after qualification.
+
+### Capacity-first Agent Skills
+
+RunnerOps Agent Skills now follow the current control-plane semantics instead of proactively waking broad repository capacity.
+
+The default operating pattern is:
+
+```text
+observe capacity
+→ inspect governed autoscale
+→ use one exact runner when evidence justifies it
+→ keep ensure . as an explicit broad override
+```
+
+Skills do not translate queue pressure into agent-selected `ephemeral create`, `start all` or other ad-hoc scaling actions.
+
+A repository-level synchronization rule now requires functional RunnerOps changes to review and update affected Agent Skills and contracts in the same delivery. GitHub Copilot repository instructions carry the same boundary so agent-facing behavior cannot silently drift behind the product.
+
+### RunnerOps Operator
+
+v0.6.0 also introduces the canonical global `runnerops-operator` persona.
+
+Its role is orchestration:
+
+```text
+user intent
+    ↓
+runnerops-operator
+    ↓
+RunnerOps Agent Skills
+    ↓
+runnerctl
+    ↓
+deterministic RunnerOps contracts
+```
+
+The operator can compose host and multi-repository workflows while keeping the RunnerOps runtime repository-scoped.
+
+This deliberately does not introduce a second fleet control plane, agent-owned scaling policy or LLM-selected runtime mutations.
+
+### Deterministic authority remains the boundary
+
+v0.5.0 introduced evidence-grounded AI review with Ollama/LiteLLM.
+
+v0.6.0 keeps the same architectural separation:
+
+```text
+LLM / agent
+    = analysis + orchestration
+
+RunnerOps evidence + policy + planner/controller
+    = runtime authority
+```
+
+Generative models may explain evidence and compose safe public interfaces, but scaling decisions and lifecycle postconditions remain deterministic and evidence-backed.
 
 ### Safety boundary
 
-v0.5.0 still keeps deterministic RunnerOps logic as the scaling authority.
+v0.6.0 does **not** add:
 
-AI review is an analyst over evidence, not a controller.
-
-The release does **not** add:
-
-- LLM-driven scaling or target selection;
-- cloud burst;
-- scale-in;
-- ephemeral runner lifecycle;
-- containers/VM orchestration;
+- LLM-defined scaling policy or target selection;
+- cloud burst execution;
+- generic scale-in;
+- multi-host scheduling;
+- container or VM orchestration;
+- automatic fleet-wide policy;
+- registration-token persistence;
 - persistent queue/job caching.
 
-Ephemeral runners are the next lifecycle study, tracked separately in #120.
+Cloud burst and broader fleet experiments remain separate work.
 
 **Full changelog:**  
-https://github.com/oalangomes/RunnerOps/compare/v0.4.0...v0.5.0
+https://github.com/oalangomes/RunnerOps/compare/v0.5.0...v0.6.0

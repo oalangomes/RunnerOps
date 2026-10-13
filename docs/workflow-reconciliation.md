@@ -6,6 +6,17 @@ policy evidence. Does not implement the separate policy-management issue #144.
     runnerctl workflow reconcile . --json
     runnerctl workflow reconcile . --policy-evidence /tmp/policy.json --repository example/api --json
 
+The preferred portable flow against *shipped public* RunnerOps contracts is:
+
+    runnerctl autoscale plan example/api --json > plan.json
+    runnerctl workflow reconcile . --policy-evidence plan.json --repository example/api --json
+
+An AutoscalePlan v1 contains public label scope and provisioning/ephemeral
+template labels. It does NOT prove template enablement or the current effective
+scheduler policy, so the result explicitly remains unknown unless another
+versioned policy evidence object confirms enablement. This avoids falsely
+concluding that a configured runner can already accept jobs.
+
 Without a policy snapshot, self-hosted jobs become
 POLICY_EVIDENCE_MISSING/unknown, rather than assuming current policy. A policy
 evidence file has schema_version=1, repository=owner/repo,

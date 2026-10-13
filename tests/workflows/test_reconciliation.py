@@ -56,6 +56,22 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(actual["status"], "inconclusive")
         self.assertEqual(actual["jobs"][0]["reason"], "NO_VERIFIED_PROVISIONING_PATH")
 
+    def test_real_autoscale_plan_projection_is_not_false_enabled(self):
+        p = self.root / "autoscale-plan.json"
+        p.write_text(json.dumps({
+            "schema_version": 1, "kind": "AutoscalePlan",
+            "repository": "example/ci", "policy_fingerprint": "sha256:real",
+            "evidence": {
+                "scope": {"labels": ["self-hosted", "linux"],
+                          "provisioning_template_labels": ["self-hosted", "linux", "local-runner"]},
+                "ephemeral": {"template_labels": ["self-hosted", "linux", "local-runner"]}
+            }
+        }), encoding="utf-8")
+        result = reconcile(self.root, p, repository="example/ci")
+        self.assertEqual(result["status"], "inconclusive")
+        self.assertEqual(result["policy_source"], "operator_supplied_autoscale_plan")
+        self.assertEqual(result["jobs"][0]["template_alignment"], ["local_provision", "local_ephemeral"])
+
     def test_unverified_or_mismatched_repository(self):
         p = self.policy(["self-hosted"], ["self-hosted", "linux", "local-runner"])
         self.assertEqual(reconcile(self.root, p)["jobs"][0]["reason"], "POLICY_REPOSITORY_NOT_VERIFIED")

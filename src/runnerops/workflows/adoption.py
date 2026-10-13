@@ -31,8 +31,16 @@ def plan(root, profile, targets=()):
         if targets and not any(path + ":" + j["id"] in targets for j in workflow["jobs"]):
             continue
         if workflow["status"] != "complete":
-            blocked.append({"file": path, "code": "AUDIT_INCONCLUSIVE"})
-            continue
+            # A targeted adoption may proceed when unsupported OTHER jobs
+            # are the sole source of diagnostics. Global errors still block.
+            relevant = [
+                diagnostic for diagnostic in workflow["diagnostics"]
+                if not targets or diagnostic["job"] is None or
+                path + ":" + diagnostic["job"] in targets
+            ]
+            if relevant:
+                blocked.append({"file": path, "code": "AUDIT_INCONCLUSIVE"})
+                continue
         events = set(workflow["triggers"])
         if profile in ("local-first", "hybrid") and (not events or events - SAFE_EVENTS or events & EXTERNAL_EVENTS):
             blocked.append({"file": path, "code": "UNTRUSTED_OR_UNSUPPORTED_TRIGGERS"})

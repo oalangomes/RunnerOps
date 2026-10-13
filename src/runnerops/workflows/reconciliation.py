@@ -27,6 +27,24 @@ def read_policy(path):
     value = json.loads(file.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema_version") != 1:
         raise ValueError("UNSUPPORTED_POLICY_EVIDENCE_SCHEMA")
+    if value.get("kind") == "AutoscalePlan":
+        scope = ((value.get("evidence") or {}).get("scope") or {})
+        ephemeral = ((value.get("evidence") or {}).get("ephemeral") or {})
+        if not isinstance(scope, dict) or not isinstance(ephemeral, dict):
+            raise ValueError("INVALID_AUTOSCALE_PLAN_EVIDENCE")
+        result = {
+            "schema_version": 1, "kind": "AutoscalePlanPolicyProjection",
+            "repository": value.get("repository"),
+            "fingerprint": value.get("policy_fingerprint"),
+            "policy": {
+                "label_scope": scope.get("labels"),
+                # A public AutoscalePlan exposes template labels but NOT proof
+                # of their enabled state or the active scheduler snapshot.
+                "local_provision": {"enabled": False, "labels": scope.get("provisioning_template_labels", [])},
+                "local_ephemeral": {"enabled": False, "labels": ephemeral.get("template_labels", [])},
+            },
+        }
+        value = result
     policy = value.get("policy")
     if not isinstance(policy, dict) or "label_scope" not in policy:
         raise ValueError("POLICY_EVIDENCE_MISSING_SCOPE")
@@ -64,25 +82,35 @@ def reconcile(root, policy_evidence=None, repository=None):
                     entry.update(status="blocked", reason="LABEL_SCOPE_BLOCKED")
                 else:
                     candidates = []
+                    possible = []
                     for kind, config in (
                         ("local_provision", policy["policy"].get("local_provision", {})),
                         ("local_ephemeral", policy["policy"].get("local_ephemeral", {})),
                     ):
-                        if isinstance(config, dict) and config.get("enabled") is True:
-                            offered = _labels(config.get("labels", []))
-                            if required.issubset(offered):
+                        if not isinstance(config, dict):
+                            continue
+                        offered_value = config.get("labels", [])
+                        if kind == "local_provision" and isinstance(config.get("template"), dict):
+                            offered_value = config["template"].get("labels", offered_value)
+                        offered = _labels(offered_value)
+                        if required.issubset(offered):
+                            possible.append(kind)
+                            if config.get("enabled") is True:
                                 candidates.append(kind)
                     if candidates:
                         entry.update(status="compatible", reason="LABELS_COMPATIBLE",
                                      policy_paths=candidates)
                     else:
-                        entry.update(status="unknown", reason="NO_VERIFIED_PROVISIONING_PATH")
+                        entry.update(status="unknown", reason="NO_VERIFIED_PROVISIONING_PATH",
+                                     template_alignment=possible)
             jobs.append(entry)
     statuses = {x["status"] for x in jobs}
     return {
         "schema_version": 1, "kind": "WorkflowPolicyReconciliation",
         "fingerprint": audit["fingerprint"],
-        "policy_source": "operator_supplied_file" if policy is not None else "unavailable",
+        "policy_source": ("operator_supplied_autoscale_plan" if policy is not None and
+                          policy.get("kind") == "AutoscalePlanPolicyProjection" else
+                          "operator_supplied_file" if policy is not None else "unavailable"),
         "identity_verified": identity_verified,
         "policy_fingerprint": policy.get("fingerprint") if policy is not None else None,
         "policy_repository": policy.get("repository") if policy is not None else None,

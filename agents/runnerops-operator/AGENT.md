@@ -109,7 +109,8 @@ a separate workflow/YAML rewrite engine or capacity policy authority.
    Review git diff and create a PR via normal Git permissions; no auto-merge.
 3. **Policy Reconciliation:** invoke runnerctl workflow reconcile . --json.
    Without effective policy evidence, UNKNOWN is correct, not success. An operator may
-   supply a versioned evidence file; run reconcile again with --policy-evidence FILE
+   obtain a read-only plan through runnerctl autoscale plan owner/repo --json,
+   supply that versioned evidence file; run reconcile again with --policy-evidence FILE
    --repository owner/repo. Do not claim a policy snapshot belongs to another repository.
    The policy management mutation boundary remains #144; do not edit systemd or env.
 4. **Intelligence:** invoke runnerctl workflow intelligence . --since 24h --json,

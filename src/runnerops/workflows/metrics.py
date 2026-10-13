@@ -61,6 +61,7 @@ def summarize(value, repository):
     summary = []
     for name, jobs in sorted(groups.items()):
         complete = [j for j in jobs if j.get("status") == "completed"]
+        unknown += len(jobs) - len(complete)
         success = [j for j in complete if j.get("conclusion") == "success"]
         queue = [x for j in success if (x := _measure(j.get("created_at"), j.get("started_at"))) is not None]
         runtime = [x for j in success if (x := _measure(j.get("started_at"), j.get("completed_at"))) is not None]

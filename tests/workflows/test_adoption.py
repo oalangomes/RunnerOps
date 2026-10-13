@@ -82,6 +82,14 @@ class AdoptionTests(unittest.TestCase):
             plan(self.root, "hybrid")
         self.assertEqual(plan(self.root, "hybrid", targets=["ci.yml:missing"])["status"], "blocked")
 
+    def test_targeted_safe_job_does_not_inherit_other_job_dynamic_blocker(self):
+        p = self.directory / "ci.yml"
+        dynamic = "$" + "{{ matrix.os }}"
+        p.write_text("on: push\njobs:\n  safe:\n    runs-on: ubuntu-latest\n  unknown:\n    runs-on: " + dynamic + "\n", encoding="utf-8")
+        intended = plan(self.root, "hybrid", targets=["ci.yml:safe"])
+        self.assertEqual(intended["status"], "ready")
+        self.assertEqual([c["job"] for c in intended["changes"]], ["safe"])
+
     def test_dynamic_no_mutation(self):
         p = self.write(runson="$" + "{{ matrix.os }}")
         result = plan(self.root, "local-first")

@@ -22,6 +22,10 @@ labels while preserving other jobs (including deploy or sensitive build jobs).
 Exact plan fingerprint is checked again. The original file hash and source
 line must match. Every candidate must pass the audit before the first edit.
 Each modified file is atomically replaced using a same-directory temporary file.
+Use --profile hybrid --job FILE.yml:JOB (repeatable) to adopt only selected
+jobs; diagnostics on unrelated jobs remain visible in Discovery but do not
+block the selected job unless they are global to the workflow.
+
 Cross-file application is **not** a transaction; any partial failure is
 reported as PARTIAL_ADOPTION and must be reviewed before retry.
 

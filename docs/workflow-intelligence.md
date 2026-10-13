@@ -37,7 +37,9 @@ The existing OperationalEvidence v1 limitation is still explicit:
 CI history is not persisted and historical capacity/utilization may be absent.
 Those gaps must appear in inconclusive signals, not be masked as zero.
 
-Exit 0 means complete evidence for this projection; 3 means bounded but
+Exit 0 means successful collection with no *unexplained* evidence failure;
+known structural gaps remain listed as UNKNOWN without converting a successful
+collection into a failure. 3 means bounded but
 incomplete evidence; 2 means failed validation/model review.
 
     python3 -B -m unittest tests.workflows.test_intelligence

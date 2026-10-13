@@ -38,6 +38,12 @@ class IntelligenceTests(unittest.TestCase):
         self.assertIn("ci_history_not_persisted", value["incomplete_evidence"])
         self.assertFalse(value["mutation"])
 
+    def test_known_structural_gaps_do_not_mask_successful_collection(self):
+        self.payload["collection_status"] = "success"
+        observed = analyze(self.payload)
+        self.assertEqual(observed["status"], "complete")
+        self.assertIn("ci_history_not_persisted", observed["incomplete_evidence"])
+
     def test_fail_closed_invalid_kind_and_symlink(self):
         self.payload["kind"] = "different"
         self.file.write_text(json.dumps(self.payload), encoding="utf-8")

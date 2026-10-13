@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from runnerops.operational.report import build_report, duration
+from runnerops.operational.report import CAPABILITY_LIMITATIONS, build_report, duration
 
 MAX_EVIDENCE_BYTES = 256 * 1024
 
@@ -68,7 +68,8 @@ def analyze(evidence, jobs_evidence=None):
                       "actions_by_kind": actions.get("by_kind", {}),
                       "actions_by_state": counts},
         "signals": signals, "incomplete_evidence": gaps,
-        "status": "inconclusive" if gaps else "complete",
+        "status": ("complete" if value.get("collection_status") == "success"
+                   and set(gaps).issubset(CAPABILITY_LIMITATIONS) else "inconclusive"),
         "mutation": False, "model_used": False,
     }
 

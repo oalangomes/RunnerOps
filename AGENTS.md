@@ -46,6 +46,14 @@ validate
 only then consider the change complete
 ```
 
+## Governança de Workflow Adoption
+
+- Use os quatro contratos `runnerctl workflow discover|adopt|reconcile|intelligence`; atualize suas quatro documentações e a skill `runnerops-workflow-adoption` quando esses contratos mudarem.
+- Auditar e reconciliar são read-only. Adoption exige `--apply --expect-fingerprint SHA --yes` e preserva bloqueios de eventos não confiáveis.
+- Em estado UNKNOWN/INCONCLUSIVE, não infira que um runner atenderá à fila, nem remova o bloqueio usando `ensure .`.
+- Policy mutation continua sob o contrato público separado da issue #144; jamais editar scheduler snapshots ou env internos em nome de reconciliação.
+- Intelligence usa OperationalEvidence/review com permissões de provider explícitas e sem decisão de escala por IA.
+
 ## Disciplina de mudança
 
 - Mantenha exemplos públicos genéricos; não adicione nomes de usuário, hostnames ou projetos do mantenedor.

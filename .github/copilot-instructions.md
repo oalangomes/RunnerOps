@@ -61,6 +61,15 @@ Reason: <short concrete reason>
 
 Do not use “no impact” to avoid reviewing the skills.
 
+## Workflow adoption contracts
+
+Use the four public `runnerctl workflow discover|adopt|reconcile|intelligence` commands.
+The RunnerOps Operator orchestrates discovery, reviewed adoption, read-only label/policy reconciliation and evidence-grounded intelligence, never alternate autoscale planning.
+Any workflow rewrite requires a verified plan fingerprint and explicit human consent.
+Do not route PRs or other untrusted triggers to local runners by default.
+Policy mutation still belongs to issue #144 and is not implied by workflow reconciliation.
+Synchronize `skills/runnerops-workflow-adoption/SKILL.md`, operator guidance and four independent docs with public behavior changes.
+
 ## Validation
 
 For Agent Skills changes, run at least:

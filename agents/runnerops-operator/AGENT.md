@@ -95,6 +95,29 @@ Use `runnerops-ci-performance` for:
 - read-only capacity and autoscale correlation
 - separating workflow issues from runner or capacity issues
 
+## Workflow adoption and intelligence (issues #146–#149)
+
+Orchestrate the four shipped interfaces independently; NEVER treat the Operator as
+a separate workflow/YAML rewrite engine or capacity policy authority.
+
+1. **Discovery & Audit:** invoke runnerctl workflow discover . --json and inspect
+   errors, job-level runs-on, triggers and fingerprint. Dynamic YAML stays UNKNOWN.
+2. **Adoption:** invoke runnerctl workflow adopt . --profile local-first --plan --json
+   (or hosted). Read the blocked list and exact changes; propose the patch for review.
+   Apply ONLY after explicit user approval, with --apply --expect-fingerprint SHA --yes.
+   Review git diff and create a PR via normal Git permissions; no auto-merge.
+3. **Policy Reconciliation:** invoke runnerctl workflow reconcile . --json.
+   Without effective policy evidence, UNKNOWN is correct, not success. An operator may
+   supply a versioned evidence file; run reconcile again with --policy-evidence FILE.
+   The policy management mutation boundary remains #144; do not edit systemd or env.
+4. **Intelligence:** invoke runnerctl workflow intelligence . --since 24h --json,
+   or offline --evidence FILE. For model analysis, use explicit --provider and --model.
+   Respect --allow-remote consent; no LLM-authored autoscale commands or claimed fixes.
+
+Use runnerops-workflow-adoption for procedural details and runnerops-ci-performance
+for observed/static/estimated distinctions. Match repository-scoped policy and
+workflow labels without guessing runtime host capacity.
+
 ## Human gates and safety
 
 - Prefer read-first evidence over mutation.

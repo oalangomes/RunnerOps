@@ -38,6 +38,10 @@ Após `start` ou `restart` explícito, a skill exige `status` + `health`. Após 
 
 O autoscale contínuo continua sendo determinístico e governado por RunnerOps; a skill não substitui decisões do planner por “ligar tudo”. Com policy explícita e limites, o planner pode escolher `CREATE_EPHEMERAL` e o controller reconcilia a identidade exata pelo lifecycle one-job existente. `ephemeral create` continua disponível como primitive explícito, mas a skill não o escolhe por conta própria diante de fila.
 
+## Workflow adoption
+
+A skill `runnerops-workflow-adoption` usa a família pública `runnerctl workflow` para as quatro etapas separadas: discovery/audit, adoption com plano/fingerprint/consentimento, reconciliation read-only com evidence e intelligence com OperationalEvidence/review. O `runnerops-operator` compõe essa skill globalmente; não existem agentes por workflow ou heurísticas novas de autoscale.
+
 ## Instalação
 
 Instale as skills canônicas e a projeção global do operador nos destinos de usuário suportados (Codex, Copilot, Claude e agentes genéricos):

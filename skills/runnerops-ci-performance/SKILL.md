@@ -324,3 +324,12 @@ After editing:
 - Do not start, stop, restart, remove, or reconfigure runners as part of performance analysis.
 - Do not add new `runnerctl` runtime commands for this skill.
 - Do not couple the skill to Codex, Claude, Copilot, or another specific agent.
+
+## Workflow intelligence public interface
+
+When available, use `runnerctl workflow discover . --json` for the bounded STATIC topology,
+`runnerctl workflow reconcile . --json` for label/policy gaps, and
+`runnerctl workflow intelligence . --since 24h --json` for bounded OBSERVED signals.
+Dynamic runner routes are UNKNOWN. The existing AI reviewer is opt-in and read-only:
+`runnerctl workflow intelligence --evidence FILE --provider ollama --model MODEL --json`.
+Never treat estimated speedups as measured results or turn a reviewer finding into an autoscale mutation.

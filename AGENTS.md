@@ -98,6 +98,15 @@ for test_file in tests/ephemeral/*.py; do python3 -B "$test_file"; done
 for test_file in tests/ephemeral/*.sh; do bash "$test_file"; done
 ```
 
+Para Workflow Adoption & Intelligence:
+
+```bash
+python3 -B -m unittest discover -s tests/workflows -p 'test_*.py' -v
+runnerctl workflow discover .github/workflows/pages.yml --json
+runnerctl workflow adopt .github/workflows/pages.yml --profile hosted --plan --json
+runnerctl workflow reconcile .github/workflows/pages.yml --json
+```
+
 Para Agent Skills:
 
 ```bash

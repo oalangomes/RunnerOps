@@ -4,15 +4,19 @@
 
     runnerctl workflow adopt . --profile local-first --plan --json
     runnerctl workflow adopt . --profile hosted --plan --json
+    runnerctl workflow adopt . --profile hybrid --job ci.yml:test --plan --json
 
 The plan includes schema_version, profile, fingerprint, changes (file/job/line,
 from/to/original file hash), blockers and mutation=false. It is not an LLM
 authored YAML rewrite. Profiles: hosted => ubuntu-latest;
-local-first => [self-hosted, Linux, X64, local-runner].
+local-first => [self-hosted, Linux, X64, local-runner]. hybrid changes
+only explicitly selected jobs (--job FILE.yml:JOB; repeatable) using local-first
+labels while preserving other jobs (including deploy or sensitive build jobs).
 
 ### Apply only after explicit review
 
     runnerctl workflow adopt . --profile local-first --apply --expect-fingerprint SHA_FROM_PLAN --yes --json
+    runnerctl workflow adopt . --profile hybrid --job ci.yml:test --apply --expect-fingerprint SHA_FROM_PLAN --yes --json
     git diff -- .github/workflows
 
 Exact plan fingerprint is checked again. The original file hash and source

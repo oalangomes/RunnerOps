@@ -4,7 +4,7 @@
 policy evidence. Does not implement the separate policy-management issue #144.
 
     runnerctl workflow reconcile . --json
-    runnerctl workflow reconcile . --policy-evidence /tmp/policy.json --json
+    runnerctl workflow reconcile . --policy-evidence /tmp/policy.json --repository example/api --json
 
 Without a policy snapshot, self-hosted jobs become
 POLICY_EVIDENCE_MISSING/unknown, rather than assuming current policy. A policy
@@ -24,6 +24,10 @@ optional fingerprint, and a typed policy object:
         "local_ephemeral": {"enabled": false, "labels": []}
       }
     }
+
+The --repository value must match the policy evidence repository; otherwise
+reconciliation fails closed. Without that explicit identity, policy-dependent
+job results remain POLICY_REPOSITORY_NOT_VERIFIED/unknown.
 
 This is an **operator-supplied fixture**, not a claim that RunnerOps can yet
 fetch or apply canonical effective policy through the #144 interface.

@@ -39,22 +39,28 @@ class ReconciliationTests(unittest.TestCase):
     def test_compatible_labels_case_insensitive(self):
         p = self.policy(["SELF-HOSTED", "LINUX"],
                         ["self-hosted", "linux", "LOCAL-RUNNER", "x64"])
-        actual = reconcile(self.root, p)
+        actual = reconcile(self.root, p, repository="example/ci")
         self.assertEqual(actual["status"], "complete")
         self.assertEqual(actual["jobs"][0]["status"], "compatible")
         self.assertEqual(actual["jobs"][0]["policy_paths"], ["local_provision"])
 
     def test_scope_mismatch_blocks(self):
         p = self.policy(["self-hosted", "GPU"], ["self-hosted", "linux", "local-runner"])
-        actual = reconcile(self.root, p)
+        actual = reconcile(self.root, p, repository="example/ci")
         self.assertEqual(actual["status"], "blocked")
         self.assertEqual(actual["jobs"][0]["reason"], "LABEL_SCOPE_BLOCKED")
 
     def test_no_enabled_template_does_not_assert_absent_capacity(self):
         p = self.policy(["self-hosted"], ["linux"])
-        actual = reconcile(self.root, p)
+        actual = reconcile(self.root, p, repository="example/ci")
         self.assertEqual(actual["status"], "inconclusive")
         self.assertEqual(actual["jobs"][0]["reason"], "NO_VERIFIED_PROVISIONING_PATH")
+
+    def test_unverified_or_mismatched_repository(self):
+        p = self.policy(["self-hosted"], ["self-hosted", "linux", "local-runner"])
+        self.assertEqual(reconcile(self.root, p)["jobs"][0]["reason"], "POLICY_REPOSITORY_NOT_VERIFIED")
+        with self.assertRaisesRegex(ValueError, "POLICY_REPOSITORY_MISMATCH"):
+            reconcile(self.root, p, repository="another/repo")
 
     def test_missing_or_invalid_evidence_fails(self):
         p = self.policy([], [])

@@ -28,10 +28,11 @@ def main(argv=None):
 
     adoption = commands.add_parser("adopt", help="preview or explicitly apply supported runner label changes")
     adoption.add_argument("path", nargs="?", default=".")
-    adoption.add_argument("--profile", choices=("hosted", "local-first"), required=True)
+    adoption.add_argument("--profile", choices=("hosted", "local-first", "hybrid"), required=True)
     operation = adoption.add_mutually_exclusive_group(required=True)
     operation.add_argument("--plan", action="store_true")
     operation.add_argument("--apply", action="store_true")
+    adoption.add_argument("--job", action="append", default=[], help="exact FILE.yml:JOB selector (repeatable)")
     adoption.add_argument("--expect-fingerprint")
     adoption.add_argument("--yes", action="store_true")
     adoption.add_argument("--json", action="store_true")
@@ -39,6 +40,7 @@ def main(argv=None):
     policy = commands.add_parser("reconcile", help="compare jobs with operator-supplied autoscale policy evidence")
     policy.add_argument("path", nargs="?", default=".")
     policy.add_argument("--policy-evidence")
+    policy.add_argument("--repository", help="expected canonical owner/repo for supplied evidence")
     policy.add_argument("--json", action="store_true")
 
     intel = commands.add_parser("intelligence", help="bounded read-only CI operational evidence analysis")
@@ -56,11 +58,11 @@ def main(argv=None):
             result = discover(args.path)
         elif args.command == "adopt":
             if args.apply:
-                result = apply(args.path, args.profile, args.expect_fingerprint, confirmed=args.yes)
+                result = apply(args.path, args.profile, args.expect_fingerprint, confirmed=args.yes, targets=args.job)
             else:
-                result = plan(args.path, args.profile)
+                result = plan(args.path, args.profile, targets=args.job)
         elif args.command == "reconcile":
-            result = reconcile(args.path, args.policy_evidence)
+            result = reconcile(args.path, args.policy_evidence, repository=args.repository)
         else:
             if (args.model is None) != (args.provider is None):
                 raise ValueError("PROVIDER_AND_MODEL_MUST_BE_SET_TOGETHER")

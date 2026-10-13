@@ -36,9 +36,12 @@ def read_policy(path):
     return value
 
 
-def reconcile(root, policy_evidence=None):
+def reconcile(root, policy_evidence=None, repository=None):
     audit = discover(root)
     policy = read_policy(policy_evidence)
+    if policy is not None and repository is not None and policy["repository"].casefold() != repository.casefold():
+        raise ValueError("POLICY_REPOSITORY_MISMATCH")
+    identity_verified = policy is not None and repository is not None
     jobs = []
     for workflow in audit["workflows"]:
         for job in workflow["jobs"]:
@@ -52,6 +55,8 @@ def reconcile(root, policy_evidence=None):
                 entry.update(status="unknown", reason="DYNAMIC_OR_UNKNOWN_RUNS_ON")
             elif policy is None:
                 entry.update(status="unknown", reason="POLICY_EVIDENCE_MISSING")
+            elif not identity_verified:
+                entry.update(status="unknown", reason="POLICY_REPOSITORY_NOT_VERIFIED")
             else:
                 required = _labels(job["labels"])
                 policy_labels = _labels(policy["policy"]["label_scope"])
@@ -78,6 +83,7 @@ def reconcile(root, policy_evidence=None):
         "schema_version": 1, "kind": "WorkflowPolicyReconciliation",
         "fingerprint": audit["fingerprint"],
         "policy_source": "operator_supplied_file" if policy is not None else "unavailable",
+        "identity_verified": identity_verified,
         "policy_fingerprint": policy.get("fingerprint") if policy is not None else None,
         "policy_repository": policy.get("repository") if policy is not None else None,
         "status": ("blocked" if "blocked" in statuses else

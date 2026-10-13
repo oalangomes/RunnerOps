@@ -68,6 +68,20 @@ class AdoptionTests(unittest.TestCase):
         self.assertEqual(done["status"], "applied")
         self.assertIn("runs-on: ubuntu-latest", p.read_text())
 
+    def test_hybrid_routes_exact_job_only(self):
+        p = self.directory / "ci.yml"
+        p.write_text("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n  deploy:\n    runs-on: ubuntu-latest\n", encoding="utf-8")
+        intent = plan(self.root, "hybrid", targets=["ci.yml:build"])
+        self.assertEqual([c["job"] for c in intent["changes"]], ["build"])
+        apply(self.root, "hybrid", intent["fingerprint"], confirmed=True, targets=["ci.yml:build"])
+        self.assertIn("  deploy:\n    runs-on: ubuntu-latest", p.read_text())
+
+    def test_hybrid_requires_target_and_unknown_target_blocks(self):
+        self.write()
+        with self.assertRaisesRegex(ValueError, "HYBRID_REQUIRES"):
+            plan(self.root, "hybrid")
+        self.assertEqual(plan(self.root, "hybrid", targets=["ci.yml:missing"])["status"], "blocked")
+
     def test_dynamic_no_mutation(self):
         p = self.write(runson="$" + "{{ matrix.os }}")
         result = plan(self.root, "local-first")

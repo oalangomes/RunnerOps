@@ -21,6 +21,7 @@ workflow changes with GitHub Actions before merge.
 
     runnerctl workflow adopt . --profile local-first --plan --json
     runnerctl workflow adopt . --profile hosted --plan --json
+    runnerctl workflow adopt . --profile hybrid --job ci.yml:test --plan --json
 
 A plan is a review artifact. Never fabricate the fingerprint, silently choose
 self-hosted for untrusted PR events, or edit a job that the plan marks blocked.
@@ -34,7 +35,7 @@ edit workflows. No workflow job may start RunnerOps itself to obtain its runner.
 ## 3. Policy Reconciliation (read-only)
 
     runnerctl workflow reconcile . --json
-    runnerctl workflow reconcile . --policy-evidence policy.json --json
+    runnerctl workflow reconcile . --policy-evidence policy.json --repository owner/repo --json
 
 The evidence file must be explicitly provided and versioned, and is not proof
 of live effective scheduler state. UNKNOWN is the correct response when public

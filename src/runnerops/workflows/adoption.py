@@ -10,35 +10,46 @@ from .discovery import EXTERNAL_EVENTS, SAFE_EVENTS, discover, digest
 PROFILES = {
     "hosted": "ubuntu-latest",
     "local-first": "[self-hosted, Linux, X64, local-runner]",
+    "hybrid": "[self-hosted, Linux, X64, local-runner]",
 }
 
 
-def plan(root, profile):
+def plan(root, profile, targets=()):
     if profile not in PROFILES:
         raise ValueError("INVALID_ADOPTION_PROFILE")
+    targets = set(targets)
+    if profile == "hybrid" and not targets:
+        raise ValueError("HYBRID_REQUIRES_EXPLICIT_JOB_SELECTION")
+    if any(not target or ":" not in target or "/" in target or target.count(":") != 1 for target in targets):
+        raise ValueError("INVALID_JOB_TARGET")
     snapshot = discover(root)
+    known = {w["path"] + ":" + j["id"] for w in snapshot["workflows"] for j in w["jobs"]}
     changes = []
-    blocked = []
+    blocked = [{"file": target, "code": "JOB_TARGET_NOT_FOUND"} for target in sorted(targets - known)]
     for workflow in snapshot["workflows"]:
         path = workflow["path"]
+        if targets and not any(path + ":" + j["id"] in targets for j in workflow["jobs"]):
+            continue
         if workflow["status"] != "complete":
             blocked.append({"file": path, "code": "AUDIT_INCONCLUSIVE"})
             continue
         events = set(workflow["triggers"])
-        if profile == "local-first" and (not events or events - SAFE_EVENTS or events & EXTERNAL_EVENTS):
+        if profile in ("local-first", "hybrid") and (not events or events - SAFE_EVENTS or events & EXTERNAL_EVENTS):
             blocked.append({"file": path, "code": "UNTRUSTED_OR_UNSUPPORTED_TRIGGERS"})
             continue
         for job in workflow["jobs"]:
+            if targets and path + ":" + job["id"] not in targets:
+                continue
             if job["reusable"]:
                 continue
             if job["dynamic"] or job["runs_on"] is None:
                 blocked.append({"file": path, "job": job["id"], "code": "UNSUPPORTED_RUNS_ON"})
                 continue
             if "features" in job:
-                if profile == "local-first" and any(x in job["features"] for x in ("container", "services")):
+                if profile in ("local-first", "hybrid") and any(x in job["features"] for x in ("container", "services")):
                     blocked.append({"file": path, "job": job["id"], "code": "UNREVIEWED_JOB_ISOLATION"})
                     continue
-            if profile == "local-first" and job["runner_kind"] == "hosted" and job["labels"] != ["ubuntu-latest"]:
+            if profile in ("local-first", "hybrid") and job["runner_kind"] == "hosted" and job["labels"] != ["ubuntu-latest"]:
                 blocked.append({"file": path, "job": job["id"], "code": "NONSTANDARD_HOSTED_PLATFORM"})
                 continue
             target = PROFILES[profile]
@@ -48,17 +59,17 @@ def plan(root, profile):
             changes.append({"file": path, "job": job["id"], "line": job["line"],
                             "from": job["runs_on"], "to": target, "source_sha256": workflow["sha256"]})
     return {"schema_version": 1, "kind": "WorkflowAdoptionPlan",
-            "profile": profile, "root": snapshot["root"],
+            "profile": profile, "targets": sorted(targets), "root": snapshot["root"],
             "fingerprint": snapshot["fingerprint"],
             "status": "blocked" if blocked else "ready",
             "changes": changes, "blocked": blocked, "mutation": False}
 
 
-def apply(root, profile, expected_fingerprint, *, confirmed=False):
+def apply(root, profile, expected_fingerprint, *, confirmed=False, targets=()):
     """Apply exact planned single-line substitutions with stale-plan protection."""
     if not confirmed or not expected_fingerprint:
         raise ValueError("EXPLICIT_APPROVAL_AND_FINGERPRINT_REQUIRED")
-    desired = plan(root, profile)
+    desired = plan(root, profile, targets=targets)
     if desired["fingerprint"] != expected_fingerprint:
         raise ValueError("STALE_ADOPTION_FINGERPRINT")
     if desired["status"] != "ready":
@@ -86,10 +97,12 @@ def apply(root, profile, expected_fingerprint, *, confirmed=False):
             newline = "\r\n" if original.endswith("\r\n") else "\n" if original.endswith("\n") else ""
             lines[index] = pre + sep + " " + change["to"] + newline
         updated = "".join(lines).encode("utf-8")
-        staged.append((path, updated, path.stat().st_mode & 0o777))
+        staged.append((path, updated, path.stat().st_mode & 0o777, digest(content)))
     updated_paths = []
     try:
-        for path, content, mode in staged:
+        for path, content, mode, source_sha in staged:
+            if path.is_symlink() or digest(path.read_bytes()) != source_sha:
+                raise ValueError("CONCURRENT_WORKFLOW_MODIFICATION")
             fd, temporary = tempfile.mkstemp(prefix=".runnerops-adopt-", dir=str(path.parent))
             try:
                 os.fchmod(fd, mode)

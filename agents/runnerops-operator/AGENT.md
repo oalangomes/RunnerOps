@@ -104,11 +104,13 @@ a separate workflow/YAML rewrite engine or capacity policy authority.
    errors, job-level runs-on, triggers and fingerprint. Dynamic YAML stays UNKNOWN.
 2. **Adoption:** invoke runnerctl workflow adopt . --profile local-first --plan --json
    (or hosted). Read the blocked list and exact changes; propose the patch for review.
+   For mixed workflows use --profile hybrid --job FILE.yml:JOB to avoid rerouting other jobs.
    Apply ONLY after explicit user approval, with --apply --expect-fingerprint SHA --yes.
    Review git diff and create a PR via normal Git permissions; no auto-merge.
 3. **Policy Reconciliation:** invoke runnerctl workflow reconcile . --json.
    Without effective policy evidence, UNKNOWN is correct, not success. An operator may
-   supply a versioned evidence file; run reconcile again with --policy-evidence FILE.
+   supply a versioned evidence file; run reconcile again with --policy-evidence FILE
+   --repository owner/repo. Do not claim a policy snapshot belongs to another repository.
    The policy management mutation boundary remains #144; do not edit systemd or env.
 4. **Intelligence:** invoke runnerctl workflow intelligence . --since 24h --json,
    or offline --evidence FILE. For model analysis, use explicit --provider and --model.

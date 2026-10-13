@@ -34,7 +34,7 @@ def plan(root, profile):
             if job["dynamic"] or job["runs_on"] is None:
                 blocked.append({"file": path, "job": job["id"], "code": "UNSUPPORTED_RUNS_ON"})
                 continue
-            if job["features"] if "features" in job else False:
+            if "features" in job:
                 if profile == "local-first" and any(x in job["features"] for x in ("container", "services")):
                     blocked.append({"file": path, "job": job["id"], "code": "UNREVIEWED_JOB_ISOLATION"})
                     continue

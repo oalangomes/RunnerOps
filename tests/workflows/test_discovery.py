@@ -39,7 +39,7 @@ jobs:
         self.assertEqual(w["jobs"][0]["runner_kind"], "hosted")
         self.assertEqual(w["jobs"][1]["runner_kind"], "self-hosted")
         self.assertEqual(w["jobs"][1]["needs"], ["build"])
-        self.assertEqual(w["jobs"][1]["line"], 9)
+        self.assertEqual(w["jobs"][1]["line"], 10)
         self.assertEqual(actual["fingerprint"], discover(self.root)["fingerprint"])
 
     def test_untrusted_event_on_self_hosted_is_inconclusive(self):

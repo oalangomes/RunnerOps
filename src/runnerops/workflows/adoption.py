@@ -1,10 +1,10 @@
 """Governed, deterministic workflow adoption (no agent-authored YAML rewrites)."""
-import difflib
 import os
 from pathlib import Path
+import hashlib
 import tempfile
 
-from .discovery import EXTERNAL_EVENTS, SAFE_EVENTS, discover, digest
+from .discovery import EXTERNAL_EVENTS, SAFE_EVENTS, canonical, discover, digest
 
 
 PROFILES = {
@@ -66,9 +66,13 @@ def plan(root, profile, targets=()):
             # Only one physical YAML line with a literal scalar/inline list may change.
             changes.append({"file": path, "job": job["id"], "line": job["line"],
                             "from": job["runs_on"], "to": target, "source_sha256": workflow["sha256"]})
+    basis = {"source": snapshot["fingerprint"], "profile": profile,
+             "targets": sorted(targets), "changes": changes, "blocked": blocked}
+    plan_fingerprint = hashlib.sha256(canonical(basis).encode("utf-8")).hexdigest()
     return {"schema_version": 1, "kind": "WorkflowAdoptionPlan",
             "profile": profile, "targets": sorted(targets), "root": snapshot["root"],
-            "fingerprint": snapshot["fingerprint"],
+            "source_fingerprint": snapshot["fingerprint"],
+            "fingerprint": plan_fingerprint,
             "status": "blocked" if blocked else "ready",
             "changes": changes, "blocked": blocked, "mutation": False}
 

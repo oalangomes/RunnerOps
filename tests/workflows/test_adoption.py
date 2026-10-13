@@ -45,6 +45,15 @@ class AdoptionTests(unittest.TestCase):
         self.assertEqual(follow["status"], "ready")
         self.assertEqual(follow["changes"], [])
 
+    def test_fingerprint_binds_profile_and_selection(self):
+        self.write()
+        plan_local = plan(self.root, "local-first")
+        plan_hosted = plan(self.root, "hosted")
+        self.assertNotEqual(plan_local["fingerprint"], plan_hosted["fingerprint"])
+        self.assertEqual(plan_local["source_fingerprint"], plan_hosted["source_fingerprint"])
+        with self.assertRaisesRegex(ValueError, "STALE_ADOPTION_FINGERPRINT"):
+            apply(self.root, "hosted", plan_local["fingerprint"], confirmed=True)
+
     def test_stale_fingerprint_rejected(self):
         p = self.write()
         intended = plan(self.root, "local-first")

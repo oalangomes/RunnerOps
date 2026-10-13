@@ -6,7 +6,8 @@
     runnerctl workflow adopt . --profile hosted --plan --json
     runnerctl workflow adopt . --profile hybrid --job ci.yml:test --plan --json
 
-The plan includes schema_version, profile, fingerprint, changes (file/job/line,
+The plan includes schema_version, profile, source_fingerprint, fingerprint,
+changes (file/job/line,
 from/to/original file hash), blockers and mutation=false. It is not an LLM
 authored YAML rewrite. Profiles: hosted => ubuntu-latest;
 local-first => [self-hosted, Linux, X64, local-runner]. hybrid changes
@@ -19,7 +20,9 @@ labels while preserving other jobs (including deploy or sensitive build jobs).
     runnerctl workflow adopt . --profile hybrid --job ci.yml:test --apply --expect-fingerprint SHA_FROM_PLAN --yes --json
     git diff -- .github/workflows
 
-Exact plan fingerprint is checked again. The original file hash and source
+Exact plan fingerprint binds profile, selected jobs, source contents and change
+set, and is checked again. A fingerprint for a different profile or job selection
+is never accepted, even against identical workflow source files. The original file hash and source
 line must match. Every candidate must pass the audit before the first edit.
 Each modified file is atomically replaced using a same-directory temporary file.
 Use --profile hybrid --job FILE.yml:JOB (repeatable) to adopt only selected

@@ -63,6 +63,8 @@ def _read_one(path, relative):
     try:
         if path.is_symlink() or not path.is_file():
             raise ValueError("SYMLINK_OR_NOT_FILE")
+        if path.stat().st_size > MAX_BYTES:
+            raise ValueError("FILE_TOO_LARGE")
         data = path.read_bytes()
         if len(data) > MAX_BYTES:
             raise ValueError("FILE_TOO_LARGE")

@@ -124,7 +124,7 @@ def _read_one(path, relative):
                     labels = _sequence(value)
                     if labels is None:
                         job["dynamic"] = True
-                        out["diagnostics"].append(_diagnostic("DYNAMIC_OR_UNSUPPORTED_RUNS_ON", relative, job["id"]))
+                        out["diagnostics"].append(_diagnostic("DYNAMIC_OR_UNSUPPORTED_RUNS_ON", relative, job["id"], "error"))
                     elif any(x.casefold() == "self-hosted" for x in labels):
                         job["runner_kind"] = "self-hosted"
                         job["labels"] = labels
@@ -133,11 +133,11 @@ def _read_one(path, relative):
                         job["labels"] = labels
                     else:
                         job["dynamic"] = True
-                        out["diagnostics"].append(_diagnostic("CUSTOM_OR_UNSUPPORTED_RUNS_ON", relative, job["id"]))
+                        out["diagnostics"].append(_diagnostic("CUSTOM_OR_UNSUPPORTED_RUNS_ON", relative, job["id"], "error"))
                 if key == "needs":
                     needed = _sequence(value)
                     if needed is None:
-                        out["diagnostics"].append(_diagnostic("DYNAMIC_NEEDS", relative, job["id"]))
+                        out["diagnostics"].append(_diagnostic("DYNAMIC_NEEDS", relative, job["id"], "error"))
                     else:
                         job["needs"] = needed
                 if key == "uses":

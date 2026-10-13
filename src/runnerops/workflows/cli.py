@@ -46,6 +46,7 @@ def main(argv=None):
     intel = commands.add_parser("intelligence", help="bounded read-only CI operational evidence analysis")
     intel.add_argument("repository", nargs="?", default=".")
     intel.add_argument("--evidence")
+    intel.add_argument("--jobs-evidence", help="versioned observed job timestamps, offline-only")
     intel.add_argument("--since", default="24h")
     intel.add_argument("--provider", choices=("ollama", "litellm"))
     intel.add_argument("--model")
@@ -67,7 +68,12 @@ def main(argv=None):
             if (args.model is None) != (args.provider is None):
                 raise ValueError("PROVIDER_AND_MODEL_MUST_BE_SET_TOGETHER")
             evidence = read_evidence(args.evidence) if args.evidence else live(args.repository, args.since)
-            result = analyze(evidence)
+            if args.jobs_evidence:
+                from .metrics import read_jobs
+                jobs_evidence = read_jobs(args.jobs_evidence)
+            else:
+                jobs_evidence = None
+            result = analyze(evidence, jobs_evidence)
             if args.provider:
                 # Delegate all security, schema and model-response validation to the
                 # existing public review interface. It alone may contact a model.

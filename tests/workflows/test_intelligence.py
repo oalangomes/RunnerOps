@@ -58,6 +58,26 @@ class IntelligenceTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 3, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)["kind"], "WorkflowIntelligence")
 
+    def test_observed_job_timing_metrics(self):
+        from runnerops.workflows.metrics import read_jobs
+        jobs_file = Path(self.temp.name) / "jobs.json"
+        jobs_file.write_text(json.dumps({
+            "schema_version": 1, "kind": "WorkflowJobsEvidence",
+            "repository": "example/ci",
+            "jobs": [{"name": "test", "status": "completed", "conclusion": "success",
+                      "created_at": "2026-01-01T10:00:00Z",
+                      "started_at": "2026-01-01T10:00:30Z",
+                      "completed_at": "2026-01-01T10:02:30Z"}]
+        }), encoding="utf-8")
+        enriched = analyze(read_evidence(self.file), read_jobs(jobs_file))
+        actual = enriched["jobs"]["by_job"][0]
+        self.assertEqual(actual["queue"]["median_seconds"], 30)
+        self.assertEqual(actual["execution"]["median_seconds"], 120)
+        self.assertIsNone(actual["queue"]["p95_seconds"])
+        with self.assertRaisesRegex(ValueError, "REPOSITORY_MISMATCH"):
+            from runnerops.workflows.metrics import summarize
+            summarize(read_jobs(jobs_file), "another/repo")
+
     def test_model_requires_explicit_provider(self):
         from runnerops.workflows.cli import main
         import contextlib

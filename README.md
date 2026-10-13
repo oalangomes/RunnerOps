@@ -113,7 +113,7 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Descobrir workflows | `runnerctl workflow discover . --json` |
 | Planejar e aplicar adoção de workflows | `runnerctl workflow adopt . --profile local-first --plan --json` |
 | Reconciliar labels e policy de workflows | `runnerctl workflow reconcile . --policy-evidence policy.json --json` |
-| Inteligência CI evidenciada | `runnerctl workflow intelligence . --since 24h --json` |
+| Inteligência CI evidenciada | `runnerctl workflow intelligence . --since 24h --json` (jobs timestamps opcionais via --jobs-evidence) |
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
 | Relatório operacional bounded | `runnerctl report . --since 24h`, `runnerctl report . --since 24h --json` |
 | Review AI read-only e grounded | `runnerctl review . --since 24h --provider ollama --model <model>` |

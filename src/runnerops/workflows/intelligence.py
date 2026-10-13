@@ -27,7 +27,7 @@ def validate(evidence):
     return evidence
 
 
-def analyze(evidence):
+def analyze(evidence, jobs_evidence=None):
     value = validate(evidence)
     ci = value["ci"]
     autoscale = value["autoscale"]
@@ -50,11 +50,20 @@ def analyze(evidence):
     if gaps:
         signals.append({"code": "EVIDENCE_GAPS", "class": "UNKNOWN",
                         "reasons": gaps, "scope": "do_not_infer_unavailable_history"})
+    jobs_summary = None
+    if jobs_evidence is not None:
+        from .metrics import summarize
+        jobs_summary = summarize(jobs_evidence, value.get("repository", {}).get("nameWithOwner"))
+        signals.append({"code": "JOB_TIMINGS_FROM_EXPLICIT_EVIDENCE", "class": "OBSERVED",
+                        "count": jobs_summary["total_jobs"], "scope": "bounded_supplied_sample"})
+        if jobs_summary["status"] != "complete":
+            gaps.append("job_timestamps_incomplete")
     return {
         "schema_version": 1, "kind": "WorkflowIntelligence",
         "repository": value.get("repository", {}).get("nameWithOwner"),
         "period": value.get("period"),
         "ci": {"queued_jobs_observed": queue, "queue_age_seconds": ci.get("queue_age_seconds")},
+        "jobs": jobs_summary,
         "autoscale": {"decisions_by_kind": decisions.get("by_kind", {}),
                       "actions_by_kind": actions.get("by_kind", {}),
                       "actions_by_state": counts},

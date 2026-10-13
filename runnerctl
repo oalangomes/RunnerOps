@@ -77,11 +77,11 @@ Capacity and autoscale:
 
 Workflows:
   runnerctl workflow discover [PATH] [--json]
-  runnerctl workflow adopt [PATH] --profile hosted|local-first --plan [--json]
-  runnerctl workflow adopt [PATH] --profile hosted|local-first --apply --expect-fingerprint SHA --yes [--json]
-  runnerctl workflow reconcile [PATH] [--policy-evidence FILE] [--json]
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid|hybrid --plan [--json]
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid --apply --expect-fingerprint SHA --yes [--json]
+  runnerctl workflow reconcile [PATH] [--policy-evidence FILE --repository owner/repo] [--json]
   runnerctl workflow intelligence [owner/repo|.] --since DURATION [--json]
-  runnerctl workflow intelligence --evidence FILE [--provider ollama|litellm --model MODEL] [--allow-remote] [--json]
+  runnerctl workflow intelligence --evidence FILE [--jobs-evidence FILE] [--provider ollama|litellm --model MODEL] [--allow-remote] [--json]
 
 Packages, CI and skills:
   runnerctl package detect
@@ -296,11 +296,11 @@ EOF
       cat <<'EOF'
 Uso:
   runnerctl workflow discover [PATH] --json
-  runnerctl workflow adopt [PATH] --profile hosted|local-first --plan --json
-  runnerctl workflow adopt [PATH] --profile hosted|local-first --apply --expect-fingerprint SHA --yes --json
-  runnerctl workflow reconcile [PATH] [--policy-evidence FILE] --json
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid --plan --json
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid --apply --expect-fingerprint SHA --yes --json
+  runnerctl workflow reconcile [PATH] [--policy-evidence FILE --repository owner/repo] --json
   runnerctl workflow intelligence [owner/repo|.] --since 24h --json
-  runnerctl workflow intelligence --evidence FILE --provider ollama --model MODEL --json
+  runnerctl workflow intelligence --evidence FILE [--jobs-evidence FILE] --provider ollama --model MODEL --json
 
 Discovery e reconciliation são somente leitura; adopt somente altera YAMLs literais
 com confirmação e fingerprint de um plano imutável. Intelligence aproveita o

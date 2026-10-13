@@ -47,6 +47,7 @@ show/plan/apply is tracked separately in #144.
 
     runnerctl workflow intelligence . --since 24h --json
     runnerctl workflow intelligence --evidence evidence.json --json
+    runnerctl workflow intelligence --evidence evidence.json --jobs-evidence jobs.json --json
     runnerctl workflow intelligence --evidence evidence.json --provider ollama --model MODEL --json
 
 Replay must be bounded and not collect new evidence. The existing reviewer

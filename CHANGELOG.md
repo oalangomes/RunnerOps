@@ -6,6 +6,12 @@ O projeto segue versionamento SemVer enquanto a API pública amadurece. Em vers�
 
 ## Unreleased
 
+## v0.6.0 — 2026-10-15
+
+### Changed
+
+- Manual minor release requested for the governed ephemeral capacity and agent-native operations milestone.
+
 ## v0.5.0 — 2026-09-29
 
 ### Added

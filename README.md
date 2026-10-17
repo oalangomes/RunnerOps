@@ -110,6 +110,10 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Runner ephemeral one-job | `runnerctl ephemeral create/status/reconcile/cleanup` |
 | Pacote oficial do runner | `runnerctl package detect/ensure` |
 | Aguardar resultado do CI | `runnerctl ci watch .` |
+| Descobrir workflows | `runnerctl workflow discover . --json` |
+| Planejar e aplicar adoção de workflows | `runnerctl workflow adopt . --profile local-first --plan --json` |
+| Reconciliar labels e policy de workflows | `runnerctl workflow reconcile . --policy-evidence policy.json --json` |
+| Inteligência CI evidenciada | `runnerctl workflow intelligence . --since 24h --json` (jobs timestamps opcionais via --jobs-evidence) |
 | Observar fila/capacidade | `runnerctl capacity .`, `runnerctl autoscale status .` |
 | Relatório operacional bounded | `runnerctl report . --since 24h`, `runnerctl report . --since 24h --json` |
 | Review AI read-only e grounded | `runnerctl review . --since 24h --provider ollama --model <model>` |
@@ -121,6 +125,12 @@ RunnerOps é **Linux + systemd**. WSL2 é apenas um ambiente Linux suportado; ma
 | Autorização de runtime | `runnerctl platform-authorize` |
 | Diagnóstico da plataforma | `runnerctl platform-doctor` |
 | Ajuda e completion | `runnerctl help <command>`, `runnerctl completion install bash|zsh|fish` |
+
+## Workflow Adoption & Intelligence
+
+A nova família `runnerctl workflow` integra o RunnerOps Operator a workflows GitHub Actions sem substituir o scheduler do GitHub nem o planner/autoscale do RunnerOps. A adoção self-hosted é bloqueada em gatilhos de PR/terceiros não confiáveis. Configuração de policy é sempre explicitamente governada: o read-only reconciliation desta entrega não implementa o policy apply pendente em #144.
+
+Contratos independentes: [Discovery & Audit](docs/workflow-discovery.md), [Adoption](docs/workflow-adoption.md), [Policy Reconciliation](docs/workflow-reconciliation.md) e [Intelligence](docs/workflow-intelligence.md).
 
 ## Modelo
 

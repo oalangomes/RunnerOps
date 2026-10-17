@@ -75,6 +75,14 @@ Capacity and autoscale:
   runnerctl autoscale history [--since DURATION] [--json]
   runnerctl autoscale explain --decision ID [--json]
 
+Workflows:
+  runnerctl workflow discover [PATH] [--json]
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid|hybrid --plan [--json]
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid --apply --expect-fingerprint SHA --yes [--json]
+  runnerctl workflow reconcile [PATH] [--policy-evidence FILE --repository owner/repo] [--json]
+  runnerctl workflow intelligence [owner/repo|.] --since DURATION [--json]
+  runnerctl workflow intelligence --evidence FILE [--jobs-evidence FILE] [--provider ollama|litellm --model MODEL] [--allow-remote] [--json]
+
 Packages, CI and skills:
   runnerctl package detect
   runnerctl package ensure [--version VERSION|latest] [--arch auto|x64|arm64]
@@ -282,6 +290,22 @@ Exemplos:
   runnerctl autoscale status .
   runnerctl autoscale disable .
   RUNNER_AUTOSCALE_ENABLED=true runnerctl autoscale run-once .
+EOF
+      ;;
+    workflow)
+      cat <<'EOF'
+Uso:
+  runnerctl workflow discover [PATH] --json
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid --plan --json
+  runnerctl workflow adopt [PATH] --profile hosted|local-first|hybrid --apply --expect-fingerprint SHA --yes --json
+  runnerctl workflow reconcile [PATH] [--policy-evidence FILE --repository owner/repo] --json
+  runnerctl workflow intelligence [owner/repo|.] --since 24h --json
+  runnerctl workflow intelligence --evidence FILE [--jobs-evidence FILE] --provider ollama --model MODEL --json
+
+Discovery e reconciliation são somente leitura; adopt somente altera YAMLs literais
+com confirmação e fingerprint de um plano imutável. Intelligence aproveita o
+OperationalEvidence existente e review AI opt-in sem autoridade de lifecycle.
+Consulte docs/workflow-*.md para contratos, limitações e segurança.
 EOF
       ;;
     completion)
@@ -1679,6 +1703,13 @@ case "$cmd" in
     python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
       die "review exige python3 3.8+"
     exec python3 -B -m runnerops.operational.review "$@"
+    ;;
+  workflow)
+    [[ -f "$RUNNEROPS_SRC_ROOT/runnerops/workflows/cli.py" ]] || die "módulo workflow ausente em: $PLATFORM_HOME"
+    command -v python3 >/dev/null 2>&1 || die "workflow exige python3 3.8+"
+    python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1 ||
+      die "workflow exige python3 3.8+"
+    exec python3 -B -m runnerops.workflows.cli "$@"
     ;;
   capacity|autoscale)
     if [[ "$cmd" == "autoscale" ]]; then

@@ -53,6 +53,12 @@ require_text "$OPERATOR" 'enable-all' "agent deve rejeitar a abstração multi-r
 require_text "$OPERATOR" 'runnerops-manage-runners' "agent deve compor a skill de gestão"
 require_text "$OPERATOR" 'runnerops-pr-validation' "agent deve compor a skill de PR validation"
 require_text "$OPERATOR" 'runnerops-ci-performance' "agent deve compor a skill de performance"
+require_text "$OPERATOR" 'runnerops-workflow-adoption' "agent deve compor a skill de workflow adoption"
+require_text "$OPERATOR" 'runnerctl workflow discover . --json' "operator deve usar workflow discovery público"
+require_text "$OPERATOR" 'runnerctl workflow adopt . --profile local-first --plan --json' "operator deve planejar adoção"
+require_text "$OPERATOR" 'runnerctl workflow reconcile . --json' "operator deve reconciliar labels read-only"
+require_text "$OPERATOR" 'runnerctl workflow intelligence . --since 24h --json' "operator deve consumir intelligence"
+require_text "$ROOT/skills/runnerops-workflow-adoption/SKILL.md" 'name: runnerops-workflow-adoption' "skill workflow canônica ausente"
 
 require_text "$PRE" "runnerctl overview ." "skill pre-PR deve inspecionar overview sem mutar"
 require_text "$PRE" "runnerctl capacity . --json" "skill pre-PR deve inspecionar capacidade"

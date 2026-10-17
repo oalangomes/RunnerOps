@@ -46,6 +46,14 @@ validate
 only then consider the change complete
 ```
 
+## Governança de Workflow Adoption
+
+- Use os quatro contratos `runnerctl workflow discover|adopt|reconcile|intelligence`; atualize suas quatro documentações e a skill `runnerops-workflow-adoption` quando esses contratos mudarem.
+- Auditar e reconciliar são read-only. Adoption exige `--apply --expect-fingerprint SHA --yes` e preserva bloqueios de eventos não confiáveis.
+- Em estado UNKNOWN/INCONCLUSIVE, não infira que um runner atenderá à fila, nem remova o bloqueio usando `ensure .`.
+- Policy mutation continua sob o contrato público separado da issue #144; jamais editar scheduler snapshots ou env internos em nome de reconciliação.
+- Intelligence usa OperationalEvidence/review com permissões de provider explícitas e sem decisão de escala por IA.
+
 ## Disciplina de mudança
 
 - Mantenha exemplos públicos genéricos; não adicione nomes de usuário, hostnames ou projetos do mantenedor.
@@ -88,6 +96,15 @@ Para mudanças de lifecycle ephemeral:
 python3 -B -m py_compile $(find src/runnerops/ephemeral -type f -name '*.py' -print)
 for test_file in tests/ephemeral/*.py; do python3 -B "$test_file"; done
 for test_file in tests/ephemeral/*.sh; do bash "$test_file"; done
+```
+
+Para Workflow Adoption & Intelligence:
+
+```bash
+python3 -B -m unittest discover -s tests/workflows -p 'test_*.py' -v
+runnerctl workflow discover .github/workflows/pages.yml --json
+runnerctl workflow adopt .github/workflows/pages.yml --profile hosted --plan --json
+runnerctl workflow reconcile .github/workflows/pages.yml --json
 ```
 
 Para Agent Skills:
